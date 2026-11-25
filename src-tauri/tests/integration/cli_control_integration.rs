@@ -41,7 +41,10 @@ fn lists_the_sync_commands() {
     assert!(usage().contains("resume-sync"));
     assert_eq!(
         run_client(&["latentmail".into(), "list".into()]),
-        Some((usage(), 0))
+        Some(latentmail_lib::cli::ClientOutcome {
+            message: usage(),
+            exit_code: 0,
+        })
     );
 }
 

@@ -22,11 +22,16 @@ export function openComposeAction(request: ComposeActionRequest): Promise<void> 
   const { action, accountId, accountEmail, subject, message, requireDraftFlag } = request;
   if (!message) return Promise.resolve();
   if (action === 'reply' || action === 'reply-all') {
-    return openReply(action, accountId, accountEmail, message);
+    return openReply({
+      mode: action,
+      accountId: accountId,
+      accountEmail: accountEmail,
+      message: message,
+    });
   }
   if (action === 'forward') return openForward(accountId, accountEmail, message);
   if (requireDraftFlag && !message.isDraft) return Promise.resolve();
-  return openEditDraft(accountId, accountEmail, subject, message);
+  return openEditDraft({ accountId, accountEmail, subject, message });
 }
 
 function formatRaw(participant: Participant): string {
@@ -49,12 +54,17 @@ function baseSession(
   return { id: crypto.randomUUID(), mode: mode, accountId: accountId, from: accountEmail };
 }
 
-export async function openReply(
-  mode: 'reply' | 'reply-all',
-  accountId: string,
-  accountEmail: string,
-  message: ReaderMessage | undefined,
-): Promise<void> {
+export async function openReply({
+  mode,
+  accountId,
+  accountEmail,
+  message,
+}: {
+  mode: 'reply' | 'reply-all';
+  accountId: string;
+  accountEmail: string;
+  message: ReaderMessage | undefined;
+}): Promise<void> {
   if (!message) return;
   const session = baseSession(mode, accountId, accountEmail);
   const context = await invoke('reply_context', {
@@ -78,12 +88,17 @@ export async function openReply(
   });
 }
 
-async function stageForwardAttachment(
-  accountId: string,
-  owner: string,
-  messageId: string,
-  attachment: ReplyContextAttachment,
-): Promise<void> {
+async function stageForwardAttachment({
+  accountId,
+  owner,
+  messageId,
+  attachment,
+}: {
+  accountId: string;
+  owner: string;
+  messageId: string;
+  attachment: ReplyContextAttachment;
+}): Promise<void> {
   const localId = crypto.randomUUID();
   useComposeStore.getState().addReadingAttachment({
     localId: localId,
@@ -133,7 +148,12 @@ export async function openForward(
     originalGmailMessageId: context.originalGmailMessageId,
   });
   context.attachments.forEach((attachment) => {
-    void stageForwardAttachment(accountId, session.id, message.id, attachment);
+    void stageForwardAttachment({
+      accountId: accountId,
+      owner: session.id,
+      messageId: message.id,
+      attachment: attachment,
+    });
   });
 }
 
@@ -168,12 +188,17 @@ export function openNewMessage(
   });
 }
 
-export async function openEditDraft(
-  accountId: string,
-  accountEmail: string,
-  subject: string,
-  message: ReaderMessage | undefined,
-): Promise<void> {
+export async function openEditDraft({
+  accountId,
+  accountEmail,
+  subject,
+  message,
+}: {
+  accountId: string;
+  accountEmail: string;
+  subject: string;
+  message: ReaderMessage | undefined;
+}): Promise<void> {
   if (!message) return;
   const draftId = message.draftId;
   if (draftId) {

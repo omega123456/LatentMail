@@ -1,13 +1,15 @@
-use std::sync::{Arc, Mutex};
-
 use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheAnswer, CacheDomain};
 use latentmail_lib::avatars::resolver::{set_fake_download, set_fake_txt};
+use latentmail_lib::avatars::SenderAvatarRequest;
+use latentmail_lib::ipc::{AccountIdRequest, AppServices, CommandPayload};
+use latentmail_lib::storage::{Account, AccountRepository, AvatarCacheRepository, Storage};
+use std::sync::{Arc, Mutex};
+
+use crate::support::app;
 use latentmail_lib::avatars::{
     initialize, read_account_avatar, read_sender_avatar, AvatarEmitter, AvatarService,
 };
 use latentmail_lib::settings::SettingsService;
-use latentmail_lib::storage::{Account, AccountRepository, AvatarCacheRepository, Storage};
-use crate::support::app;
 use tauri::Manager;
 
 fn avatar_dispatch_builder() -> tauri::Builder<tauri::test::MockRuntime> {
@@ -565,18 +567,20 @@ async fn the_tauri_commands_delegate_to_the_service() {
     application.manage(service);
 
     let sender = read_sender_avatar(
-        application.handle().clone(),
-        application.state(),
-        "command-path.example".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(SenderAvatarRequest {
+            domain: "command-path.example".into(),
+        }),
     )
     .await
     .unwrap();
     assert_eq!(sender, None);
 
     let account = read_account_avatar(
-        application.handle().clone(),
-        application.state(),
-        "unknown-account".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: "unknown-account".into(),
+        }),
     )
     .await
     .unwrap();

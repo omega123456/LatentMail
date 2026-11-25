@@ -1,3 +1,4 @@
+use latentmail_lib::gmail::DraftContent;
 use latentmail_lib::gmail::GmailClient;
 use wiremock::{
     matchers::{body_json, method, path, query_param},
@@ -41,7 +42,16 @@ async fn draft_lifecycle_uses_upload_for_writes_and_standard_routes_for_read_and
     let client = GmailClient::with_base_url("token", format!("{}/gmail/v1", server.uri()));
     assert_eq!(client.create_draft(b"raw", Some("t")).await.unwrap(), "d");
     assert_eq!(
-        client.update_draft("d", b"raw", Some("t")).await.unwrap(),
+        client
+            .update_draft(
+                "d",
+                DraftContent {
+                    raw: b"raw",
+                    thread_id: Some("t")
+                }
+            )
+            .await
+            .unwrap(),
         "d"
     );
 

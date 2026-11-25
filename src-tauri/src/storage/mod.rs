@@ -5,18 +5,29 @@ pub mod reconcile_staging;
 mod repositories;
 pub mod retrieval;
 
-pub use ai_config::{AccountAiConfig, AccountAiConfigRepository};
-pub use embeddings::{EmbeddingBacklog, EmbeddingCounts, EmbeddingRepository, MessageEmbedding};
+pub use ai_config::{AccountAiConfig, AccountAiConfigRepository, EmbeddingModelSpec};
+pub use embeddings::{
+    EmbeddingBacklog, EmbeddingCounts, EmbeddingRepository, MessageEmbedding, NearestPassage,
+    NearestQuery,
+};
+pub use reconcile_staging::{StagedIds, StagedLabelIds, StagingCounts};
 pub use repositories::{
     truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
     AvatarCacheOutcome, AvatarCacheRecord, AvatarCacheRepository, ComposeDraftMetadata,
-    ComposeDraftMetadataRepository, ComposeMessageContext, ConversationEntryScope,
-    ConversationMessage, HtmlPresence, InlinePart, Label, LabelColor, LabelNameError,
-    LabelRepository, Message, MessageRepository, Operation, OperationRepository,
-    ReconciliationMessage, SearchRepository, SettingRepository, Thread, ThreadIdentity,
-    ThreadListRow, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+    ComposeDraftMetadataRepository, ComposeMessageContext, ConversationBody,
+    ConversationEntryScope, ConversationMessage, HtmlPresence, InlinePart, InlinePartData, Label,
+    LabelColor, LabelKey, LabelMembershipChange, LabelNameCheck, LabelNameError, LabelRepository,
+    MembershipStatements, Message, MessageBodyUpdate, MessageKey, MessageRepository,
+    MutationHistoryUpdate, Operation, OperationRepository, RecipientRoles, RecipientRolesUpdate,
+    ReconciliationMessage, ReconciliationStatements, SearchCountQuery, SearchPageQuery,
+    SearchRepository, SettingEntry, SettingRepository, TerminalOutcome, Thread, ThreadIdentity,
+    ThreadKey, ThreadListRow, ThreadPageCursor, ThreadPageQuery, ThreadRepository, TraversalCursor,
+    TraversalCursorRepository, TraversalKind,
 };
-pub use retrieval::{CandidatePassage, PassageSource, RetrievalFilters, RetrievalRepository};
+pub use retrieval::{
+    CandidatePassage, CandidateQuery, LexicalQuery, PassageSource, RecencyQuery, RetrievalFilters,
+    RetrievalRepository,
+};
 
 use std::{
     path::{Path, PathBuf},

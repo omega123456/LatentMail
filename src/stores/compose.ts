@@ -1,7 +1,20 @@
 import { create } from 'zustand';
-import { addressKey } from '@/lib/format/participants';
 import type { ComposeMode } from '@/lib/types/ipc';
+import {
+  addReadingAttachmentToSession,
+  commitRecipientToSession,
+  COMPOSE_MIN_PX,
+  createComposeSession,
+  failAttachmentInSession,
+  markSessionSaved,
+  removeAttachmentFromSession,
+  removeLastRecipientFromSession,
+  removeRecipientFromSession,
+  setSessionDraftStatus,
+  settleAttachmentInSession,
+} from './compose/transitions';
 
+export { COMPOSE_MIN_PX };
 export type { ComposeMode };
 export type RecipientRole = 'to' | 'cc' | 'bcc';
 export type RecipientRoles = { to: string[]; cc: string[]; bcc: string[] };
@@ -11,13 +24,27 @@ export type ComposeQuote = { html: string; attribution: string };
 export type AttachmentState = 'reading' | 'settled' | 'failed';
 export type DraftStatus = 'idle' | 'saving' | 'saved' | 'failed' | 'superseded';
 
+export type StagedAttachmentInfo = {
+  id: string;
+  path: string;
+  assetUrl: string;
+  size: number;
+};
+
+export type ReadingAttachmentInput = {
+  localId: string;
+  filename: string;
+  mimeType: string;
+  contentId: string | null;
+};
+
 export type ComposeAttachment = {
   localId: string;
   filename: string;
   mimeType: string;
   size: number;
   state: AttachmentState;
-  staged: { id: string; path: string; assetUrl: string; size: number } | null;
+  staged: StagedAttachmentInfo | null;
   contentId: string | null;
   error: string | null;
 };
@@ -79,11 +106,10 @@ export type OpenComposeArgs = Omit<
       | 'originalGmailMessageId'
     >
   >;
-type OpenArgs = OpenComposeArgs;
 
 type ComposeStore = {
   session: ComposeSession | null;
-  open: (session: OpenArgs) => void;
+  open: (session: OpenComposeArgs) => void;
   close: () => void;
   setSubject: (subject: string) => void;
   setHtml: (html: string) => void;
@@ -94,16 +120,8 @@ type ComposeStore = {
   revealCcBcc: () => void;
   setOverflowCount: (role: RecipientRole, count: number) => void;
   toggleQuote: () => void;
-  addReadingAttachment: (attachment: {
-    localId: string;
-    filename: string;
-    mimeType: string;
-    contentId: string | null;
-  }) => void;
-  settleAttachment: (
-    localId: string,
-    staged: { id: string; path: string; assetUrl: string; size: number },
-  ) => void;
+  addReadingAttachment: (attachment: ReadingAttachmentInput) => void;
+  settleAttachment: (localId: string, staged: StagedAttachmentInfo) => void;
   failAttachment: (localId: string, error: string) => void;
   removeAttachment: (localId: string) => void;
   setDraftStatus: (status: DraftStatus, error?: string | null) => void;
@@ -111,219 +129,55 @@ type ComposeStore = {
   markSaved: () => void;
 };
 
-export const COMPOSE_MIN_PX = 360;
-
-const COMPOSE_FLOOR = { width: 512, height: 500 };
-const COMPOSE_CEILING = { width: 840, height: 820 };
-const COMPOSE_VIEWPORT_FRACTION = { width: 0.42, height: 0.62 };
-const COMPOSE_VIEWPORT_INSET = 48;
-
-function axis(viewport: number, floor: number, ceiling: number, fraction: number) {
-  const preferred = Math.max(floor, Math.round(viewport * fraction));
-  const available = Math.max(COMPOSE_MIN_PX, Math.min(ceiling, viewport - COMPOSE_VIEWPORT_INSET));
-  return Math.min(preferred, available);
+function applySessionUpdate(
+  state: ComposeStore,
+  transform: (session: ComposeSession) => ComposeSession,
+): Partial<ComposeStore> | ComposeStore {
+  if (!state.session) return state;
+  const next = transform(state.session);
+  if (next === state.session) return state;
+  return { session: next };
 }
 
-function initialDimensions(): ComposeDimensions {
+export const useComposeStore = create<ComposeStore>((set) => {
+  const updateSession = (transform: (session: ComposeSession) => ComposeSession) =>
+    set((state) => applySessionUpdate(state, transform));
+
   return {
-    width: axis(
-      window.innerWidth,
-      COMPOSE_FLOOR.width,
-      COMPOSE_CEILING.width,
-      COMPOSE_VIEWPORT_FRACTION.width,
-    ),
-    height: axis(
-      window.innerHeight,
-      COMPOSE_FLOOR.height,
-      COMPOSE_CEILING.height,
-      COMPOSE_VIEWPORT_FRACTION.height,
-    ),
-  };
-}
-const defaultOverflow: Record<RecipientRole, number> = { to: 0, cc: 0, bcc: 0 };
-
-function normalizeRecipient(raw: string): string | null {
-  const trimmed = raw.trim().replace(/,+$/, '').trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function buildThreadingFields(session: OpenArgs) {
-  return {
-    draftId: session.draftId ?? null,
-    threadId: session.threadId ?? null,
-    inReplyTo: session.inReplyTo ?? null,
-    references: session.references ?? [],
-    originalMessageId: session.originalMessageId ?? null,
-    originalGmailMessageId: session.originalGmailMessageId ?? null,
-  };
-}
-
-export const useComposeStore = create<ComposeStore>((set) => ({
-  session: null,
-  open: (session) =>
-    set({
-      session: {
+    session: null,
+    open: (session) => set({ session: createComposeSession(session) }),
+    close: () => set({ session: null }),
+    setSubject: (subject) =>
+      updateSession((session) => ({ ...session, subject: subject, dirty: true })),
+    setHtml: (html) => updateSession((session) => ({ ...session, html: html, dirty: true })),
+    setDimensions: (dimensions) => updateSession((session) => ({ ...session, dimensions })),
+    commitRecipient: (role, raw) =>
+      updateSession((session) => commitRecipientToSession(session, { role, raw })),
+    removeRecipient: (role, index) =>
+      updateSession((session) => removeRecipientFromSession(session, { role, index })),
+    removeLastRecipient: (role) =>
+      updateSession((session) => removeLastRecipientFromSession(session, role)),
+    revealCcBcc: () => updateSession((session) => ({ ...session, ccBccRevealed: true })),
+    setOverflowCount: (role, count) =>
+      updateSession((session) => ({
         ...session,
-        dirty: false,
-        ccBccRevealed: session.recipients.cc.length > 0 || session.recipients.bcc.length > 0,
-        overflow: { ...defaultOverflow },
-        quote: session.quote ?? null,
-        quoteOpen: false,
-        dimensions: session.dimensions ?? initialDimensions(),
-        attachments: session.attachments ?? [],
-        ...buildThreadingFields(session),
-        draftStatus: 'idle',
-        lifecycleError: null,
-      },
-    }),
-  close: () => set({ session: null }),
-  setSubject: (subject) =>
-    set((state) =>
-      state.session ? { session: { ...state.session, subject: subject, dirty: true } } : state,
-    ),
-  setHtml: (html) =>
-    set((state) =>
-      state.session ? { session: { ...state.session, html: html, dirty: true } } : state,
-    ),
-  setDimensions: (dimensions) =>
-    set((state) => (state.session ? { session: { ...state.session, dimensions } } : state)),
-  commitRecipient: (role, raw) =>
-    set((state) => {
-      if (!state.session) return state;
-      const recipient = normalizeRecipient(raw);
-      if (!recipient) return state;
-      const existing = state.session.recipients[role];
-      const key = addressKey(recipient);
-      if (existing.some((entry) => addressKey(entry) === key)) return state;
-      return {
-        session: {
-          ...state.session,
-          recipients: { ...state.session.recipients, [role]: [...existing, recipient] },
-          dirty: true,
-        },
-      };
-    }),
-  removeRecipient: (role, index) =>
-    set((state) => {
-      if (!state.session) return state;
-      return {
-        session: {
-          ...state.session,
-          recipients: {
-            ...state.session.recipients,
-            [role]: state.session.recipients[role].filter(
-              (_entry, entryIndex) => entryIndex !== index,
-            ),
-          },
-          dirty: true,
-        },
-      };
-    }),
-  removeLastRecipient: (role) =>
-    set((state) => {
-      if (!state.session || state.session.recipients[role].length === 0) return state;
-      return {
-        session: {
-          ...state.session,
-          recipients: {
-            ...state.session.recipients,
-            [role]: state.session.recipients[role].slice(0, -1),
-          },
-          dirty: true,
-        },
-      };
-    }),
-  revealCcBcc: () =>
-    set((state) =>
-      state.session ? { session: { ...state.session, ccBccRevealed: true } } : state,
-    ),
-  setOverflowCount: (role, count) =>
-    set((state) =>
-      state.session
-        ? { session: { ...state.session, overflow: { ...state.session.overflow, [role]: count } } }
-        : state,
-    ),
-  toggleQuote: () =>
-    set((state) =>
-      state.session
-        ? { session: { ...state.session, quoteOpen: !state.session.quoteOpen } }
-        : state,
-    ),
-  addReadingAttachment: ({ localId, filename, mimeType, contentId }) =>
-    set((state) => {
-      if (!state.session) return state;
-      const attachment: ComposeAttachment = {
-        localId: localId,
-        filename: filename,
-        mimeType: mimeType,
-        size: 0,
-        state: 'reading',
-        staged: null,
-        contentId: contentId,
-        error: null,
-      };
-      return {
-        session: {
-          ...state.session,
-          attachments: [...state.session.attachments, attachment],
-          dirty: true,
-        },
-      };
-    }),
-  settleAttachment: (localId, staged) =>
-    set((state) => {
-      if (!state.session) return state;
-      if (!state.session.attachments.some((entry) => entry.localId === localId)) return state;
-      return {
-        session: {
-          ...state.session,
-          attachments: state.session.attachments.map((entry) =>
-            entry.localId === localId
-              ? { ...entry, state: 'settled', staged: staged, size: staged.size, error: null }
-              : entry,
-          ),
-        },
-      };
-    }),
-  failAttachment: (localId, error) =>
-    set((state) => {
-      if (!state.session) return state;
-      if (!state.session.attachments.some((entry) => entry.localId === localId)) return state;
-      return {
-        session: {
-          ...state.session,
-          attachments: state.session.attachments.map((entry) =>
-            entry.localId === localId ? { ...entry, state: 'failed', error: error } : entry,
-          ),
-        },
-      };
-    }),
-  removeAttachment: (localId) =>
-    set((state) => {
-      if (!state.session) return state;
-      return {
-        session: {
-          ...state.session,
-          attachments: state.session.attachments.filter((entry) => entry.localId !== localId),
-          dirty: true,
-        },
-      };
-    }),
-  setDraftStatus: (draftStatus, lifecycleError = null) =>
-    set((state) =>
-      state.session ? { session: { ...state.session, draftStatus, lifecycleError } } : state,
-    ),
-  setDraftId: (draftId) =>
-    set((state) => (state.session ? { session: { ...state.session, draftId } } : state)),
-  markSaved: () =>
-    set((state) =>
-      state.session
-        ? {
-            session: { ...state.session, dirty: false, draftStatus: 'saved', lifecycleError: null },
-          }
-        : state,
-    ),
-}));
+        overflow: { ...session.overflow, [role]: count },
+      })),
+    toggleQuote: () => updateSession((session) => ({ ...session, quoteOpen: !session.quoteOpen })),
+    addReadingAttachment: (attachment) =>
+      updateSession((session) => addReadingAttachmentToSession(session, attachment)),
+    settleAttachment: (localId, staged) =>
+      updateSession((session) => settleAttachmentInSession(session, { localId, staged })),
+    failAttachment: (localId, error) =>
+      updateSession((session) => failAttachmentInSession(session, { localId, error })),
+    removeAttachment: (localId) =>
+      updateSession((session) => removeAttachmentFromSession(session, localId)),
+    setDraftStatus: (draftStatus, lifecycleError = null) =>
+      updateSession((session) => setSessionDraftStatus(session, { draftStatus, lifecycleError })),
+    setDraftId: (draftId) => updateSession((session) => ({ ...session, draftId })),
+    markSaved: () => updateSession(markSessionSaved),
+  };
+});
 
 export const selectHasCommittedRecipient = (state: ComposeStore) =>
   (state.session?.recipients.to.length ?? 0) > 0;

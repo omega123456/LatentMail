@@ -1,3 +1,6 @@
+use latentmail_lib::attachments::{AttachmentDescriptor, AttachmentRef};
+use latentmail_lib::storage::{MessageKey, ThreadKey};
+use latentmail_lib::sync::traversal::BackfillStepContext;
 use latentmail_lib::{
     attachments::cache::AttachmentCache,
     gmail::{AttachmentPart, GmailMessage},
@@ -179,14 +182,14 @@ async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_mess
     drop(connection);
 
     let client = latentmail_lib::gmail::GmailClient::with_base_url("token", server.uri());
-    run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &noop_event_sink(),
-        false,
-        None,
-    )
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await
     .unwrap();
 
@@ -255,14 +258,14 @@ async fn backfill_seeds_cache_bytes_for_an_inline_data_attachment_with_no_intera
     let cache = AttachmentCache::new(cache_dir.path()).unwrap();
 
     let client = latentmail_lib::gmail::GmailClient::with_base_url("token", server.uri());
-    run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &noop_event_sink(),
-        false,
-        Some(cache.clone()),
-    )
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &noop_event_sink(),
+        resumed: false,
+        cache: Some(cache.clone()),
+    })
     .await
     .unwrap();
 
@@ -275,13 +278,15 @@ async fn backfill_seeds_cache_bytes_for_an_inline_data_attachment_with_no_intera
         rows[0].attachment_id
     );
 
-    let cached = cache.lookup(
-        "account",
-        "m1",
-        &rows[0].attachment_id,
-        &rows[0].filename,
-        &rows[0].mime_type,
-    );
+    let cached = cache.lookup(AttachmentDescriptor {
+        target: AttachmentRef {
+            account_id: "account",
+            message_id: "m1",
+            attachment_id: &rows[0].attachment_id,
+        },
+        filename: &rows[0].filename,
+        mime_type: &rows[0].mime_type,
+    });
     assert!(
         cached.is_some(),
         "backfill alone, with no interactive body fetch, must seed cache bytes for a D15-recovered attachment"
@@ -320,9 +325,15 @@ fn list_conversation_attributes_attachments_to_the_right_message_sorted_by_posit
     second.has_attachments = false;
     materialize::persist(&connection, "account", &second).unwrap();
 
-    let messages =
-        MessageRepository::list_conversation_metadata(&connection, "account", "thread", None)
-            .unwrap();
+    let messages = MessageRepository::list_conversation_metadata(
+        &connection,
+        ThreadKey {
+            account_id: "account",
+            thread_id: "thread",
+        },
+        None,
+    )
+    .unwrap();
     assert_eq!(messages.len(), 2);
     let by_id: std::collections::HashMap<_, _> = messages
         .into_iter()
@@ -362,11 +373,16 @@ fn a_rotated_gmail_attachment_id_does_not_change_the_stored_identifier_of_an_unc
         rows[0].attachment_id, "att-1",
         "an identifier already handed to the reader must stay resolvable"
     );
-    assert!(
-        AttachmentRepository::get(&connection, "account", "m1", "att-1")
-            .unwrap()
-            .is_some()
-    );
+    assert!(AttachmentRepository::get(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1"
+        },
+        "att-1"
+    )
+    .unwrap()
+    .is_some());
 }
 
 #[test]

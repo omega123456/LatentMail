@@ -16,18 +16,30 @@ const FILE_SUFFIX: &str = "log";
 
 pub type LevelHandle = reload::Handle<LevelFilter, Registry>;
 
-pub fn init(
-    directory: impl AsRef<Path>,
-) -> Result<(WorkerGuard, LevelHandle), Box<dyn std::error::Error>> {
-    let (dispatch, guard, handle) = subscriber(directory, DEFAULT_LEVEL)?;
-    tracing::dispatcher::set_global_default(dispatch)?;
-    Ok((guard, handle))
+pub struct LoggingHandles {
+    pub guard: WorkerGuard,
+    pub level_handle: LevelHandle,
+}
+
+pub struct SubscriberParts {
+    pub dispatch: Dispatch,
+    pub guard: WorkerGuard,
+    pub level_handle: LevelHandle,
+}
+
+pub fn init(directory: impl AsRef<Path>) -> Result<LoggingHandles, Box<dyn std::error::Error>> {
+    let parts = subscriber(directory, DEFAULT_LEVEL)?;
+    tracing::dispatcher::set_global_default(parts.dispatch)?;
+    Ok(LoggingHandles {
+        guard: parts.guard,
+        level_handle: parts.level_handle,
+    })
 }
 
 pub fn subscriber(
     directory: impl AsRef<Path>,
     level: LevelFilter,
-) -> Result<(Dispatch, WorkerGuard, LevelHandle), Box<dyn std::error::Error>> {
+) -> Result<SubscriberParts, Box<dyn std::error::Error>> {
     let directory = directory.as_ref();
     fs::create_dir_all(directory)?;
     cleanup(directory, Utc::now().date_naive())?;
@@ -43,7 +55,11 @@ pub fn subscriber(
             .with_writer(writer.and(std::io::stdout))
             .with_ansi(false),
     );
-    Ok((Dispatch::new(subscriber), guard, handle))
+    Ok(SubscriberParts {
+        dispatch: Dispatch::new(subscriber),
+        guard: guard,
+        level_handle: handle,
+    })
 }
 
 pub fn set_level<R: Runtime>(app: &AppHandle<R>, level: LevelFilter) {
@@ -64,11 +80,7 @@ pub fn parse_entries(contents: &str) -> Vec<LogEntry> {
     let mut entries: Vec<LogEntry> = Vec::new();
     for line in contents.lines() {
         match parse_entry_line(line) {
-            Some((timestamp_millis, level, message)) => entries.push(LogEntry {
-                timestamp_millis,
-                level,
-                message,
-            }),
+            Some(entry) => entries.push(entry),
             None => {
                 if let Some(last) = entries.last_mut() {
                     last.message.push('\n');
@@ -80,13 +92,17 @@ pub fn parse_entries(contents: &str) -> Vec<LogEntry> {
     entries
 }
 
-fn parse_entry_line(line: &str) -> Option<(i64, String, String)> {
+fn parse_entry_line(line: &str) -> Option<LogEntry> {
     let mut parts = line.splitn(2, char::is_whitespace);
     let timestamp = chrono::DateTime::parse_from_rfc3339(parts.next()?).ok()?;
     let mut rest = parts.next()?.trim_start().splitn(2, char::is_whitespace);
     let level = rest.next()?.to_owned();
     let message = rest.next().unwrap_or_default().trim_start().to_owned();
-    Some((timestamp.timestamp_millis(), level, message))
+    Some(LogEntry {
+        timestamp_millis: timestamp.timestamp_millis(),
+        level: level,
+        message: message,
+    })
 }
 
 pub fn read_entries(directory: &Path, today: NaiveDate, minimum: usize) -> Vec<LogEntry> {
@@ -114,8 +130,7 @@ fn read_file_entries(directory: &Path, date: NaiveDate) -> Vec<LogEntry> {
         .unwrap_or_default()
 }
 
-#[tauri::command]
-pub fn read_log_entries<R: Runtime>(app: AppHandle<R>) -> Result<Vec<LogEntry>, String> {
+pub fn read_app_log_entries<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<LogEntry>, String> {
     let directory = app
         .path()
         .app_log_dir()
@@ -125,6 +140,11 @@ pub fn read_log_entries<R: Runtime>(app: AppHandle<R>) -> Result<Vec<LogEntry>, 
         Utc::now().date_naive(),
         MINIMUM_ENTRIES_SHOWN,
     ))
+}
+
+#[tauri::command]
+pub fn read_log_entries<R: Runtime>(app: AppHandle<R>) -> Result<Vec<LogEntry>, String> {
+    read_app_log_entries(&app)
 }
 
 pub fn cleanup(directory: impl AsRef<Path>, today: NaiveDate) -> std::io::Result<()> {

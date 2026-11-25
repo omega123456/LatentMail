@@ -20,7 +20,10 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
     };
     assert_eq!(
         content(std::slice::from_ref(&first)),
-        Some(("Alex".into(), "Hello\nA short preview".into()))
+        Some(latentmail_lib::os::notifications::NotificationContent {
+            title: "Alex".into(),
+            body: "Hello\nA short preview".into(),
+        })
     );
     assert_eq!(
         content(&[
@@ -35,10 +38,10 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
                 snippet: "Another preview".into(),
             },
         ]),
-        Some((
-            "Alex".into(),
-            "(No subject)\nA short preview — and 1 more".into(),
-        ))
+        Some(latentmail_lib::os::notifications::NotificationContent {
+            title: "Alex".into(),
+            body: "(No subject)\nA short preview — and 1 more".into(),
+        })
     );
     assert_eq!(
         content(&[MailArrival {
@@ -46,7 +49,10 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
             snippet: String::new(),
             ..first.clone()
         }]),
-        Some(("alex@example.com".into(), "Hello".into()))
+        Some(latentmail_lib::os::notifications::NotificationContent {
+            title: "alex@example.com".into(),
+            body: "Hello".into(),
+        })
     );
     assert_eq!(content(&[]), None);
     assert_eq!(
@@ -54,7 +60,10 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
             sender: String::new(),
             ..first.clone()
         }]),
-        Some(("(No sender)".into(), "Hello\nA short preview".into()))
+        Some(latentmail_lib::os::notifications::NotificationContent {
+            title: "(No sender)".into(),
+            body: "Hello\nA short preview".into(),
+        })
     );
 }
 

@@ -1,3 +1,4 @@
+use latentmail_lib::storage::MutationHistoryUpdate;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage,
 };
@@ -63,8 +64,15 @@ fn mutation_history_write_back_blocks_an_older_full_read() {
         MessageRepository::write_full_state(&connection, &message(10, "before mutation")).unwrap()
     );
     assert_eq!(
-        MessageRepository::write_mutation_history(&connection, "account", &["message".into()], 20)
-            .unwrap(),
+        MessageRepository::write_mutation_history(
+            &connection,
+            "account",
+            MutationHistoryUpdate {
+                ids: &["message".into()],
+                history_id: 20
+            }
+        )
+        .unwrap(),
         1
     );
     assert!(!MessageRepository::write_full_state(&connection, &message(15, "stale read")).unwrap());

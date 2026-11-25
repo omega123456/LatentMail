@@ -3,6 +3,7 @@ use latentmail_lib::storage::{
     Account, AccountRepository, EmbeddingRepository, HtmlPresence, Label, LabelRepository, Message,
     MessageEmbedding, MessageRepository, RetrievalFilters, RetrievalRepository, Storage,
 };
+use latentmail_lib::storage::{CandidateQuery, LabelMembershipChange, MessageKey};
 
 fn seconds(day: &str, hour: u32) -> i64 {
     Local
@@ -104,9 +105,30 @@ fn fixture() -> (rusqlite::Connection, i64, i64) {
 
     let early_seq = seq(&connection, "early");
     let late_seq = seq(&connection, "late");
-    MessageRepository::set_label_membership(&connection, "account", "early", "INBOX", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "late", "SENT", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "early",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "late",
+        },
+        LabelMembershipChange {
+            label_id: "SENT",
+            present: true,
+        },
+    )
+    .unwrap();
     EmbeddingRepository::write(
         &connection,
         "account",
@@ -128,12 +150,19 @@ fn fixture() -> (rusqlite::Connection, i64, i64) {
 }
 
 fn matched(connection: &rusqlite::Connection, filters: &RetrievalFilters) -> Vec<i64> {
-    let mut sequences: Vec<i64> =
-        RetrievalRepository::candidates(connection, "account", &[1.0, 0.0], 100, filters)
-            .unwrap()
-            .into_iter()
-            .map(|candidate| candidate.message_seq)
-            .collect();
+    let mut sequences: Vec<i64> = RetrievalRepository::candidates(
+        connection,
+        &CandidateQuery {
+            account_id: "account",
+            vector: &[1.0, 0.0],
+            limit: 100,
+            filters: filters,
+        },
+    )
+    .unwrap()
+    .into_iter()
+    .map(|candidate| candidate.message_seq)
+    .collect();
     sequences.sort_unstable();
     sequences
 }

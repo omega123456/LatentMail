@@ -328,12 +328,17 @@ function isRemoteImagesLocked(message: ReaderMessage): boolean {
   return (message.labelIds ?? []).some((label) => label === 'SPAM' || label === 'TRASH');
 }
 
-function useAutoFetchMessageBody(
-  open: boolean,
-  needsGmailBody: boolean,
-  messageId: string,
-  onFetchBody?: (messageId: string) => void,
-) {
+function useAutoFetchMessageBody({
+  open,
+  needsGmailBody,
+  messageId,
+  onFetchBody,
+}: {
+  open: boolean;
+  needsGmailBody: boolean;
+  messageId: string;
+  onFetchBody?: (messageId: string) => void;
+}) {
   const requested = useRef<string | null>(null);
   useEffect(() => {
     if (!open || !needsGmailBody || requested.current === messageId) return;
@@ -380,12 +385,17 @@ type MessageCardProps = {
   accountId?: string | null;
 };
 
-function resolveBodyViewProps(
-  props: MessageCardProps,
-  renderedMessage: ReaderMessage,
-  waitingForCache: boolean,
-  hasAttachments: boolean,
-) {
+function resolveBodyViewProps({
+  props,
+  renderedMessage,
+  waitingForCache,
+  hasAttachments,
+}: {
+  props: MessageCardProps;
+  renderedMessage: ReaderMessage;
+  waitingForCache: boolean;
+  hasAttachments: boolean;
+}) {
   return {
     message: props.message,
     renderedMessage: renderedMessage,
@@ -413,12 +423,12 @@ export function MessageCard(props: MessageCardProps) {
   const hasAttachments = Boolean(message.attachments?.length);
   const waitingForCache = needsCachedBody && accountId !== null && cachedBody.isPending;
 
-  useAutoFetchMessageBody(
-    open,
-    shouldFetchGmailBody(renderedMessage),
-    message.id,
-    props.onFetchBody,
-  );
+  useAutoFetchMessageBody({
+    open: open,
+    needsGmailBody: shouldFetchGmailBody(renderedMessage),
+    messageId: message.id,
+    onFetchBody: props.onFetchBody,
+  });
 
   const handleHeaderClick = (event: React.MouseEvent) => {
     if (!shouldToggleOnHeaderClick(newest, event)) return;
@@ -442,7 +452,7 @@ export function MessageCard(props: MessageCardProps) {
       />
       {open && (
         <MessageCardBody
-          {...resolveBodyViewProps(props, renderedMessage, waitingForCache, hasAttachments)}
+          {...resolveBodyViewProps({ props, renderedMessage, waitingForCache, hasAttachments })}
         />
       )}
       <MessageCardFooterRibbon

@@ -2,6 +2,10 @@ use latentmail_lib::storage::{
     reconcile_staging::ReconcileStagingRepository, Account, AccountRepository, HtmlPresence,
     LabelRepository, Message, MessageRepository, Storage, TraversalCursor, TraversalKind,
 };
+use latentmail_lib::storage::{
+    LabelMembershipChange, MessageKey, StagedIds, StagedLabelIds, StagingCounts,
+};
+use latentmail_lib::sync::SyncEngineDeps;
 use latentmail_lib::{
     gmail::GmailClient,
     sync::{create_queue_engine, noop_event_sink, SyncEngine, WorkRegistry},
@@ -49,14 +53,19 @@ pub fn staging_pages_and_cursor_are_atomic_and_clear_after_completion() {
     let next = cursor("50|label|INBOX|");
     ReconcileStagingRepository::stage_universe_page(
         &connection,
-        "account",
-        &["one".into(), "two".into()],
+        StagedIds {
+            account_id: "account",
+            ids: &["one".into(), "two".into()],
+        },
         &next,
     )
     .unwrap();
     assert_eq!(
         ReconcileStagingRepository::counts(&connection, "account").unwrap(),
-        (2, 0)
+        StagingCounts {
+            messages: 2,
+            labels: 0,
+        }
     );
     assert_eq!(
         ReconcileStagingRepository::reconciliation_cursor(&connection, "account")
@@ -67,9 +76,11 @@ pub fn staging_pages_and_cursor_are_atomic_and_clear_after_completion() {
     );
     ReconcileStagingRepository::stage_label_page(
         &connection,
-        "account",
-        "INBOX",
-        &["one".into()],
+        StagedLabelIds {
+            account_id: "account",
+            label_id: "INBOX",
+            ids: &["one".into()],
+        },
         &next,
     )
     .unwrap();
@@ -92,7 +103,10 @@ pub fn staging_pages_and_cursor_are_atomic_and_clear_after_completion() {
     ReconcileStagingRepository::clear(&connection, "account").unwrap();
     assert_eq!(
         ReconcileStagingRepository::counts(&connection, "account").unwrap(),
-        (0, 0)
+        StagingCounts {
+            messages: 0,
+            labels: 0,
+        }
     );
 }
 
@@ -117,22 +131,36 @@ pub fn membership_diff_reports_every_divergent_label_set() {
         MessageRepository::write_full_state(&connection, &stored_message(id)).unwrap();
         for label_id in local {
             LabelRepository::ensure_placeholder(&connection, "account", label_id).unwrap();
-            MessageRepository::set_label_membership(&connection, "account", id, label_id, true)
-                .unwrap();
+            MessageRepository::set_label_membership(
+                &connection,
+                MessageKey {
+                    account_id: "account",
+                    message_id: id,
+                },
+                LabelMembershipChange {
+                    label_id: label_id,
+                    present: true,
+                },
+            )
+            .unwrap();
         }
         ReconcileStagingRepository::stage_universe_page(
             &connection,
-            "account",
-            &[(*id).to_owned()],
+            StagedIds {
+                account_id: "account",
+                ids: &[(*id).to_owned()],
+            },
             &cursor,
         )
         .unwrap();
         for label_id in remote {
             ReconcileStagingRepository::stage_label_page(
                 &connection,
-                "account",
-                label_id,
-                &[(*id).to_owned()],
+                StagedLabelIds {
+                    account_id: "account",
+                    label_id: label_id,
+                    ids: &[(*id).to_owned()],
+                },
                 &cursor,
             )
             .unwrap();
@@ -207,8 +235,10 @@ async fn fresh_reconciliation_checkpoint_survives_interruption(previous: Travers
     ReconcileStagingRepository::begin(&storage.connection().unwrap(), &previous).unwrap();
     ReconcileStagingRepository::stage_universe_page(
         &storage.connection().unwrap(),
-        "account",
-        &["stale".into()],
+        StagedIds {
+            account_id: "account",
+            ids: &["stale".into()],
+        },
         &previous,
     )
     .unwrap();
@@ -300,12 +330,12 @@ async fn run_reconciliation(storage: &Storage, client: GmailClient) -> Result<()
 
 fn engine(storage: Storage) -> std::sync::Arc<SyncEngine> {
     let registry = WorkRegistry::new();
-    SyncEngine::new(
-        storage,
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    )
+    SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    })
 }
 
 pub async fn completed_reconciliation_cursor_starts_a_fresh_resumable_run() {
@@ -326,8 +356,10 @@ pub async fn reconciliation_resumes_universe_enumeration_with_its_saved_candidat
     ReconcileStagingRepository::begin(&storage.connection().unwrap(), &initial).unwrap();
     ReconcileStagingRepository::stage_universe_page(
         &storage.connection().unwrap(),
-        "account",
-        &["one".into()],
+        StagedIds {
+            account_id: "account",
+            ids: &["one".into()],
+        },
         &resumed,
     )
     .unwrap();
@@ -381,8 +413,10 @@ pub async fn resumed_reconciliation_matches_an_uninterrupted_universe_pass() {
     ReconcileStagingRepository::begin(&resumed_storage.connection().unwrap(), &initial).unwrap();
     ReconcileStagingRepository::stage_universe_page(
         &resumed_storage.connection().unwrap(),
-        "account",
-        &["one".into()],
+        StagedIds {
+            account_id: "account",
+            ids: &["one".into()],
+        },
         &resumed,
     )
     .unwrap();
@@ -467,16 +501,20 @@ pub async fn reconciliation_resumes_label_enumeration_from_its_saved_page() {
     ReconcileStagingRepository::begin(&storage.connection().unwrap(), &initial).unwrap();
     ReconcileStagingRepository::stage_universe_page(
         &storage.connection().unwrap(),
-        "account",
-        &["one".into(), "two".into()],
+        StagedIds {
+            account_id: "account",
+            ids: &["one".into(), "two".into()],
+        },
         &initial,
     )
     .unwrap();
     ReconcileStagingRepository::stage_label_page(
         &storage.connection().unwrap(),
-        "account",
-        "INBOX",
-        &["one".into()],
+        StagedLabelIds {
+            account_id: "account",
+            label_id: "INBOX",
+            ids: &["one".into()],
+        },
         &resumed,
     )
     .unwrap();
@@ -527,8 +565,10 @@ pub async fn reconciliation_resumes_new_message_fetching_from_its_saved_cursor()
     ReconcileStagingRepository::begin(&storage.connection().unwrap(), &initial).unwrap();
     ReconcileStagingRepository::stage_universe_page(
         &storage.connection().unwrap(),
-        "account",
-        &["one".into(), "two".into()],
+        StagedIds {
+            account_id: "account",
+            ids: &["one".into(), "two".into()],
+        },
         &resumed,
     )
     .unwrap();

@@ -1,3 +1,5 @@
+use latentmail_lib::queue::registry::TerminalTransition;
+use latentmail_lib::queue::QueueConfig;
 use std::sync::Arc;
 
 use crate::support::{controllable_executor, events_channel, wait_for_item_status};
@@ -6,12 +8,22 @@ use latentmail_lib::queue::{
     Executor, Lane, OperationKind, QueueEngine, QueueOperation,
 };
 
-fn operation(
-    id: &str,
-    account_id: &str,
+struct OperationSeed<'a> {
+    id: &'a str,
+    account_id: &'a str,
     lane: Lane,
-    entity_key: &str,
-    description: &str,
+    entity_key: &'a str,
+    description: &'a str,
+}
+
+fn operation(
+    OperationSeed {
+        id,
+        account_id,
+        lane,
+        entity_key,
+        description,
+    }: OperationSeed<'_>,
 ) -> QueueOperation {
     QueueOperation {
         id: id.into(),
@@ -29,16 +41,24 @@ fn operation(
 async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
     let (executor, mut started) = controllable_executor();
     let (events, mut events_receiver) = events_channel();
-    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+    let queue = QueueEngine::with_config(
+        QueueConfig {
+            rate_per_second: 250,
+            burst: 250,
+            events: events,
+            ..QueueConfig::default()
+        },
+        executor,
+    );
 
     queue
-        .enqueue(operation(
-            "op-1",
-            "account-1",
-            Lane::Background,
-            "entity-1",
-            "Sync mailbox",
-        ))
+        .enqueue(operation(OperationSeed {
+            id: "op-1",
+            account_id: "account-1",
+            lane: Lane::Background,
+            entity_key: "entity-1",
+            description: "Sync mailbox",
+        }))
         .await
         .unwrap();
 
@@ -95,17 +115,25 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
 async fn a_lane_lists_the_most_recently_finished_operation_first() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
     let (events, mut events_receiver) = events_channel();
-    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+    let queue = QueueEngine::with_config(
+        QueueConfig {
+            rate_per_second: 250,
+            burst: 250,
+            events: events,
+            ..QueueConfig::default()
+        },
+        executor,
+    );
 
     for id in ["op-1", "op-2", "op-3"] {
         queue
-            .enqueue(operation(
-                id,
-                "account-1",
-                Lane::Background,
-                id,
-                "Sync mailbox",
-            ))
+            .enqueue(operation(OperationSeed {
+                id: id,
+                account_id: "account-1",
+                lane: Lane::Background,
+                entity_key: id,
+                description: "Sync mailbox",
+            }))
             .await
             .unwrap();
         wait_for_item_status(&mut events_receiver, id, "done").await;
@@ -125,18 +153,26 @@ async fn a_lane_lists_the_most_recently_finished_operation_first() {
 async fn history_caps_at_two_hundred_records_per_account_evicting_oldest_first() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
     let (events, mut events_receiver) = events_channel();
-    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+    let queue = QueueEngine::with_config(
+        QueueConfig {
+            rate_per_second: 250,
+            burst: 250,
+            events: events,
+            ..QueueConfig::default()
+        },
+        executor,
+    );
 
     for index in 0..205 {
         let id = format!("op-{index}");
         queue
-            .enqueue(operation(
-                &id,
-                "account-1",
-                Lane::Background,
-                &id,
-                "Sync mailbox",
-            ))
+            .enqueue(operation(OperationSeed {
+                id: &id,
+                account_id: "account-1",
+                lane: Lane::Background,
+                entity_key: &id,
+                description: "Sync mailbox",
+            }))
             .await
             .unwrap();
         wait_for_item_status(&mut events_receiver, &id, "done").await;
@@ -164,27 +200,35 @@ async fn history_caps_at_two_hundred_records_per_account_evicting_oldest_first()
 async fn snapshot_groups_records_by_account_then_lane() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
     let (events, mut events_receiver) = events_channel();
-    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+    let queue = QueueEngine::with_config(
+        QueueConfig {
+            rate_per_second: 250,
+            burst: 250,
+            events: events,
+            ..QueueConfig::default()
+        },
+        executor,
+    );
 
     queue
-        .enqueue(operation(
-            "a1-interactive",
-            "account-1",
-            Lane::Interactive,
-            "a1-interactive",
-            "d",
-        ))
+        .enqueue(operation(OperationSeed {
+            id: "a1-interactive",
+            account_id: "account-1",
+            lane: Lane::Interactive,
+            entity_key: "a1-interactive",
+            description: "d",
+        }))
         .await
         .unwrap();
     wait_for_item_status(&mut events_receiver, "a1-interactive", "done").await;
     queue
-        .enqueue(operation(
-            "a2-background",
-            "account-2",
-            Lane::Background,
-            "a2-background",
-            "d",
-        ))
+        .enqueue(operation(OperationSeed {
+            id: "a2-background",
+            account_id: "account-2",
+            lane: Lane::Background,
+            entity_key: "a2-background",
+            description: "d",
+        }))
         .await
         .unwrap();
     wait_for_item_status(&mut events_receiver, "a2-background", "done").await;
@@ -230,18 +274,26 @@ async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_inter
 
     let (executor, mut started) = controllable_executor();
     let (events, _events_receiver) = events_channel();
-    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+    let queue = QueueEngine::with_config(
+        QueueConfig {
+            rate_per_second: 250,
+            burst: 250,
+            events: events,
+            ..QueueConfig::default()
+        },
+        executor,
+    );
 
     for index in 0..5 {
         let id = format!("interactive-{index}");
         queue
-            .enqueue(operation(
-                &id,
-                "account-1",
-                Lane::Interactive,
-                &id,
-                "interactive work",
-            ))
+            .enqueue(operation(OperationSeed {
+                id: &id,
+                account_id: "account-1",
+                lane: Lane::Interactive,
+                entity_key: &id,
+                description: "interactive work",
+            }))
             .await
             .unwrap();
     }
@@ -259,13 +311,13 @@ async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_inter
     assert_eq!(interactive_lane.active, 4);
 
     queue
-        .enqueue(operation(
-            "background-blocked",
-            "account-1",
-            Lane::Background,
-            "background-blocked",
-            "background work",
-        ))
+        .enqueue(operation(OperationSeed {
+            id: "background-blocked",
+            account_id: "account-1",
+            lane: Lane::Background,
+            entity_key: "background-blocked",
+            description: "background work",
+        }))
         .await
         .unwrap();
     let blocked_snapshot = queue.snapshot().await;
@@ -328,13 +380,13 @@ async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_inter
 #[test]
 fn discard_removes_a_record_that_never_reached_the_channel() {
     let registry = QueueRegistry::new();
-    let queued = operation(
-        "discarded",
-        "account-discard",
-        Lane::Background,
-        "entity-discard",
-        "d",
-    );
+    let queued = operation(OperationSeed {
+        id: "discarded",
+        account_id: "account-discard",
+        lane: Lane::Background,
+        entity_key: "entity-discard",
+        description: "d",
+    });
     registry.record_enqueued(&queued);
     let before = registry.snapshot(false, &Default::default());
     let has_record_before = before
@@ -354,15 +406,21 @@ fn discard_removes_a_record_that_never_reached_the_channel() {
 #[test]
 fn re_enqueuing_a_retried_operation_evicts_its_stale_terminal_history_entry() {
     let registry = QueueRegistry::new();
-    let failing = operation(
-        "retried-op",
-        "account-retry",
-        Lane::Interactive,
-        "entity-retry",
-        "Send",
-    );
+    let failing = operation(OperationSeed {
+        id: "retried-op",
+        account_id: "account-retry",
+        lane: Lane::Interactive,
+        entity_key: "entity-retry",
+        description: "Send",
+    });
     registry.record_enqueued(&failing);
-    registry.transition_terminal(&failing, OperationStatus::Failed, Some("boom".to_owned()));
+    registry.transition_terminal(
+        &failing,
+        TerminalTransition {
+            status: OperationStatus::Failed,
+            error: Some("boom".to_owned()),
+        },
+    );
 
     registry.record_enqueued(&failing);
 

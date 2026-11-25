@@ -1,3 +1,6 @@
+use latentmail_lib::storage::{
+    LabelMembershipChange, MessageKey, SearchCountQuery, SearchPageQuery, ThreadPageCursor,
+};
 use std::collections::HashSet;
 
 use chrono::{TimeZone, Utc};
@@ -81,7 +84,18 @@ fn insert_message(connection: &rusqlite::Connection, seeded: SeededMessage) {
     };
     MessageRepository::write_full_state(connection, &message).unwrap();
     for label in labels {
-        MessageRepository::set_label_membership(connection, "account", id, label, true).unwrap();
+        MessageRepository::set_label_membership(
+            connection,
+            MessageKey {
+                account_id: "account",
+                message_id: id,
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: true,
+            },
+        )
+        .unwrap();
     }
     ThreadRepository::recompute(connection, "account", thread_id).unwrap();
 }
@@ -116,7 +130,18 @@ fn a_bare_term_present_only_in_the_body_is_found() {
     );
     let parsed = parse("zyxwvutriage", now()).unwrap();
     let scope = resolve(&SearchScope::Default);
-    let rows = SearchRepository::search(&connection, "account", &parsed, &scope, None, 10).unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 }
 
@@ -156,15 +181,35 @@ fn a_search_result_counts_trashed_messages_only_in_the_trash_scope() {
     let parsed = parse("quarterly", now()).unwrap();
 
     let default_scope = resolve(&SearchScope::Default);
-    let rows = SearchRepository::search(&connection, "account", &parsed, &default_scope, None, 10)
-        .unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &default_scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(rows[0].thread.message_count, 2);
 
     let trash_scope = resolve(&SearchScope::Label {
         label_id: "TRASH".into(),
     });
-    let rows =
-        SearchRepository::search(&connection, "account", &parsed, &trash_scope, None, 10).unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &trash_scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(rows[0].thread.message_count, 3);
 }
 
@@ -188,13 +233,33 @@ fn a_diacritic_bearing_term_matches_its_unaccented_form_and_vice_versa() {
     let scope = resolve(&SearchScope::Default);
 
     let unaccented = parse("cafe", now()).unwrap();
-    let rows =
-        SearchRepository::search(&connection, "account", &unaccented, &scope, None, 10).unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &unaccented,
+            scope: &scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 
     let accented = parse("café", now()).unwrap();
-    let rows =
-        SearchRepository::search(&connection, "account", &accented, &scope, None, 10).unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &accented,
+            scope: &scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 }
 
@@ -232,7 +297,18 @@ fn is_unread_has_attachment_with_no_text_term_uses_the_predicate_only_shape() {
     let parsed = parse("is:unread has:attachment", now()).unwrap();
     assert!(!parsed.has_text_term);
     let scope = resolve(&SearchScope::Default);
-    let rows = SearchRepository::search(&connection, "account", &parsed, &scope, None, 10).unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 }
 
@@ -283,7 +359,18 @@ fn from_anna_is_unread_requires_a_single_message_satisfying_both() {
     );
     let parsed = parse("from:anna is:unread", now()).unwrap();
     let scope = resolve(&SearchScope::Default);
-    let rows = SearchRepository::search(&connection, "account", &parsed, &scope, None, 10).unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-together"]);
 }
 
@@ -324,15 +411,32 @@ fn matches_deduplicate_to_threads_order_newest_first_and_paginate_without_loss()
     let parsed = parse("quarterly", now()).unwrap();
     let scope = resolve(&SearchScope::Default);
 
-    let total = SearchRepository::count(&connection, "account", &parsed, &scope).unwrap();
+    let total = SearchRepository::count(
+        &connection,
+        SearchCountQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &scope,
+        },
+    )
+    .unwrap();
     assert_eq!(total, 5);
 
     let mut collected = Vec::new();
     let mut cursor = None;
     loop {
-        let page =
-            SearchRepository::search(&connection, "account", &parsed, &scope, cursor.clone(), 2)
-                .unwrap();
+        let page = SearchRepository::search(
+            &connection,
+            SearchPageQuery {
+                account_id: "account",
+                parsed: &parsed,
+                scope: &scope,
+                cursor: cursor.clone(),
+                limit: 2,
+                direction: ThreadPageDirection::default(),
+            },
+        )
+        .unwrap();
         if page.is_empty() {
             break;
         }
@@ -340,7 +444,10 @@ fn matches_deduplicate_to_threads_order_newest_first_and_paginate_without_loss()
             collected.push(row.thread.id.clone());
         }
         let last = page.last().unwrap();
-        cursor = Some((last.thread.latest_at, last.thread.id.clone()));
+        cursor = Some(ThreadPageCursor {
+            latest_at: last.thread.latest_at,
+            thread_id: last.thread.id.clone(),
+        });
         if page.len() < 2 {
             break;
         }
@@ -382,17 +489,32 @@ fn backward_search_page_restores_newer_rows_in_newest_first_order() {
     }
     let parsed = parse("quarterly", now()).unwrap();
     let scope = resolve(&SearchScope::Default);
-    let newest =
-        SearchRepository::search(&connection, "account", &parsed, &scope, None, 5).unwrap();
+    let newest = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &scope,
+            cursor: None,
+            limit: 5,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     let cursor = &newest[3].thread;
     let restored = SearchRepository::search_with_direction(
         &connection,
-        "account",
-        &parsed,
-        &scope,
-        Some((cursor.latest_at, cursor.id.clone())),
-        3,
-        ThreadPageDirection::Backward,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &scope,
+            cursor: Some(ThreadPageCursor {
+                latest_at: cursor.latest_at,
+                thread_id: cursor.id.clone(),
+            }),
+            limit: 3,
+            direction: ThreadPageDirection::Backward,
+        },
     )
     .unwrap();
     assert_eq!(
@@ -427,14 +549,33 @@ fn default_scope_excludes_trash_and_all_scope_includes_it() {
     let parsed = parse("invoice", now()).unwrap();
 
     let default_scope = resolve(&SearchScope::Default);
-    let default_rows =
-        SearchRepository::search(&connection, "account", &parsed, &default_scope, None, 10)
-            .unwrap();
+    let default_rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &default_scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert!(thread_ids(&default_rows).is_empty());
 
     let all_scope = resolve(&SearchScope::All);
-    let all_rows =
-        SearchRepository::search(&connection, "account", &parsed, &all_scope, None, 10).unwrap();
+    let all_rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &all_scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(thread_ids(&all_rows), vec!["thread-1"]);
 }
 
@@ -473,6 +614,17 @@ fn label_scope_narrows_results_to_a_single_label() {
     let scope = resolve(&SearchScope::Label {
         label_id: "Label_1".into(),
     });
-    let rows = SearchRepository::search(&connection, "account", &parsed, &scope, None, 10).unwrap();
+    let rows = SearchRepository::search(
+        &connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: &parsed,
+            scope: &scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 }

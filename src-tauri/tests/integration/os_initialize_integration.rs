@@ -1,3 +1,4 @@
+use latentmail_lib::sync::SyncEngineDeps;
 use latentmail_lib::{
     auth::AuthService,
     os::lifecycle::{settling_delay, PowerSignal},
@@ -55,7 +56,12 @@ async fn initialized_lifecycle_runs_its_resume_work() {
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(250, 250, Arc::clone(&registry));
     let sink: EventSink = Arc::new(|_, _| {});
-    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, sink);
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: sink,
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -93,9 +99,11 @@ async fn indicator_refreshes_from_each_domain_event_with_managed_storage() {
     app.emit(latentmail_lib::events::ACCOUNT_STATE, ()).unwrap();
     tokio::time::sleep(chrono::Duration::milliseconds(150).to_std().unwrap()).await;
     assert!(app.try_state::<OsIntegration>().is_some());
-    assert!(app.state::<OsIntegration>().indicator_applications().0 > 0);
-    assert!(app.state::<OsIntegration>().indicator_applications().1 > 0);
-    let (tray, badge) = app.state::<OsIntegration>().platform_state();
+    assert!(app.state::<OsIntegration>().indicator_applications().tray > 0);
+    assert!(app.state::<OsIntegration>().indicator_applications().badge > 0);
+    let platform = app.state::<OsIntegration>().platform_state();
+    let tray = platform.tray;
+    let badge = platform.badge;
     assert!(tray.created);
     assert_eq!(tray.tooltip.as_deref(), Some("LatentMail — 0 unread"));
     assert_eq!(tray.menu.unwrap().rows[0], "0 unread messages");

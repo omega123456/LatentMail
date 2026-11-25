@@ -1,3 +1,5 @@
+use latentmail_lib::ai::index::RetryEmbeddingRequest;
+use latentmail_lib::ai::provider::ChatCompletionRequest;
 use std::time::Duration;
 
 use latentmail_lib::ai::{
@@ -59,7 +61,11 @@ async fn provider_parses_tolerant_model_embedding_and_chat_responses() {
     );
     assert_eq!(
         provider
-            .chat_completion("chat", serde_json::json!([]), None)
+            .chat_completion(ChatCompletionRequest {
+                model: "chat",
+                messages: serde_json::json!([]),
+                response_format: None
+            })
             .await
             .unwrap(),
         "answer"
@@ -85,9 +91,15 @@ async fn embedding_rate_limits_retry_inside_the_request_with_injected_backoff() 
         .await;
     let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
     assert_eq!(
-        embed_with_retry(&provider, "embedding", vec!["mail".into()], 3, |_| {
-            Duration::ZERO
-        })
+        embed_with_retry(
+            &provider,
+            RetryEmbeddingRequest {
+                model: "embedding",
+                input: vec!["mail".into()],
+                attempts: 3,
+                backoff: |_| { Duration::ZERO }
+            }
+        )
         .await
         .unwrap(),
         vec![vec![1.0]]
@@ -116,7 +128,11 @@ async fn provider_classifies_authentication_server_and_malformed_responses_witho
                 .await
                 .unwrap_err(),
             _ => provider
-                .chat_completion("chat", serde_json::json!([]), None)
+                .chat_completion(ChatCompletionRequest {
+                    model: "chat",
+                    messages: serde_json::json!([]),
+                    response_format: None,
+                })
                 .await
                 .unwrap_err(),
         };
@@ -137,10 +153,12 @@ async fn retries_transient_server_and_transport_failures_with_injected_bounds() 
     assert_eq!(
         embed_with_retry(
             &server_provider,
-            "embedding",
-            vec!["mail".into()],
-            2,
-            |_| Duration::ZERO
+            RetryEmbeddingRequest {
+                model: "embedding",
+                input: vec!["mail".into()],
+                attempts: 2,
+                backoff: |_| Duration::ZERO
+            }
         )
         .await
         .unwrap_err(),
@@ -150,10 +168,12 @@ async fn retries_transient_server_and_transport_failures_with_injected_bounds() 
     assert_eq!(
         embed_with_retry(
             &transport_provider,
-            "embedding",
-            vec!["mail".into()],
-            2,
-            |_| Duration::ZERO
+            RetryEmbeddingRequest {
+                model: "embedding",
+                input: vec!["mail".into()],
+                attempts: 2,
+                backoff: |_| Duration::ZERO
+            }
         )
         .await
         .unwrap_err(),
@@ -184,14 +204,22 @@ async fn chat_requests_carry_every_reasoning_off_key_and_step_down_when_the_prov
     let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
     assert_eq!(
         provider
-            .chat_completion("chat", serde_json::json!([]), None)
+            .chat_completion(ChatCompletionRequest {
+                model: "chat",
+                messages: serde_json::json!([]),
+                response_format: None
+            })
             .await
             .unwrap(),
         "answer"
     );
     assert_eq!(
         provider
-            .chat_completion("chat", serde_json::json!([]), None)
+            .chat_completion(ChatCompletionRequest {
+                model: "chat",
+                messages: serde_json::json!([]),
+                response_format: None
+            })
             .await
             .unwrap(),
         "answer"
@@ -255,7 +283,11 @@ async fn a_rejection_whose_body_is_not_an_openai_error_object_still_steps_the_re
         let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
         assert_eq!(
             provider
-                .chat_completion("chat", serde_json::json!([]), None)
+                .chat_completion(ChatCompletionRequest {
+                    model: "chat",
+                    messages: serde_json::json!([]),
+                    response_format: None
+                })
                 .await
                 .unwrap(),
             "answer"
@@ -293,9 +325,15 @@ async fn a_rate_limit_whose_body_is_not_an_openai_error_object_is_still_transien
             .unwrap_err()
             .transient());
         assert_eq!(
-            embed_with_retry(&provider, "embedding", vec!["mail".into()], 3, |_| {
-                Duration::ZERO
-            })
+            embed_with_retry(
+                &provider,
+                RetryEmbeddingRequest {
+                    model: "embedding",
+                    input: vec!["mail".into()],
+                    attempts: 3,
+                    backoff: |_| { Duration::ZERO }
+                }
+            )
             .await
             .unwrap(),
             vec![vec![1.0]]
@@ -387,7 +425,11 @@ async fn a_successful_completion_that_carries_no_choice_is_an_invalid_response()
     let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
     assert_eq!(
         provider
-            .chat_completion("chat", serde_json::json!([]), None)
+            .chat_completion(ChatCompletionRequest {
+                model: "chat",
+                messages: serde_json::json!([]),
+                response_format: None
+            })
             .await
             .unwrap_err(),
         ProviderError::Response
@@ -410,7 +452,11 @@ async fn a_completion_whose_reasoning_exhausts_the_token_limit_names_the_reasoni
     let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
     assert_eq!(
         provider
-            .chat_completion("chat", serde_json::json!([]), None)
+            .chat_completion(ChatCompletionRequest {
+                model: "chat",
+                messages: serde_json::json!([]),
+                response_format: None
+            })
             .await
             .unwrap_err(),
         ProviderError::ReasoningBudget

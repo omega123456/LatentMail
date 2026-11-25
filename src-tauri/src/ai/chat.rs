@@ -10,8 +10,10 @@ use tauri::{AppHandle, Emitter, Runtime};
 use crate::{
     ai::{
         credentials, prompts,
-        provider::Provider,
-        retrieval::{retrieve, HistoryMessage, Passage, Retrieval, RetrievalRequest, Role},
+        provider::{ChatStreamRequest, Provider},
+        retrieval::{
+            retrieve, HistoryMessage, Passage, Retrieval, RetrievalRequest, RetrieveContext, Role,
+        },
         AiService,
     },
     storage::{addresses, AccountRepository, PassageSource},
@@ -35,6 +37,12 @@ pub struct ChatSource {
     pub sent_at_millis: i64,
     pub message_id: String,
     pub thread_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RewrittenCitations {
+    pub answer: String,
+    pub sources: Vec<ChatSource>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -64,6 +72,18 @@ struct ChatEvent<'a> {
     kind: ChatEventKind,
 }
 
+pub struct ChatBeginRequest<'a> {
+    pub account_id: &'a str,
+    pub session_id: &'a str,
+    pub question: &'a str,
+}
+
+pub struct ChatExchange<'a> {
+    pub session_id: &'a str,
+    pub question: &'a str,
+    pub answer: &'a str,
+}
+
 pub struct ChatRun {
     pub request_id: String,
     pub session_id: String,
@@ -91,18 +111,13 @@ pub struct ChatRegistry {
 }
 
 impl ChatRegistry {
-    pub fn begin(
-        &self,
-        account_id: &str,
-        session_id: &str,
-        question: &str,
-    ) -> Result<ChatRun, String> {
+    pub fn begin(&self, request: ChatBeginRequest<'_>) -> Result<ChatRun, String> {
         let mut state = self.lock()?;
         if state.active.is_some() {
             return Err("A question is already being answered".to_owned());
         }
-        if state.session_id != session_id {
-            state.session_id = session_id.to_owned();
+        if state.session_id != request.session_id {
+            state.session_id = request.session_id.to_owned();
             state.history.clear();
         }
         let request_id = next_request_id();
@@ -114,13 +129,14 @@ impl ChatRegistry {
         let history = trim(&state.history);
         Ok(ChatRun {
             request_id: request_id,
-            session_id: session_id.to_owned(),
-            account_id: account_id.to_owned(),
-            question: question.to_owned(),
+            session_id: request.session_id.to_owned(),
+            account_id: request.account_id.to_owned(),
+            question: request.question.to_owned(),
             history: history,
             cancel: cancel,
         })
     }
+
     pub fn cancel(&self, request_id: &str) -> Result<bool, String> {
         let mut state = self.lock()?;
         let matched = state
@@ -135,6 +151,7 @@ impl ChatRegistry {
         }
         Ok(true)
     }
+
     pub fn retire(&self, request_id: &str) -> Result<bool, String> {
         let mut state = self.lock()?;
         let matched = state
@@ -146,21 +163,23 @@ impl ChatRegistry {
         }
         Ok(matched)
     }
-    pub fn record(&self, session_id: &str, question: &str, answer: &str) -> Result<(), String> {
+
+    pub fn record(&self, exchange: ChatExchange<'_>) -> Result<(), String> {
         let mut state = self.lock()?;
-        if state.session_id != session_id {
+        if state.session_id != exchange.session_id {
             return Ok(());
         }
         state.history.push(HistoryMessage {
             role: Role::User,
-            content: question.to_owned(),
+            content: exchange.question.to_owned(),
         });
         state.history.push(HistoryMessage {
             role: Role::Assistant,
-            content: answer.to_owned(),
+            content: exchange.answer.to_owned(),
         });
         Ok(())
     }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, ChatState>, String> {
         self.state
             .lock()
@@ -197,87 +216,117 @@ pub fn validate_question(question: &str) -> Result<String, String> {
     Ok(trimmed.to_owned())
 }
 
-fn cite(
-    marker: &str,
-    passages: &[Passage],
-    sources: &[PassageSource],
-    cited: &mut Vec<i64>,
-) -> Option<usize> {
-    let number = marker.parse::<usize>().ok()?;
-    let passage = passages.get(number.checked_sub(1)?)?;
-    if !sources
-        .iter()
-        .any(|source| source.message_seq == passage.message_seq)
-    {
-        return None;
+pub struct CitationRewriter<'a> {
+    passages: &'a [Passage],
+    sources: &'a [PassageSource],
+    cited: Vec<i64>,
+}
+
+impl<'a> CitationRewriter<'a> {
+    pub fn new(passages: &'a [Passage], sources: &'a [PassageSource]) -> Self {
+        Self {
+            passages: passages,
+            sources: sources,
+            cited: Vec::new(),
+        }
     }
-    let position = cited
-        .iter()
-        .position(|sequence| *sequence == passage.message_seq)
-        .unwrap_or_else(|| {
-            cited.push(passage.message_seq);
-            cited.len() - 1
-        });
-    Some(position + 1)
+
+    fn cite(&mut self, marker: &str) -> Option<usize> {
+        let number = marker.parse::<usize>().ok()?;
+        let passage = self.passages.get(number.checked_sub(1)?)?;
+        if !self
+            .sources
+            .iter()
+            .any(|source| source.message_seq == passage.message_seq)
+        {
+            return None;
+        }
+        let position = self
+            .cited
+            .iter()
+            .position(|sequence| *sequence == passage.message_seq)
+            .unwrap_or_else(|| {
+                self.cited.push(passage.message_seq);
+                self.cited.len() - 1
+            });
+        Some(position + 1)
+    }
+
+    fn marker_end(bytes: &[u8], start: usize) -> Option<usize> {
+        let mut end = start;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        (end > start && bytes.get(end) == Some(&b']')).then_some(end)
+    }
+
+    fn into_sources(self) -> Vec<ChatSource> {
+        self.cited
+            .into_iter()
+            .filter_map(|sequence| {
+                self.sources
+                    .iter()
+                    .find(|source| source.message_seq == sequence)
+            })
+            .enumerate()
+            .map(|(index, source)| {
+                let identity = addresses::first_identity(&source.sender);
+                ChatSource {
+                    number: index + 1,
+                    sender_name: identity
+                        .as_ref()
+                        .map_or_else(|| source.sender.clone(), |value| value.display.clone()),
+                    sender_address: identity
+                        .as_ref()
+                        .map_or_else(|| source.sender.clone(), |value| value.address.clone()),
+                    subject: source.subject.clone(),
+                    sent_at_millis: to_millis(source.sent_at),
+                    message_id: source.message_id.clone(),
+                    thread_id: source.thread_id.clone(),
+                }
+            })
+            .collect()
+    }
+
+    pub fn rewrite(mut self, answer: &str) -> RewrittenCitations {
+        let mut rewritten = String::with_capacity(answer.len());
+        let bytes = answer.as_bytes();
+        let mut index = 0;
+        let mut copied = 0;
+        while index < bytes.len() {
+            if bytes[index] == b'[' {
+                let start = index + 1;
+                if let Some(end) = Self::marker_end(bytes, start) {
+                    rewritten.push_str(&answer[copied..index]);
+                    match self.cite(&answer[start..end]) {
+                        Some(number) => rewritten.push_str(&format!("[{number}]")),
+                        None => {
+                            if rewritten.ends_with(' ') {
+                                rewritten.pop();
+                            }
+                        }
+                    }
+                    index = end + 1;
+                    copied = index;
+                    continue;
+                }
+            }
+            index += 1;
+        }
+        rewritten.push_str(&answer[copied..]);
+        RewrittenCitations {
+            answer: rewritten,
+            sources: self.into_sources(),
+        }
+    }
 }
 
 pub fn citations(
     answer: &str,
     passages: &[Passage],
     sources: &[PassageSource],
-) -> (String, Vec<ChatSource>) {
-    let mut cited: Vec<i64> = Vec::new();
-    let mut rewritten = String::with_capacity(answer.len());
-    let bytes = answer.as_bytes();
-    let mut index = 0;
-    let mut copied = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'[' {
-            let start = index + 1;
-            let mut end = start;
-            while end < bytes.len() && bytes[end].is_ascii_digit() {
-                end += 1;
-            }
-            if end > start && bytes.get(end) == Some(&b']') {
-                rewritten.push_str(&answer[copied..index]);
-                match cite(&answer[start..end], passages, sources, &mut cited) {
-                    Some(number) => rewritten.push_str(&format!("[{number}]")),
-                    None => {
-                        if rewritten.ends_with(' ') {
-                            rewritten.pop();
-                        }
-                    }
-                }
-                index = end + 1;
-                copied = index;
-                continue;
-            }
-        }
-        index += 1;
-    }
-    rewritten.push_str(&answer[copied..]);
-    let cards = cited
-        .into_iter()
-        .filter_map(|sequence| sources.iter().find(|source| source.message_seq == sequence))
-        .enumerate()
-        .map(|(index, source)| {
-            let identity = addresses::first_identity(&source.sender);
-            ChatSource {
-                number: index + 1,
-                sender_name: identity
-                    .as_ref()
-                    .map_or_else(|| source.sender.clone(), |value| value.display.clone()),
-                sender_address: identity
-                    .as_ref()
-                    .map_or_else(|| source.sender.clone(), |value| value.address.clone()),
-                subject: source.subject.clone(),
-                sent_at_millis: to_millis(source.sent_at),
-                message_id: source.message_id.clone(),
-                thread_id: source.thread_id.clone(),
-            }
-        })
-        .collect();
-    (rewritten, cards)
+) -> RewrittenCitations {
+    CitationRewriter::new(passages, sources).rewrite(answer)
 }
 
 enum Answer {
@@ -337,9 +386,13 @@ async fn produce<R: Runtime>(
         .ok_or_else(|| "Select an embedding model first".to_owned())?;
     let email = account_email(service, &request.account_id).await?;
     let provider = Provider::new(&base_url, credentials::load(&request.account_id)?)?;
+    let storage = service.storage();
     let retrieved = retrieve(
-        &provider,
-        &service.storage(),
+        RetrieveContext {
+            provider: &provider,
+            storage: &storage,
+            cancel: &request.cancel,
+        },
         &RetrievalRequest {
             chat_model: &chat_model,
             embedding_model: &embedding_model,
@@ -348,7 +401,6 @@ async fn produce<R: Runtime>(
             question: &request.question,
             history: &request.history,
         },
-        &request.cancel,
     )
     .await?;
     let found = match retrieved {
@@ -383,9 +435,11 @@ async fn produce<R: Runtime>(
     let mut text = String::new();
     provider
         .chat_completion_stream(
-            &chat_model,
-            serde_json::Value::Array(messages),
-            &request.cancel,
+            ChatStreamRequest {
+                model: &chat_model,
+                messages: serde_json::Value::Array(messages),
+                cancel: &request.cancel,
+            },
             &mut |delta| {
                 text.push_str(delta);
                 emit(
@@ -402,10 +456,10 @@ async fn produce<R: Runtime>(
     if request.cancel.load(Ordering::SeqCst) {
         return Ok(Answer::Cancelled);
     }
-    let (answer, sources) = citations(&text, &found.passages, &found.sources);
+    let rewritten = citations(&text, &found.passages, &found.sources);
     Ok(Answer::Complete {
-        text: answer,
-        sources: Some(sources),
+        text: rewritten.answer,
+        sources: Some(rewritten.sources),
     })
 }
 
@@ -428,9 +482,11 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, service: &AiService, request: C
                     },
                 );
             }
-            let _ = service
-                .chat()
-                .record(&request.session_id, &request.question, &text);
+            let _ = service.chat().record(ChatExchange {
+                session_id: &request.session_id,
+                question: &request.question,
+                answer: &text,
+            });
             ChatEventKind::Done {
                 cancelled: false,
                 error: None,
@@ -443,4 +499,22 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, service: &AiService, request: C
     };
     emit(app, &request, terminal);
     let _ = service.chat().retire(&request.request_id);
+}
+
+pub async fn start<R: Runtime>(
+    app: AppHandle<R>,
+    service: &AiService,
+    request: ChatBeginRequest<'_>,
+) -> Result<String, String> {
+    let question = validate_question(request.question)?;
+    service.chat_ready(request.account_id).await?;
+    let chat_run = service.chat().begin(ChatBeginRequest {
+        account_id: request.account_id,
+        session_id: request.session_id,
+        question: &question,
+    })?;
+    let request_id = chat_run.request_id.clone();
+    let service = service.clone();
+    tauri::async_runtime::spawn(async move { run(&app, &service, chat_run).await });
+    Ok(request_id)
 }

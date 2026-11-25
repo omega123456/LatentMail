@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::ipc::{AccountIdRequest, AppServices, CommandPayload};
 use crate::keychain::Keychain;
 use crate::queue::QueueEngine;
 use crate::storage::{Account, AccountRepository, Storage};
@@ -105,6 +106,32 @@ pub struct UserInfo {
     pub picture: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SaveAccountRequest {
+    pub email: String,
+    pub refresh_token: String,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfileUpdate {
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+pub struct CodeExchangeRequest<'a> {
+    pub client_id: &'a str,
+    pub redirect: &'a str,
+    pub code: AuthorizationCode,
+    pub verifier: PkceCodeVerifier,
+}
+
+struct EnrichProfileInput<'a> {
+    access_token: &'a str,
+    has_profile_scope: bool,
+    account: AccountDto,
+}
+
 impl AuthService {
     pub fn new(storage: Storage) -> Self {
         Self {
@@ -138,7 +165,8 @@ impl AuthService {
     ) -> Result<(), String> {
         async {
             let client_id = client_id()?;
-            let listener = string_try!(tokio::net::TcpListener::bind(format!("{LOOPBACK_HOST}:0")).await);
+            let listener =
+                string_try!(tokio::net::TcpListener::bind(format!("{LOOPBACK_HOST}:0")).await);
             let port = string_try!(listener.local_addr()).port();
             let redirect = format!("http://{LOOPBACK_HOST}:{port}");
             tracing::info!(target: "auth", "sign-in listening on {redirect}");
@@ -146,22 +174,32 @@ impl AuthService {
             open_consent(&app, &authorization.url)?;
             let code = receive_code(listener, &authorization.state).await?;
             tracing::info!(target: "auth", "sign-in received callback, exchanging code");
-            let token = exchange_code(&client_id, &redirect, code, authorization.verifier).await?;
+            let token = exchange_code(CodeExchangeRequest {
+                client_id: &client_id,
+                redirect: &redirect,
+                code: code,
+                verifier: authorization.verifier,
+            })
+            .await?;
             let profile = profile(token.access_token().secret()).await?;
             let refresh = token
                 .refresh_token()
                 .ok_or_else(|| "Google did not return a refresh token".to_owned())?;
             let account = self
-                .save_account(
-                    profile.email_address,
-                    refresh.secret().to_owned(),
-                    account_id,
-                )
+                .save_account(SaveAccountRequest {
+                    email: profile.email_address,
+                    refresh_token: refresh.secret().to_owned(),
+                    target: account_id,
+                })
                 .await?;
 
             let has_profile_scope = token_has_scope(&token, "profile");
             let account = self
-                .enrich_profile(token.access_token().secret(), has_profile_scope, account)
+                .enrich_profile(EnrichProfileInput {
+                    access_token: token.access_token().secret(),
+                    has_profile_scope: has_profile_scope,
+                    account: account,
+                })
                 .await?;
 
             string_try!(app.emit(crate::events::ACCOUNT_STATE, account));
@@ -171,34 +209,35 @@ impl AuthService {
         .inspect_err(|error: &String| tracing::error!(target: "auth", "sign-in failed: {error}"))
     }
 
-    async fn enrich_profile(
-        &self,
-        access_token: &str,
-        has_profile_scope: bool,
-        account: AccountDto,
-    ) -> Result<AccountDto, String> {
-        if !has_profile_scope {
-            return Ok(account);
+    async fn enrich_profile(&self, input: EnrichProfileInput<'_>) -> Result<AccountDto, String> {
+        if !input.has_profile_scope {
+            return Ok(input.account);
         }
-        match userinfo(access_token).await {
+        match userinfo(input.access_token).await {
             Ok(info) => Ok(self
-                .apply_profile(&account.id, info.name, info.picture)
+                .apply_profile(
+                    &input.account.id,
+                    ProfileUpdate {
+                        display_name: info.name,
+                        avatar_url: info.picture,
+                    },
+                )
                 .await?
-                .unwrap_or(account)),
+                .unwrap_or(input.account)),
             Err(error) => {
                 tracing::warn!(target: "auth", "userinfo fetch failed, keeping placeholder identity: {error}");
-                Ok(account)
+                Ok(input.account)
             }
         }
     }
 
-    pub async fn save_account(
-        &self,
-        email: String,
-        refresh_token: String,
-        target: Option<String>,
-    ) -> Result<AccountDto, String> {
+    pub async fn save_account(&self, request: SaveAccountRequest) -> Result<AccountDto, String> {
         let now = chrono::Utc::now().timestamp();
+        let SaveAccountRequest {
+            email,
+            refresh_token,
+            target,
+        } = request;
         let email_for_db = email.clone();
         let account = self
             .storage
@@ -245,10 +284,13 @@ impl AuthService {
     pub async fn apply_profile(
         &self,
         account_id: &str,
-        display_name: Option<String>,
-        avatar_url: Option<String>,
+        update: ProfileUpdate,
     ) -> Result<Option<AccountDto>, String> {
         let account_id = account_id.to_owned();
+        let ProfileUpdate {
+            display_name,
+            avatar_url,
+        } = update;
         let updated = self
             .storage
             .run(move |connection| {
@@ -534,27 +576,24 @@ pub fn parse_callback(target: &str, expected_state: &str) -> Result<Authorizatio
 }
 
 pub async fn exchange_code(
-    client_id: &str,
-    redirect: &str,
-    code: AuthorizationCode,
-    verifier: PkceCodeVerifier,
+    request: CodeExchangeRequest<'_>,
 ) -> Result<
     oauth2::StandardTokenResponse<oauth2::EmptyExtraTokenFields, oauth2::basic::BasicTokenType>,
     String,
 > {
-    let mut client = BasicClient::new(ClientId::new(client_id.to_owned()))
+    let mut client = BasicClient::new(ClientId::new(request.client_id.to_owned()))
         .set_auth_type(AuthType::RequestBody)
         .set_token_uri(string_try!(TokenUrl::new(oauth_endpoint(
             "LATENTMAIL_GOOGLE_TOKEN_URL",
             TOKEN_URL
         ))))
-        .set_redirect_uri(string_try!(RedirectUrl::new(redirect.to_owned())));
+        .set_redirect_uri(string_try!(RedirectUrl::new(request.redirect.to_owned())));
     if let Some(secret) = client_secret() {
         client = client.set_client_secret(secret);
     }
     client
-        .exchange_code(code)
-        .set_pkce_verifier(verifier)
+        .exchange_code(request.code)
+        .set_pkce_verifier(request.verifier)
         .request_async(&ReqwestClient::from(crate::http_client()))
         .await
         .map_err(|error| error.to_string())
@@ -663,35 +702,14 @@ pub fn has_refresh_token(account_id: &str) -> bool {
         .is_some()
 }
 
-#[tauri::command]
-pub async fn list_accounts(
-    service: tauri::State<'_, AuthService>,
-) -> Result<Vec<AccountDto>, String> {
-    service.accounts().await
-}
-#[tauri::command]
-pub async fn begin_sign_in<R: Runtime>(
-    app: AppHandle<R>,
-    service: tauri::State<'_, AuthService>,
-) -> Result<(), String> {
-    service.start(app, None).await
-}
-#[tauri::command]
-pub async fn begin_reauthentication<R: Runtime>(
-    app: AppHandle<R>,
-    service: tauri::State<'_, AuthService>,
+pub async fn remove_account_with_cleanup<R: Runtime>(
+    services: &AppServices<'_, R>,
     account_id: String,
 ) -> Result<(), String> {
-    service.start(app, Some(account_id)).await
-}
-#[tauri::command]
-pub async fn remove_account<R: Runtime>(
-    app: AppHandle<R>,
-    service: tauri::State<'_, AuthService>,
-    queue: tauri::State<'_, Arc<QueueEngine>>,
-    sync: tauri::State<'_, Arc<crate::sync::SyncEngine>>,
-    account_id: String,
-) -> Result<(), String> {
+    let app = services.app();
+    let service = services.auth()?;
+    let queue = services.queue()?;
+    let sync = services.sync()?;
     if !service.has_account(&account_id).await? {
         return Err("Unknown account".to_owned());
     }
@@ -701,25 +719,58 @@ pub async fn remove_account<R: Runtime>(
         let ai = ai.inner().clone();
         let cleanup_account = account_id.clone();
         sync.enqueue_embedding_barrier(
-            &account_id,
-            "Remove semantic index".to_owned(),
+            crate::sync::EmbeddingJob {
+                account_id: &account_id,
+                description: "Remove semantic index".to_owned(),
+            },
             async move { crate::ai::index::cleanup(&ai, cleanup_account).await },
         )
         .await?;
     }
     service.remove_account(queue.inner(), &account_id).await?;
     tauri::Emitter::emit(
-        &app,
+        app,
         crate::events::ACCOUNT_REMOVED,
         serde_json::json!({"accountId":account_id}),
     )
     .map_err(|error| error.to_string())?;
     tauri::Emitter::emit(
-        &app,
+        app,
         crate::events::AI_CONFIG,
         serde_json::json!({"accountId":account_id,"removed":true}),
     )
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_accounts<R: Runtime>(
+    services: AppServices<'_, R>,
+) -> Result<Vec<AccountDto>, String> {
+    services.auth()?.accounts().await
+}
+
+#[tauri::command]
+pub async fn begin_sign_in<R: Runtime>(services: AppServices<'_, R>) -> Result<(), String> {
+    services.auth()?.start(services.app().clone(), None).await
+}
+
+#[tauri::command]
+pub async fn begin_reauthentication<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountIdRequest>,
+) -> Result<(), String> {
+    services
+        .auth()?
+        .start(services.app().clone(), Some(request.account_id))
+        .await
+}
+
+#[tauri::command]
+pub async fn remove_account<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountIdRequest>,
+) -> Result<(), String> {
+    remove_account_with_cleanup(&services, request.account_id).await
 }
 
 fn local_part(email: &str) -> String {

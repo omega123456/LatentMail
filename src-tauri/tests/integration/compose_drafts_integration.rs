@@ -1,7 +1,15 @@
+use latentmail_lib::compose::drafts::{DraftExecutorContext, DraftTarget};
+use latentmail_lib::compose::staging::{OwnerScope, StagePathRequest};
+use latentmail_lib::ipc::{AccountIdRequest, AppServices, CommandPayload};
+use latentmail_lib::queue::DurableSubmission;
+use latentmail_lib::storage::{MessageKey, TerminalOutcome};
+use latentmail_lib::sync::commands::{
+    ListThreadsRequest, LoadConversationRequest, LookupContactsRequest,
+};
+use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncEngineDeps, WorkRegistry};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
 use latentmail_lib::{
     auth::AuthService,
     compose::{
@@ -386,12 +394,12 @@ async fn compose_and_mail_command_wrappers_dispatch_with_managed_test_state() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AuthService::new(storage.clone()));
-    app.manage(SyncEngine::new(
-        storage.clone(),
-        queue,
-        registry,
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    }));
     app.manage(storage);
     app.manage(std::sync::Arc::new(Staging::new(
         directory.path().join("staged"),
@@ -552,13 +560,13 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
     let queue = QueueEngine::new(
         250,
         250,
-        drafts::build_executor(
-            app.handle().clone(),
-            storage.clone(),
-            std::sync::Arc::clone(&staging),
-            std::sync::Arc::clone(&coalescer),
-            "http://not-contacted".into(),
-        ),
+        drafts::build_executor(DraftExecutorContext {
+            app: app.handle().clone(),
+            storage: storage.clone(),
+            staging: std::sync::Arc::clone(&staging),
+            coalescer: std::sync::Arc::clone(&coalescer),
+            base_url: "http://not-contacted".into(),
+        }),
     );
     queue.pause();
 
@@ -820,8 +828,10 @@ async fn create_recovers_from_a_simulated_interruption_using_only_the_persisted_
 
     MessageRepository::replace_inline_parts(
         &storage.connection().unwrap(),
-        "account",
-        "original",
+        MessageKey {
+            account_id: "account",
+            message_id: "original",
+        },
         &[InlinePart {
             content_id: "logo".into(),
             mime_type: "image/png".into(),
@@ -832,14 +842,16 @@ async fn create_recovers_from_a_simulated_interruption_using_only_the_persisted_
     let source = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(source.path(), b"attachment bytes").unwrap();
     let part = staging
-        .stage_path(
-            "account",
-            "local-session",
-            source.path(),
-            "part-1",
-            "text/plain".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "local-session",
+            },
+            source: source.path(),
+            id: "part-1",
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
 
     staging.snapshot("op-create", &[part]).unwrap();
@@ -880,7 +892,10 @@ async fn create_recovers_from_a_simulated_interruption_using_only_the_persisted_
         .state::<std::sync::Arc<QueueEngine>>()
         .inner()
         .clone();
-    let (recovered, uncertain) = storage
+    let latentmail_lib::queue::RecoveredOperations {
+        pending: recovered,
+        uncertain_accounts: uncertain,
+    } = storage
         .run(latentmail_lib::queue::recover_durable_operations)
         .await
         .unwrap();
@@ -992,12 +1007,12 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AuthService::new(storage.clone()));
-    app.manage(SyncEngine::new(
-        storage.clone(),
-        queue,
-        registry,
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    }));
     app.manage(storage);
     app.manage(std::sync::Arc::new(Staging::new(
         directory.path().join("staged"),
@@ -1006,38 +1021,47 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         .build()
         .unwrap();
 
-    assert!(
-        latentmail_lib::sync::commands::list_labels(app.state(), "account".into())
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(latentmail_lib::sync::commands::list_labels(
+        AppServices::new(app.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: "account".into()
+        })
+    )
+    .await
+    .unwrap()
+    .is_empty());
     assert!(latentmail_lib::sync::commands::lookup_contacts(
-        app.state(),
-        "account".into(),
-        "x".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(LookupContactsRequest {
+            account_id: "account".into(),
+            query: "x".into()
+        })
     )
     .await
     .unwrap()
     .is_empty());
     assert!(latentmail_lib::sync::commands::list_threads(
-        app.state(),
-        "account".into(),
-        None,
-        None,
-        None,
-        None,
+        AppServices::new(app.handle()),
+        CommandPayload(ListThreadsRequest {
+            account_id: "account".into(),
+            label_id: None,
+            cursor: None,
+            direction: None,
+            limit: None
+        })
     )
     .await
     .unwrap()
     .items
     .is_empty());
     assert!(latentmail_lib::sync::commands::load_conversation(
-        app.state(),
-        "account".into(),
-        "missing".into(),
-        None,
-        None,
+        AppServices::new(app.handle()),
+        CommandPayload(LoadConversationRequest {
+            account_id: "account".into(),
+            thread_id: "missing".into(),
+            image_policy: None,
+            entry_scope: None
+        })
     )
     .await
     .unwrap()
@@ -1045,9 +1069,14 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
     .is_empty());
     assert_eq!(
         serde_json::to_value(
-            latentmail_lib::sync::commands::read_traversal_status(app.state(), "account".into(),)
-                .await
-                .unwrap()
+            latentmail_lib::sync::commands::read_traversal_status(
+                AppServices::new(app.handle()),
+                CommandPayload(AccountIdRequest {
+                    account_id: "account".into()
+                })
+            )
+            .await
+            .unwrap()
         )
         .unwrap()["accountId"],
         "account"
@@ -1202,12 +1231,12 @@ async fn hydrate_stages_a_draft_attachment_that_carries_its_bytes_inline() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AuthService::new(storage.clone()));
-    app.manage(SyncEngine::new(
-        storage.clone(),
-        queue,
-        registry,
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    }));
     app.manage(storage);
     app.manage(std::sync::Arc::new(Staging::new(
         directory.path().join("staged"),
@@ -1285,27 +1314,29 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
     let queue = QueueEngine::new(
         250,
         250,
-        drafts::build_executor(
-            app.handle().clone(),
-            storage.clone(),
-            std::sync::Arc::clone(&staging),
-            std::sync::Arc::clone(&coalescer),
-            format!("{}/gmail/v1", server.uri()),
-        ),
+        drafts::build_executor(DraftExecutorContext {
+            app: app.handle().clone(),
+            storage: storage.clone(),
+            staging: std::sync::Arc::clone(&staging),
+            coalescer: std::sync::Arc::clone(&coalescer),
+            base_url: format!("{}/gmail/v1", server.uri()),
+        }),
     );
     app.manage(AuthService::new(storage.clone()));
 
     let source = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(source.path(), b"canonical bytes").unwrap();
     let part = staging
-        .stage_path(
-            "account",
-            "local-session",
-            source.path(),
-            "part-1",
-            "text/plain".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "local-session",
+            },
+            source: source.path(),
+            id: "part-1",
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
 
     drafts::admit(
@@ -1490,14 +1521,16 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
     let source = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(source.path(), b"final bytes").unwrap();
     let part = staging
-        .stage_path(
-            "account",
-            "d1",
-            source.path(),
-            "part-1",
-            "text/plain".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "d1",
+            },
+            source: source.path(),
+            id: "part-1",
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
 
     drafts::admit(
@@ -1542,14 +1575,16 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
     );
 
     let first_click_part = staging
-        .stage_path(
-            "account",
-            "session-2",
-            source.path(),
-            "part-2",
-            "text/plain".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "session-2",
+            },
+            source: source.path(),
+            id: "part-2",
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
     drafts::admit(
         &drafts::AdmissionServices {
@@ -1787,8 +1822,10 @@ async fn delete_reuses_the_existing_endpoint_and_removes_local_state() {
     .unwrap();
     latentmail_lib::storage::MessageRepository::set_draft_id(
         &connection,
-        "account",
-        "local-1",
+        MessageKey {
+            account_id: "account",
+            message_id: "local-1",
+        },
         "d1",
     )
     .unwrap();
@@ -1812,9 +1849,16 @@ async fn delete_reuses_the_existing_endpoint_and_removes_local_state() {
     .unwrap();
     drop(connection);
 
-    drafts::delete(&client, &storage, "account", "d1")
-        .await
-        .unwrap();
+    drafts::delete(
+        &client,
+        &storage,
+        DraftTarget {
+            account_id: "account",
+            draft_id: "d1",
+        },
+    )
+    .await
+    .unwrap();
 
     let connection = storage.connection().unwrap();
     assert!(MessageRepository::get(&connection, "account", "local-1")
@@ -1843,9 +1887,16 @@ async fn delete_surfaces_a_failing_gmail_endpoint() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
 
-    assert!(drafts::delete(&client, &storage, "account", "d1")
-        .await
-        .is_err());
+    assert!(drafts::delete(
+        &client,
+        &storage,
+        DraftTarget {
+            account_id: "account",
+            draft_id: "d1"
+        }
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -1866,9 +1917,16 @@ async fn delete_surfaces_an_unreadable_database_after_gmail_accepts_the_removal(
     let storage = Storage::open(&database).unwrap();
     std::fs::write(&database, b"not a database").unwrap();
 
-    assert!(drafts::delete(&client, &storage, "account", "d1")
-        .await
-        .is_err());
+    assert!(drafts::delete(
+        &client,
+        &storage,
+        DraftTarget {
+            account_id: "account",
+            draft_id: "d1"
+        }
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -1919,8 +1977,10 @@ async fn a_retryable_gmail_failure_is_reported_as_failed_rather_than_silently_st
                         latentmail_lib::storage::OperationRepository::mark_terminal(
                             connection,
                             &operation.id,
-                            "failed",
-                            Some("Gmail returned HTTP 500"),
+                            TerminalOutcome {
+                                status: "failed",
+                                error: Some("Gmail returned HTTP 500"),
+                            },
                         )
                     })
                     .await
@@ -1932,17 +1992,19 @@ async fn a_retryable_gmail_failure_is_reported_as_failed_rather_than_silently_st
     latentmail_lib::queue::admit_durable(
         &queue,
         &storage,
-        QueueOperation {
-            id: "op-failing".into(),
-            account_id: "account".into(),
-            lane: Lane::Interactive,
-            kind: OperationKind::Draft,
-            entity_key: "draft:local-session".into(),
-            cost: 0,
-            attempts: 9,
-            description: "test operation".into(),
+        DurableSubmission {
+            operation: QueueOperation {
+                id: "op-failing".into(),
+                account_id: "account".into(),
+                lane: Lane::Interactive,
+                kind: OperationKind::Draft,
+                entity_key: "draft:local-session".into(),
+                cost: 0,
+                attempts: 9,
+                description: "test operation".into(),
+            },
+            payload: serde_json::json!({}).to_string(),
         },
-        serde_json::json!({}).to_string(),
     )
     .await
     .unwrap();
@@ -1999,17 +2061,19 @@ async fn a_gmail_server_error_during_create_is_classified_as_retryable_and_recor
     latentmail_lib::queue::admit_durable(
         &queue,
         &storage,
-        QueueOperation {
-            id: "op-gmail-500".into(),
-            account_id: "account".into(),
-            lane: Lane::Interactive,
-            kind: OperationKind::Draft,
-            entity_key: "draft:failing-session".into(),
-            cost: 0,
-            attempts: 9,
-            description: "test operation".into(),
+        DurableSubmission {
+            operation: QueueOperation {
+                id: "op-gmail-500".into(),
+                account_id: "account".into(),
+                lane: Lane::Interactive,
+                kind: OperationKind::Draft,
+                entity_key: "draft:failing-session".into(),
+                cost: 0,
+                attempts: 9,
+                description: "test operation".into(),
+            },
+            payload: serde_json::to_string(&payload).unwrap(),
         },
-        serde_json::to_string(&payload).unwrap(),
     )
     .await
     .unwrap();
@@ -2063,17 +2127,19 @@ async fn a_connection_refused_during_create_is_classified_as_a_network_error() {
     latentmail_lib::queue::admit_durable(
         &queue,
         &storage,
-        QueueOperation {
-            id: "op-gmail-network".into(),
-            account_id: "account".into(),
-            lane: Lane::Interactive,
-            kind: OperationKind::Draft,
-            entity_key: "draft:network-failing-session".into(),
-            cost: 0,
-            attempts: 9,
-            description: "test operation".into(),
+        DurableSubmission {
+            operation: QueueOperation {
+                id: "op-gmail-network".into(),
+                account_id: "account".into(),
+                lane: Lane::Interactive,
+                kind: OperationKind::Draft,
+                entity_key: "draft:network-failing-session".into(),
+                cost: 0,
+                attempts: 9,
+                description: "test operation".into(),
+            },
+            payload: serde_json::to_string(&payload).unwrap(),
         },
-        serde_json::to_string(&payload).unwrap(),
     )
     .await
     .unwrap();
@@ -2168,17 +2234,19 @@ async fn a_broken_metadata_table_fails_the_operation_after_a_successful_gmail_ex
     latentmail_lib::queue::admit_durable(
         &queue,
         &storage,
-        QueueOperation {
-            id: "op-meta-fail".into(),
-            account_id: "account".into(),
-            lane: Lane::Interactive,
-            kind: OperationKind::Draft,
-            entity_key: "draft:meta-fail-session".into(),
-            cost: 0,
-            attempts: 0,
-            description: "test operation".into(),
+        DurableSubmission {
+            operation: QueueOperation {
+                id: "op-meta-fail".into(),
+                account_id: "account".into(),
+                lane: Lane::Interactive,
+                kind: OperationKind::Draft,
+                entity_key: "draft:meta-fail-session".into(),
+                cost: 0,
+                attempts: 0,
+                description: "test operation".into(),
+            },
+            payload: serde_json::to_string(&payload).unwrap(),
         },
-        serde_json::to_string(&payload).unwrap(),
     )
     .await
     .unwrap();
@@ -2252,13 +2320,13 @@ async fn a_token_failure_is_reported_only_when_the_queue_will_not_retry_it() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AuthService::new(storage.clone()));
-    let executor = drafts::build_executor(
-        app.handle().clone(),
-        storage.clone(),
-        std::sync::Arc::clone(&staging),
-        std::sync::Arc::clone(&coalescer),
-        "http://not-contacted".into(),
-    );
+    let executor = drafts::build_executor(DraftExecutorContext {
+        app: app.handle().clone(),
+        storage: storage.clone(),
+        staging: std::sync::Arc::clone(&staging),
+        coalescer: std::sync::Arc::clone(&coalescer),
+        base_url: "http://not-contacted".into(),
+    });
     let queue = QueueEngine::new(250, 250, std::sync::Arc::clone(&executor));
     queue.pause();
     let reported = failed_reports(&app);

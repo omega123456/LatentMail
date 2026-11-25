@@ -1,18 +1,59 @@
 use crate::{
     ai::{
-        chunker, credentials,
+        chunker::{self, ChunkMessage},
+        credentials,
         provider::{Provider, ProviderError},
         AiService, IndexState,
     },
     storage::{AccountAiConfigRepository, EmbeddingRepository, MessageEmbedding},
 };
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tauri::{AppHandle, Emitter, Runtime};
 
 const EMBED_ATTEMPTS: u8 = 3;
 const EMBED_BACKOFF_STEP_MILLISECONDS: u64 = 50;
 
 pub const MAX_CHUNKS_PER_OPERATION: usize = 64;
+
+pub struct IndexContext<R: Runtime> {
+    pub app: AppHandle<R>,
+    pub service: AiService,
+    pub sync: Arc<crate::sync::SyncEngine>,
+}
+
+impl<R: Runtime> Clone for IndexContext<R> {
+    fn clone(&self) -> Self {
+        Self {
+            app: self.app.clone(),
+            service: self.service.clone(),
+            sync: Arc::clone(&self.sync),
+        }
+    }
+}
+
+pub struct PauseUpdate {
+    pub account_id: String,
+    pub paused: bool,
+}
+
+pub struct RetryEmbeddingRequest<'a, F> {
+    pub model: &'a str,
+    pub input: Vec<String>,
+    pub attempts: u8,
+    pub backoff: F,
+}
+
+struct MessageBatchOutcome {
+    entries: Vec<MessageEmbedding>,
+    skipped: Vec<i64>,
+}
+
+struct SingleMessageFallback<'a> {
+    model: &'a str,
+    groups: &'a [(i64, Vec<String>)],
+    account_id: &'a str,
+    batch_error: &'a str,
+}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -143,20 +184,17 @@ async fn stall<R: Runtime>(
 }
 
 pub fn enqueue<R: Runtime>(
-    app: AppHandle<R>,
-    service: AiService,
-    sync: std::sync::Arc<crate::sync::SyncEngine>,
+    context: IndexContext<R>,
     account_id: String,
 ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
-    Box::pin(enqueue_inner(app, service, sync, account_id))
+    Box::pin(enqueue_inner(context, account_id))
 }
 
 async fn enqueue_inner<R: Runtime>(
-    app: AppHandle<R>,
-    service: AiService,
-    sync: std::sync::Arc<crate::sync::SyncEngine>,
+    context: IndexContext<R>,
     account_id: String,
 ) -> Result<(), String> {
+    let IndexContext { app, service, sync } = context;
     let is_account_busy =
         service.is_removing(&account_id)? || service.is_reconfiguring(&account_id)?;
     if is_account_busy {
@@ -175,9 +213,12 @@ async fn enqueue_inner<R: Runtime>(
     let queued_account = account_id.clone();
     let queued_service = service.clone();
     let queued_sync = sync.clone();
+    let job_account = account_id.clone();
     sync.enqueue_embedding(
-        &account_id.clone(),
-        "Build semantic index".to_owned(),
+        crate::sync::EmbeddingJob {
+            account_id: &job_account,
+            description: "Build semantic index".to_owned(),
+        },
         async move {
             if !service.index_ready(&account_id).await? {
                 service.set_index_state(&account_id, IndexState::Unavailable)?;
@@ -206,7 +247,15 @@ async fn enqueue_inner<R: Runtime>(
                 return emit_status(&app, &service, account_id).await;
             }
             if current.indexed < current.total {
-                return enqueue(app, queued_service, queued_sync, queued_account).await;
+                return enqueue(
+                    IndexContext {
+                        app: app,
+                        service: queued_service,
+                        sync: queued_sync,
+                    },
+                    queued_account,
+                )
+                .await;
             }
             service.set_index_state(&account_id, IndexState::Complete)?;
             emit_status(&app, &service, account_id).await
@@ -214,6 +263,40 @@ async fn enqueue_inner<R: Runtime>(
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+pub async fn start<R: Runtime>(context: IndexContext<R>, account_id: String) -> Result<(), String> {
+    set_paused(
+        &context.app,
+        &context.service,
+        PauseUpdate {
+            account_id: account_id.clone(),
+            paused: false,
+        },
+    )
+    .await?;
+    enqueue(context, account_id).await
+}
+
+pub async fn request_rebuild<R: Runtime>(
+    context: IndexContext<R>,
+    account_id: String,
+) -> Result<(), String> {
+    context.service.require_account(&account_id).await?;
+    context.sync.cancel_embedding(&account_id).await;
+    let queued_context = context.clone();
+    let job_account = account_id.clone();
+    context
+        .sync
+        .enqueue_embedding(
+            crate::sync::EmbeddingJob {
+                account_id: &job_account,
+                description: "Rebuild semantic index".to_owned(),
+            },
+            async move { rebuild(queued_context, account_id).await },
+        )
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub async fn build<R: Runtime>(
@@ -256,14 +339,14 @@ pub async fn build<R: Runtime>(
     let mut groups: Vec<(i64, Vec<String>)> = Vec::new();
     let mut chunk_count = 0;
     for message in batch {
-        let chunks = chunker::chunks(
-            &message.sender,
-            &message.recipients,
-            &message.subject,
-            message.truncated_body.as_deref(),
-            message.plain_body.as_deref(),
-            message.html_body.as_deref(),
-        );
+        let chunks = chunker::chunks(&ChunkMessage {
+            sender: &message.sender,
+            recipients: &message.recipients,
+            subject: &message.subject,
+            truncated_body: message.truncated_body.as_deref(),
+            plain_body: message.plain_body.as_deref(),
+            html_body: message.html_body.as_deref(),
+        });
         if chunk_count + chunks.len() > MAX_CHUNKS_PER_OPERATION {
             break;
         }
@@ -278,11 +361,19 @@ pub async fn build<R: Runtime>(
         .iter()
         .flat_map(|(_, chunks)| chunks.iter().cloned())
         .collect();
-    let batched = embed_with_retry(&provider, &model, texts, EMBED_ATTEMPTS, |attempt| {
-        Duration::from_millis(EMBED_BACKOFF_STEP_MILLISECONDS * u64::from(attempt))
-    })
+    let batched = embed_with_retry(
+        &provider,
+        RetryEmbeddingRequest {
+            model: &model,
+            input: texts,
+            attempts: EMBED_ATTEMPTS,
+            backoff: |attempt| {
+                Duration::from_millis(EMBED_BACKOFF_STEP_MILLISECONDS * u64::from(attempt))
+            },
+        },
+    )
     .await;
-    let (entries, skipped) = match batched {
+    let outcome = match batched {
         Ok(vectors) if vectors.len() == chunk_count => {
             let mut remaining = vectors.into_iter();
             let mut entries = Vec::new();
@@ -292,18 +383,30 @@ pub async fn build<R: Runtime>(
                     remaining.by_ref().take(chunks.len()).collect(),
                 )?);
             }
-            (entries, Vec::new())
+            MessageBatchOutcome {
+                entries: entries,
+                skipped: Vec::new(),
+            }
         }
         Ok(_) => return Err("Provider returned an incomplete embedding batch".to_owned()),
         Err(error) => {
-            embed_one_message_at_a_time(&provider, &model, &groups, &account_id, &error).await?
+            embed_one_message_at_a_time(
+                &provider,
+                SingleMessageFallback {
+                    model: &model,
+                    groups: &groups,
+                    account_id: &account_id,
+                    batch_error: &error,
+                },
+            )
+            .await?
         }
     };
     let id = account_id.clone();
     storage
         .run(move |connection| {
-            EmbeddingRepository::write(connection, &id, &entries)?;
-            EmbeddingRepository::mark_skipped(connection, &id, &skipped)
+            EmbeddingRepository::write(connection, &id, &outcome.entries)?;
+            EmbeddingRepository::mark_skipped(connection, &id, &outcome.skipped)
         })
         .await
         .map_err(|error| error.to_string())?;
@@ -331,27 +434,32 @@ fn message_entries(
 
 async fn embed_one_message_at_a_time(
     provider: &Provider,
-    model: &str,
-    groups: &[(i64, Vec<String>)],
-    account_id: &str,
-    batch_error: &str,
-) -> Result<(Vec<MessageEmbedding>, Vec<i64>), String> {
+    fallback: SingleMessageFallback<'_>,
+) -> Result<MessageBatchOutcome, String> {
     let mut entries = Vec::new();
     let mut skipped = Vec::new();
-    for (message_seq, chunks) in groups {
-        match provider.embed(model, chunks.clone()).await {
+    for (message_seq, chunks) in fallback.groups {
+        match provider.embed(fallback.model, chunks.clone()).await {
             Ok(vectors) if vectors.len() == chunks.len() => {
                 entries.extend(message_entries(*message_seq, vectors)?);
             }
             Ok(_) => return Err("Provider returned an incomplete embedding batch".to_owned()),
             Err(error) if error.transient() => return Err(error.to_string()),
             Err(error) => {
-                tracing::warn!(target: "ai", "{account_id}: skipping message {message_seq}: {error} (batch failed: {batch_error})");
+                tracing::warn!(
+                    target: "ai",
+                    "{}: skipping message {message_seq}: {error} (batch failed: {})",
+                    fallback.account_id,
+                    fallback.batch_error
+                );
                 skipped.push(*message_seq);
             }
         }
     }
-    Ok((entries, skipped))
+    Ok(MessageBatchOutcome {
+        entries: entries,
+        skipped: skipped,
+    })
 }
 
 pub async fn emit_status<R: Runtime>(
@@ -369,19 +477,16 @@ pub async fn emit_status<R: Runtime>(
 
 pub async fn embed_with_retry<F>(
     provider: &Provider,
-    model: &str,
-    input: Vec<String>,
-    attempts: u8,
-    backoff: F,
+    request: RetryEmbeddingRequest<'_, F>,
 ) -> Result<Vec<Vec<f32>>, String>
 where
     F: Fn(u8) -> Duration,
 {
-    for attempt in 0..attempts {
-        match provider.embed(model, input.clone()).await {
+    for attempt in 0..request.attempts {
+        match provider.embed(request.model, request.input.clone()).await {
             Ok(vectors) => return Ok(vectors),
-            Err(error) if error.transient() && attempt + 1 < attempts => {
-                tokio::time::sleep(backoff(attempt + 1)).await;
+            Err(error) if error.transient() && attempt + 1 < request.attempts => {
+                tokio::time::sleep((request.backoff)(attempt + 1)).await;
             }
             Err(error) => return Err(error.to_string()),
         }
@@ -392,41 +497,38 @@ where
 pub async fn set_paused<R: Runtime>(
     app: &AppHandle<R>,
     service: &AiService,
-    account_id: String,
-    paused: bool,
+    update: PauseUpdate,
 ) -> Result<(), String> {
-    let id = account_id.clone();
+    let id = update.account_id.clone();
+    let paused = update.paused;
     service
         .storage()
         .run(move |connection| AccountAiConfigRepository::set_index_paused(connection, &id, paused))
         .await
         .map_err(|error| error.to_string())?;
     if !paused {
-        service.set_index_state(&account_id, IndexState::NotStarted)?;
-    }
-    if !paused {
-        service.clear_index_error(&account_id)?;
+        service.set_index_state(&update.account_id, IndexState::NotStarted)?;
+        service.clear_index_error(&update.account_id)?;
     }
     app.emit(
         crate::events::AI_CONFIG,
-        serde_json::json!({"accountId":account_id}),
+        serde_json::json!({"accountId": update.account_id}),
     )
     .map_err(|error| error.to_string())?;
-    emit_status(app, service, account_id).await
+    emit_status(app, service, update.account_id).await
 }
 
 pub async fn rebuild<R: Runtime>(
-    app: &AppHandle<R>,
-    service: &AiService,
-    sync: std::sync::Arc<crate::sync::SyncEngine>,
+    context: IndexContext<R>,
     account_id: String,
 ) -> Result<(), String> {
-    let config = service.config_for(&account_id).await?;
+    let config = context.service.config_for(&account_id).await?;
     let dimensions = config
         .embedding_dimensions
         .ok_or_else(|| "Embedding dimensions are missing".to_owned())?;
     let id = account_id.clone();
-    service
+    context
+        .service
         .storage()
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
@@ -437,15 +539,19 @@ pub async fn rebuild<R: Runtime>(
         })
         .await
         .map_err(|error| error.to_string())?;
-    service.clear_index_error(&account_id)?;
-    service.set_index_state(&account_id, IndexState::NotStarted)?;
-    app.emit(
-        crate::events::AI_CONFIG,
-        serde_json::json!({"accountId":account_id}),
-    )
-    .map_err(|error| error.to_string())?;
-    emit_status(app, service, account_id.clone()).await?;
-    enqueue(app.clone(), service.clone(), sync, account_id).await
+    context.service.clear_index_error(&account_id)?;
+    context
+        .service
+        .set_index_state(&account_id, IndexState::NotStarted)?;
+    context
+        .app
+        .emit(
+            crate::events::AI_CONFIG,
+            serde_json::json!({"accountId":account_id}),
+        )
+        .map_err(|error| error.to_string())?;
+    emit_status(&context.app, &context.service, account_id.clone()).await?;
+    enqueue(context, account_id).await
 }
 
 pub async fn cleanup(service: &AiService, account_id: String) -> Result<(), String> {

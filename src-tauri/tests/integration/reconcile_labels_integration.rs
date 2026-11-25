@@ -1,3 +1,5 @@
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey, RecipientRolesUpdate};
+use latentmail_lib::sync::SyncEngineDeps;
 use latentmail_lib::{
     gmail::GmailClient,
     storage::{
@@ -147,12 +149,12 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
     drop(connection);
 
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
@@ -222,12 +224,12 @@ async fn reconciliation_failure_never_adopts_the_new_checkpoint() {
 
     let (storage, _directory) = temp_storage(Some(1));
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let outcome = engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
@@ -289,12 +291,12 @@ async fn progress_counts_report_the_distinct_universe_size_not_a_sum_across_labe
         }
     });
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        sink,
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: sink,
+    });
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
@@ -354,8 +356,18 @@ async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing
     .unwrap();
     for label in ["TRASH", "STARRED", "UNREAD"] {
         LabelRepository::ensure_placeholder(&connection, "account", label).unwrap();
-        MessageRepository::set_label_membership(&connection, "account", "multi-label", label, true)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: "multi-label",
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: true,
+            },
+        )
+        .unwrap();
     }
     ThreadRepository::upsert(
         &connection,
@@ -381,12 +393,12 @@ async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing
     drop(connection);
 
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
@@ -464,12 +476,16 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
     .unwrap();
     MessageRepository::set_recipient_roles(
         &connection,
-        "account",
-        "sent-1",
-        r#""Recipient, First" <first@example.com>"#,
-        "second@example.com",
-        "",
-        None,
+        MessageKey {
+            account_id: "account",
+            message_id: "sent-1",
+        },
+        RecipientRolesUpdate {
+            to: r#""Recipient, First" <first@example.com>"#,
+            cc: "second@example.com",
+            bcc: "",
+            references: None,
+        },
     )
     .unwrap();
     ThreadRepository::upsert(
@@ -496,12 +512,12 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
     drop(connection);
 
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
@@ -535,8 +551,18 @@ fn reconciliation_message_reads_a_stored_message_and_its_labels() {
         .unwrap();
     for label in ["INBOX", "STARRED"] {
         LabelRepository::ensure_placeholder(&connection, "account", label).unwrap();
-        MessageRepository::set_label_membership(&connection, "account", "message-1", label, true)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: "message-1",
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: true,
+            },
+        )
+        .unwrap();
     }
 
     let found = MessageRepository::reconciliation_message(&connection, "account", "message-1")

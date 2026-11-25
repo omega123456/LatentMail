@@ -4,6 +4,23 @@ use super::{TraversalCursor, TraversalCursorRepository, TraversalKind};
 
 pub const RECONCILE_BATCH_SIZE: usize = 100;
 
+pub struct StagedIds<'a> {
+    pub account_id: &'a str,
+    pub ids: &'a [String],
+}
+
+pub struct StagedLabelIds<'a> {
+    pub account_id: &'a str,
+    pub label_id: &'a str,
+    pub ids: &'a [String],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StagingCounts {
+    pub messages: i64,
+    pub labels: i64,
+}
+
 pub struct ReconcileStagingRepository;
 
 impl ReconcileStagingRepository {
@@ -23,16 +40,15 @@ impl ReconcileStagingRepository {
 
     pub fn stage_universe_page(
         connection: &Connection,
-        account_id: &str,
-        ids: &[String],
+        page: StagedIds<'_>,
         cursor: &TraversalCursor,
     ) -> Result<()> {
         let transaction = connection.unchecked_transaction()?;
         let mut statement = transaction.prepare_cached(
             "INSERT OR IGNORE INTO reconcile_remote_messages (account_id,message_id) VALUES (?1,?2)",
         )?;
-        for id in ids {
-            statement.execute(params![account_id, id])?;
+        for id in page.ids {
+            statement.execute(params![page.account_id, id])?;
         }
         drop(statement);
         TraversalCursorRepository::upsert(&transaction, cursor)?;
@@ -41,17 +57,15 @@ impl ReconcileStagingRepository {
 
     pub fn stage_label_page(
         connection: &Connection,
-        account_id: &str,
-        label_id: &str,
-        ids: &[String],
+        page: StagedLabelIds<'_>,
         cursor: &TraversalCursor,
     ) -> Result<()> {
         let transaction = connection.unchecked_transaction()?;
         let mut statement = transaction.prepare_cached(
             "INSERT OR IGNORE INTO reconcile_remote_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)",
         )?;
-        for id in ids {
-            statement.execute(params![account_id, id, label_id])?;
+        for id in page.ids {
+            statement.execute(params![page.account_id, id, page.label_id])?;
         }
         drop(statement);
         TraversalCursorRepository::upsert(&transaction, cursor)?;
@@ -169,7 +183,7 @@ impl ReconcileStagingRepository {
         Ok(())
     }
 
-    pub fn counts(connection: &Connection, account_id: &str) -> Result<(i64, i64)> {
+    pub fn counts(connection: &Connection, account_id: &str) -> Result<StagingCounts> {
         let messages = connection.query_row(
             "SELECT COUNT(*) FROM reconcile_remote_messages WHERE account_id=?1",
             [account_id],
@@ -180,7 +194,10 @@ impl ReconcileStagingRepository {
             [account_id],
             |row| row.get(0),
         )?;
-        Ok((messages, labels))
+        Ok(StagingCounts {
+            messages: messages,
+            labels: labels,
+        })
     }
 
     pub fn reconciliation_cursor(

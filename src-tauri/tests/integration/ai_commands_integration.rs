@@ -1,3 +1,12 @@
+use latentmail_lib::ai::commands::{
+    SelectAiChatModelPayload, SelectAiEmbeddingModelPayload, SetAiApiKeyPayload,
+    SetAiBaseUrlPayload, SetAiEnabledPayload,
+};
+use latentmail_lib::ai::index::{IndexContext, RetryEmbeddingRequest};
+use latentmail_lib::ai::{BaseUrlUpdate, ChatModelUpdate, EmbeddingModelUpdate, EnabledUpdate};
+use latentmail_lib::ipc::{AppServices, CommandPayload};
+use latentmail_lib::storage::{EmbeddingModelSpec, NearestQuery};
+use latentmail_lib::sync::SyncEngineDeps;
 use std::time::Duration;
 
 use latentmail_lib::{
@@ -54,12 +63,12 @@ async fn commands_persist_config_manage_credentials_and_validate_models() {
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     AccountRepository::upsert(&storage.connection().unwrap(), &account()).unwrap();
     let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -67,66 +76,79 @@ async fn commands_persist_config_manage_credentials_and_validate_models() {
     app.manage(sync);
 
     assert_eq!(
-        commands::read_ai_configs(app.state()).await.unwrap().len(),
+        commands::read_ai_configs(AppServices::new(app.handle()))
+            .await
+            .unwrap()
+            .len(),
         1
     );
-    commands::set_ai_enabled(app.handle().clone(), app.state(), "account".into(), true)
-        .await
-        .unwrap();
+    commands::set_ai_enabled(
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiEnabledPayload {
+            account_id: "account".into(),
+            enabled: true,
+        }),
+    )
+    .await
+    .unwrap();
     commands::set_ai_base_url(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        format!("{}/v1", server.uri()),
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiBaseUrlPayload {
+            account_id: "account".into(),
+            base_url: format!("{}/v1", server.uri()),
+        }),
     )
     .await
     .unwrap();
     assert_eq!(
         commands::set_ai_api_key(
-            app.handle().clone(),
-            app.state(),
-            "account".into(),
-            String::new(),
+            AppServices::new(app.handle()),
+            CommandPayload(SetAiApiKeyPayload {
+                account_id: "account".into(),
+                api_key: String::new()
+            })
         )
         .await
         .unwrap_err(),
         "API key cannot be empty"
     );
     commands::set_ai_api_key(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        "secret".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiApiKeyPayload {
+            account_id: "account".into(),
+            api_key: "secret".into(),
+        }),
     )
     .await
     .unwrap();
     assert_eq!(
-        commands::test_ai_connection(app.state(), "account".into())
+        commands::test_ai_connection(AppServices::new(app.handle()), "account".into())
             .await
             .unwrap(),
         2
     );
     assert_eq!(
-        commands::list_ai_models(app.state(), "account".into())
+        commands::list_ai_models(AppServices::new(app.handle()), "account".into())
             .await
             .unwrap()
             .len(),
         2
     );
     commands::select_ai_chat_model(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        Some("chat".into()),
+        AppServices::new(app.handle()),
+        CommandPayload(SelectAiChatModelPayload {
+            account_id: "account".into(),
+            model: Some("chat".into()),
+        }),
     )
     .await
     .unwrap();
     commands::select_ai_embedding_model(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "embedding".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(SelectAiEmbeddingModelPayload {
+            account_id: "account".into(),
+            model: "embedding".into(),
+        }),
     )
     .await
     .unwrap();
@@ -149,32 +171,22 @@ async fn commands_persist_config_manage_credentials_and_validate_models() {
     .await
     .unwrap();
     assert_eq!(
-        commands::read_ai_index_status(app.state())
+        commands::read_ai_index_status(AppServices::new(app.handle()))
             .await
             .unwrap()
             .len(),
         1
     );
-    commands::cancel_ai_index(app.handle().clone(), app.state(), "account".into())
+    commands::cancel_ai_index(AppServices::new(app.handle()), "account".into())
         .await
         .unwrap();
-    commands::start_ai_index(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-    )
-    .await
-    .unwrap();
-    commands::rebuild_ai_index(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-    )
-    .await
-    .unwrap();
-    commands::clear_ai_api_key(app.handle().clone(), app.state(), "account".into())
+    commands::start_ai_index(AppServices::new(app.handle()), "account".into())
+        .await
+        .unwrap();
+    commands::rebuild_ai_index(AppServices::new(app.handle()), "account".into())
+        .await
+        .unwrap();
+    commands::clear_ai_api_key(AppServices::new(app.handle()), "account".into())
         .await
         .unwrap();
     assert_eq!(credentials::load("account").unwrap(), None);
@@ -194,32 +206,33 @@ async fn selecting_an_embedding_model_rejects_an_empty_vector_from_the_provider(
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     AccountRepository::upsert(&storage.connection().unwrap(), &account()).unwrap();
     let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AiService::new(storage));
     app.manage(sync);
     commands::set_ai_base_url(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        format!("{}/v1", server.uri()),
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiBaseUrlPayload {
+            account_id: "account".into(),
+            base_url: format!("{}/v1", server.uri()),
+        }),
     )
     .await
     .unwrap();
     assert_eq!(
         commands::select_ai_embedding_model(
-            app.handle().clone(),
-            app.state(),
-            app.state(),
-            "account".into(),
-            "embedding".into(),
+            AppServices::new(app.handle()),
+            CommandPayload(SelectAiEmbeddingModelPayload {
+                account_id: "account".into(),
+                model: "embedding".into()
+            })
         )
         .await
         .unwrap_err(),
@@ -237,15 +250,21 @@ async fn lifecycle_guards_and_invalid_index_configurations_are_safe() {
         .unwrap();
     let service = AiService::new(storage.clone());
     let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     service
-        .set_enabled(app.handle(), "account".into(), false)
+        .set_enabled(
+            app.handle(),
+            EnabledUpdate {
+                account_id: "account".into(),
+                enabled: false,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -257,9 +276,11 @@ async fn lifecycle_guards_and_invalid_index_configurations_are_safe() {
     assert!(service.is_removing("account").unwrap());
     assert!(!service.index_ready("account").await.unwrap());
     enqueue(
-        app.handle().clone(),
-        service.clone(),
-        sync.clone(),
+        IndexContext {
+            app: app.handle().clone(),
+            service: service.clone(),
+            sync: sync.clone(),
+        },
         "account".into(),
     )
     .await
@@ -273,7 +294,13 @@ async fn lifecycle_guards_and_invalid_index_configurations_are_safe() {
 
     let service = AiService::new(storage.clone());
     service
-        .set_enabled(app.handle(), "account".into(), true)
+        .set_enabled(
+            app.handle(),
+            EnabledUpdate {
+                account_id: "account".into(),
+                enabled: true,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -285,8 +312,10 @@ async fn lifecycle_guards_and_invalid_index_configurations_are_safe() {
     AccountAiConfigRepository::set_embedding_model(
         &storage.connection().unwrap(),
         "account",
-        "embedding",
-        2,
+        EmbeddingModelSpec {
+            model: "embedding",
+            dimensions: 2,
+        },
     )
     .unwrap();
     assert_eq!(
@@ -302,10 +331,12 @@ async fn lifecycle_guards_and_invalid_index_configurations_are_safe() {
     assert_eq!(
         embed_with_retry(
             &Provider::new("http://127.0.0.1:9/v1", None).unwrap(),
-            "embedding",
-            vec!["mail".into()],
-            0,
-            |_| Duration::ZERO,
+            RetryEmbeddingRequest {
+                model: "embedding",
+                input: vec!["mail".into()],
+                attempts: 0,
+                backoff: |_| Duration::ZERO
+            }
         )
         .await
         .unwrap_err(),
@@ -352,19 +383,34 @@ async fn incomplete_provider_batches_fail_without_partial_embedding_writes() {
         .unwrap();
     let service = AiService::new(storage.clone());
     service
-        .set_enabled(app.handle(), "account".into(), true)
+        .set_enabled(
+            app.handle(),
+            EnabledUpdate {
+                account_id: "account".into(),
+                enabled: true,
+            },
+        )
         .await
         .unwrap();
     service
         .set_base_url(
             app.handle(),
-            "account".into(),
-            format!("{}/v1", server.uri()),
+            BaseUrlUpdate {
+                account_id: "account".into(),
+                base_url: format!("{}/v1", server.uri()),
+            },
         )
         .await
         .unwrap();
     service
-        .set_embedding_model(app.handle(), "account".into(), "embedding".into(), 2)
+        .set_embedding_model(
+            app.handle(),
+            EmbeddingModelUpdate {
+                account_id: "account".into(),
+                model: "embedding".into(),
+                dimensions: 2,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -387,8 +433,10 @@ fn initialization_restores_vectors_for_persisted_model_dimensions() {
     AccountAiConfigRepository::set_embedding_model(
         &storage.connection().unwrap(),
         "account",
-        "embedding",
-        2,
+        EmbeddingModelSpec {
+            model: "embedding",
+            dimensions: 2,
+        },
     )
     .unwrap();
     let app = tauri::test::mock_builder()
@@ -398,8 +446,10 @@ fn initialization_restores_vectors_for_persisted_model_dimensions() {
     assert!(EmbeddingRepository::nearest(
         &storage.connection().unwrap(),
         "account",
-        &[1.0, 0.0],
-        1
+        NearestQuery {
+            vector: &[1.0, 0.0],
+            limit: 1
+        }
     )
     .unwrap()
     .is_empty());
@@ -419,23 +469,44 @@ async fn service_configuration_and_lifecycle_state_are_account_scoped() {
     assert!(!config.enabled);
     assert!(!config.has_api_key);
     service
-        .set_enabled(app.handle(), "account".into(), true)
+        .set_enabled(
+            app.handle(),
+            EnabledUpdate {
+                account_id: "account".into(),
+                enabled: true,
+            },
+        )
         .await
         .unwrap();
     service
         .set_base_url(
             app.handle(),
-            "account".into(),
-            "http://127.0.0.1:8080/v1".into(),
+            BaseUrlUpdate {
+                account_id: "account".into(),
+                base_url: "http://127.0.0.1:8080/v1".into(),
+            },
         )
         .await
         .unwrap();
     service
-        .set_chat_model(app.handle(), "account".into(), Some("chat".into()))
+        .set_chat_model(
+            app.handle(),
+            ChatModelUpdate {
+                account_id: "account".into(),
+                model: Some("chat".into()),
+            },
+        )
         .await
         .unwrap();
     service
-        .set_embedding_model(app.handle(), "account".into(), "embed".into(), 2)
+        .set_embedding_model(
+            app.handle(),
+            EmbeddingModelUpdate {
+                account_id: "account".into(),
+                model: "embed".into(),
+                dimensions: 2,
+            },
+        )
         .await
         .unwrap();
     credentials::save("account", "test-key").unwrap();
@@ -446,7 +517,13 @@ async fn service_configuration_and_lifecycle_state_are_account_scoped() {
     assert_eq!(config.embedding_model.as_deref(), Some("embed"));
     assert!(service.index_ready("account").await.unwrap());
     service
-        .set_enabled(app.handle(), "account".into(), false)
+        .set_enabled(
+            app.handle(),
+            EnabledUpdate {
+                account_id: "account".into(),
+                enabled: false,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(

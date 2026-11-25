@@ -1,3 +1,7 @@
+use latentmail_lib::ai::index::{IndexContext, PauseUpdate, RetryEmbeddingRequest};
+use latentmail_lib::ai::{BaseUrlUpdate, EmbeddingModelUpdate, EnabledUpdate};
+use latentmail_lib::storage::EmbeddingModelSpec;
+use latentmail_lib::sync::SyncEngineDeps;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -106,7 +110,12 @@ async fn disabled_ai_is_not_ready_for_automatic_indexing_and_reports_unavailable
                 "http://localhost/v1/",
             )?;
             latentmail_lib::storage::AccountAiConfigRepository::set_embedding_model(
-                connection, "one", "embed", 3,
+                connection,
+                "one",
+                EmbeddingModelSpec {
+                    model: "embed",
+                    dimensions: 3,
+                },
             )
         })
         .await
@@ -126,7 +135,15 @@ async fn paused_index_state_wins_over_live_state_and_survives_restart() {
     let connection = storage.connection().unwrap();
     AccountRepository::upsert(&connection, &account("paused")).unwrap();
     AccountAiConfigRepository::set_enabled(&connection, "paused", true).unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "paused", "embed", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "paused",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     EmbeddingRepository::create(&connection, "paused", 2).unwrap();
     drop(connection);
     let service = AiService::new(storage.clone());
@@ -136,9 +153,16 @@ async fn paused_index_state_wins_over_live_state_and_survives_restart() {
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
-    latentmail_lib::ai::index::set_paused(app.handle(), &service, "paused".into(), true)
-        .await
-        .unwrap();
+    latentmail_lib::ai::index::set_paused(
+        app.handle(),
+        &service,
+        PauseUpdate {
+            account_id: "paused".into(),
+            paused: true,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         status(&service, "paused".into()).await.unwrap().state,
         IndexState::Paused
@@ -158,7 +182,15 @@ async fn incomplete_unpaused_index_without_a_live_chain_reports_interrupted() {
     AccountRepository::upsert(&connection, &account("interrupted")).unwrap();
     MessageRepository::write_full_state(&connection, &message("interrupted", "one")).unwrap();
     AccountAiConfigRepository::set_enabled(&connection, "interrupted", true).unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "interrupted", "embed", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "interrupted",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     EmbeddingRepository::create(&connection, "interrupted", 2).unwrap();
     drop(connection);
     assert_eq!(
@@ -183,7 +215,14 @@ async fn model_change_unpauses_the_owning_index_before_rebuilding() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     service
-        .set_embedding_model(app.handle(), "model".into(), "embed".into(), 2)
+        .set_embedding_model(
+            app.handle(),
+            EmbeddingModelUpdate {
+                account_id: "model".into(),
+                model: "embed".into(),
+                dimensions: 2,
+            },
+        )
         .await
         .unwrap();
     assert!(
@@ -283,7 +322,15 @@ async fn rebuild_recreates_only_its_account_and_restarts_the_embedding_chain() {
     let base_url = format!("{}/v1/", server.uri());
     AccountAiConfigRepository::set_enabled(&connection, "rebuild", true).unwrap();
     AccountAiConfigRepository::set_base_url(&connection, "rebuild", &base_url).unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "rebuild", "embed", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "rebuild",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     AccountAiConfigRepository::set_index_paused(&connection, "rebuild", true).unwrap();
     EmbeddingRepository::create(&connection, "rebuild", 2).unwrap();
     EmbeddingRepository::create(&connection, "other", 2).unwrap();
@@ -316,7 +363,12 @@ async fn rebuild_recreates_only_its_account_and_restarts_the_embedding_chain() {
         .unwrap();
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(250, 250, registry.clone());
-    let sync = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let service = AiService::new(storage.clone());
     service
         .set_index_error("rebuild", "previous error".into())
@@ -324,9 +376,16 @@ async fn rebuild_recreates_only_its_account_and_restarts_the_embedding_chain() {
     service
         .set_index_state("rebuild", IndexState::Paused)
         .unwrap();
-    rebuild(app.handle(), &service, sync, "rebuild".into())
-        .await
-        .unwrap();
+    rebuild(
+        IndexContext {
+            app: app.handle().clone(),
+            service: service.clone(),
+            sync: sync,
+        },
+        "rebuild".into(),
+    )
+    .await
+    .unwrap();
     tokio::time::timeout(Duration::from_millis(1500), async {
         loop {
             let current = status(&service, "rebuild".into()).await.unwrap();
@@ -370,21 +429,23 @@ async fn a_running_index_stalled_by_removal_reports_partial_then_complete_progre
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     service.begin_removal("stall").unwrap();
     service
         .set_index_state("stall", IndexState::Building)
         .unwrap();
     enqueue(
-        app.handle().clone(),
-        service.clone(),
-        sync.clone(),
+        IndexContext {
+            app: app.handle().clone(),
+            service: service.clone(),
+            sync: sync.clone(),
+        },
         "stall".into(),
     )
     .await
@@ -410,9 +471,16 @@ async fn a_running_index_stalled_by_removal_reports_partial_then_complete_progre
     service
         .set_index_state("stall", IndexState::Building)
         .unwrap();
-    enqueue(app.handle().clone(), service.clone(), sync, "stall".into())
-        .await
-        .unwrap();
+    enqueue(
+        IndexContext {
+            app: app.handle().clone(),
+            service: service.clone(),
+            sync: sync,
+        },
+        "stall".into(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         service.index_state("stall").unwrap(),
         Some(IndexState::Complete)
@@ -433,20 +501,22 @@ async fn a_running_index_stalled_by_disabling_ai_reports_complete_with_no_eligib
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(
-        storage,
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     service
         .set_index_state("stall-disabled", IndexState::Building)
         .unwrap();
     enqueue(
-        app.handle().clone(),
-        service.clone(),
-        sync,
+        IndexContext {
+            app: app.handle().clone(),
+            service: service.clone(),
+            sync: sync,
+        },
         "stall-disabled".into(),
     )
     .await
@@ -471,7 +541,15 @@ async fn build_skips_a_message_whose_chunks_alone_exceed_the_batch_budget() {
     AccountAiConfigRepository::set_enabled(&connection, "chunky", true).unwrap();
     AccountAiConfigRepository::set_base_url(&connection, "chunky", "http://127.0.0.1:9/v1/")
         .unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "chunky", "embed", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "chunky",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     EmbeddingRepository::create(&connection, "chunky", 2).unwrap();
     drop(connection);
     let service = AiService::new(storage.clone());
@@ -507,9 +585,15 @@ async fn embed_with_retry_recovers_after_a_transient_server_error() {
         .mount(&server)
         .await;
     let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
-    let vectors = embed_with_retry(&provider, "embed", vec!["hello".into()], 2, |_| {
-        Duration::from_millis(1)
-    })
+    let vectors = embed_with_retry(
+        &provider,
+        RetryEmbeddingRequest {
+            model: "embed",
+            input: vec!["hello".into()],
+            attempts: 2,
+            backoff: |_| Duration::from_millis(1),
+        },
+    )
     .await
     .unwrap();
     assert_eq!(vectors, vec![vec![1.0, 2.0]]);
@@ -534,29 +618,51 @@ async fn a_persistently_failing_provider_interrupts_the_index_and_records_the_er
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     service
-        .set_enabled(app.handle(), "failing".into(), true)
+        .set_enabled(
+            app.handle(),
+            EnabledUpdate {
+                account_id: "failing".into(),
+                enabled: true,
+            },
+        )
         .await
         .unwrap();
     service
         .set_base_url(
             app.handle(),
-            "failing".into(),
-            format!("{}/v1", server.uri()),
+            BaseUrlUpdate {
+                account_id: "failing".into(),
+                base_url: format!("{}/v1", server.uri()),
+            },
         )
         .await
         .unwrap();
     service
-        .set_embedding_model(app.handle(), "failing".into(), "embed".into(), 2)
+        .set_embedding_model(
+            app.handle(),
+            EmbeddingModelUpdate {
+                account_id: "failing".into(),
+                model: "embed".into(),
+                dimensions: 2,
+            },
+        )
         .await
         .unwrap();
     credentials::save("failing", "key").unwrap();
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(250, 250, registry.clone());
-    let sync = SyncEngine::new(storage.clone(), queue.clone(), registry, noop_event_sink());
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue.clone(),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     enqueue(
-        app.handle().clone(),
-        service.clone(),
-        sync,
+        IndexContext {
+            app: app.handle().clone(),
+            service: service.clone(),
+            sync: sync,
+        },
         "failing".into(),
     )
     .await
@@ -599,7 +705,15 @@ fn service_with_model_but_no_dimensions() -> (AiService, Storage, tempfile::Temp
     AccountAiConfigRepository::set_base_url(&connection, "account", "http://127.0.0.1:1/v1")
         .unwrap();
     AccountAiConfigRepository::set_enabled(&connection, "account", true).unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "account", "embedding", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "account",
+        EmbeddingModelSpec {
+            model: "embedding",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     connection
         .execute(
             "UPDATE account_ai_config SET embedding_dimensions = NULL WHERE account_id = 'account'",
@@ -633,19 +747,21 @@ async fn rebuilding_an_index_requires_stored_embedding_dimensions() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(
-        storage,
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     assert_eq!(
         rebuild(
-            tauri::Manager::app_handle(&app),
-            &service,
-            sync,
-            "account".into(),
+            IndexContext {
+                app: tauri::Manager::app_handle(&app).clone(),
+                service: service.clone(),
+                sync: sync
+            },
+            "account".into()
         )
         .await
         .unwrap_err(),
@@ -695,7 +811,15 @@ async fn a_message_the_provider_rejects_is_skipped_instead_of_interrupting_the_i
     AccountAiConfigRepository::set_enabled(&connection, "skip", true).unwrap();
     AccountAiConfigRepository::set_base_url(&connection, "skip", &format!("{}/v1/", server.uri()))
         .unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "skip", "embed", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "skip",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     drop(connection);
     credentials::save("skip", "key").unwrap();
     let app = tauri::test::mock_builder()
@@ -760,7 +884,15 @@ async fn a_per_message_retry_that_returns_no_vectors_fails_the_whole_build() {
     AccountAiConfigRepository::set_enabled(&connection, "empty", true).unwrap();
     AccountAiConfigRepository::set_base_url(&connection, "empty", &format!("{}/v1/", server.uri()))
         .unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "empty", "embed", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "empty",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     drop(connection);
     credentials::save("empty", "key").unwrap();
     let app = tauri::test::mock_builder()
@@ -790,7 +922,15 @@ async fn a_queued_build_without_an_api_root_reports_unavailable_instead_of_runni
     AccountRepository::upsert(&connection, &account("rootless")).unwrap();
     MessageRepository::write_full_state(&connection, &message("rootless", "one")).unwrap();
     AccountAiConfigRepository::set_enabled(&connection, "rootless", true).unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "rootless", "embed", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "rootless",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     drop(connection);
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -798,12 +938,19 @@ async fn a_queued_build_without_an_api_root_reports_unavailable_instead_of_runni
     let service = AiService::new(storage.clone());
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(250, 250, registry.clone());
-    let sync = SyncEngine::new(storage.clone(), queue.clone(), registry, noop_event_sink());
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue.clone(),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     enqueue(
-        app.handle().clone(),
-        service.clone(),
-        sync,
+        IndexContext {
+            app: app.handle().clone(),
+            service: service.clone(),
+            sync: sync,
+        },
         "rootless".into(),
     )
     .await

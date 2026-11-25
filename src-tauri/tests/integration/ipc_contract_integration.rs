@@ -1,6 +1,10 @@
 use chrono::NaiveDate;
 use latentmail_lib::ai::credentials;
+use latentmail_lib::attachments::{AttachmentDescriptor, AttachmentRef};
 use latentmail_lib::auth::AuthService;
+use latentmail_lib::auth::SaveAccountRequest;
+use latentmail_lib::contacts::ContactObservation;
+use latentmail_lib::ipc::AppServices;
 use latentmail_lib::ipc::{
     health_check, health_response, open_external_url, pause_queue, read_queue_summary, register,
     resume_queue, validate_external_url,
@@ -11,7 +15,10 @@ use latentmail_lib::storage::{
     Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart,
     LabelRepository, Message, MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
-use latentmail_lib::sync::{create_queue_engine, noop_event_sink, SyncEngine, WorkRegistry};
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey, RecipientRolesUpdate};
+use latentmail_lib::sync::{
+    create_queue_engine, noop_event_sink, SyncEngine, SyncEngineDeps, WorkRegistry,
+};
 use tauri::{ipc::CallbackFn, ipc::InvokeBody, test::INVOKE_KEY, webview::InvokeRequest, Manager};
 use wiremock::{
     matchers::{method, path},
@@ -73,14 +80,14 @@ fn pause_and_resume_queue_commands_emit_summaries_and_toggle_the_engine() {
     let app = app();
     app.manage(QueueEngine::no_op());
 
-    let paused = pause_queue(app.handle().clone(), app.state()).unwrap();
+    let paused = pause_queue(AppServices::new(app.handle())).unwrap();
     assert_eq!(paused.pending, 0);
 
-    let resumed = resume_queue(app.handle().clone(), app.state()).unwrap();
+    let resumed = resume_queue(AppServices::new(app.handle())).unwrap();
     assert_eq!(resumed.pending, 0);
 
-    let summary = read_queue_summary(app.state());
-    assert_eq!(summary.pending, 0);
+    let summary = read_queue_summary(AppServices::new(app.handle()));
+    assert_eq!(summary.unwrap().pending, 0);
 }
 
 #[test]
@@ -118,12 +125,12 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         )
         .unwrap(),
     );
-    app.manage(SyncEngine::new(
-        Storage::open(directory.path().join("mail.sqlite")).unwrap(),
-        QueueEngine::no_op(),
-        WorkRegistry::new(),
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: Storage::open(directory.path().join("mail.sqlite")).unwrap(),
+        queue: QueueEngine::no_op(),
+        registry: WorkRegistry::new(),
+        events: noop_event_sink(),
+    }));
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
@@ -429,12 +436,12 @@ async fn ai_commands_complete_their_success_paths_through_real_ipc_dispatch() {
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(250, 250, registry.clone());
     app.manage(latentmail_lib::ai::AiService::new(storage.clone()));
-    app.manage(SyncEngine::new(
-        storage,
-        queue.clone(),
-        registry,
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: queue.clone(),
+        registry: registry,
+        events: noop_event_sink(),
+    }));
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
@@ -504,7 +511,11 @@ async fn attachment_commands_succeed_end_to_end_through_real_ipc_dispatch() {
     let auth_service = AuthService::new(storage.clone());
     let account_id = {
         auth_service
-            .save_account("me@example.com".into(), "refresh-token".into(), None)
+            .save_account(SaveAccountRequest {
+                email: "me@example.com".into(),
+                refresh_token: "refresh-token".into(),
+                target: None,
+            })
             .await
             .unwrap();
         auth_service.accounts().await.unwrap()[0].id.clone()
@@ -573,8 +584,10 @@ async fn attachment_commands_succeed_end_to_end_through_real_ipc_dispatch() {
     .unwrap();
     AttachmentRepository::replace_for_message(
         &connection,
-        &account_id,
-        "m1",
+        MessageKey {
+            account_id: &account_id,
+            message_id: "m1",
+        },
         &[Attachment {
             attachment_id: "a1".into(),
             filename: "hello.txt".into(),
@@ -587,12 +600,12 @@ async fn attachment_commands_succeed_end_to_end_through_real_ipc_dispatch() {
     drop(connection);
 
     app.manage(auth_service);
-    app.manage(SyncEngine::new(
-        storage.clone(),
-        QueueEngine::no_op(),
-        WorkRegistry::new(),
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: QueueEngine::no_op(),
+        registry: WorkRegistry::new(),
+        events: noop_event_sink(),
+    }));
     app.manage(storage);
     app.manage(std::sync::Arc::new(
         latentmail_lib::compose::staging::Staging::new(directory.path().join("compose-staging")),
@@ -639,12 +652,12 @@ fn manage_attachment_command_dependencies(
     directory: &std::path::Path,
 ) {
     app.manage(AuthService::new(storage.clone()));
-    app.manage(SyncEngine::new(
-        storage.clone(),
-        QueueEngine::no_op(),
-        WorkRegistry::new(),
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: QueueEngine::no_op(),
+        registry: WorkRegistry::new(),
+        events: noop_event_sink(),
+    }));
     app.manage(storage.clone());
     app.manage(std::sync::Arc::new(
         latentmail_lib::compose::staging::Staging::new(directory.join("compose-staging")),
@@ -657,32 +670,55 @@ fn manage_attachment_command_dependencies(
     );
 }
 
+struct CachedAttachmentSeed<'a> {
+    directory: &'a std::path::Path,
+    account_id: &'a str,
+    message_id: &'a str,
+    attachment_id: &'a str,
+    bytes: &'a [u8],
+}
+
 fn seed_cached_attachment(
-    directory: &std::path::Path,
-    account_id: &str,
-    message_id: &str,
-    attachment_id: &str,
-    bytes: &[u8],
+    CachedAttachmentSeed {
+        directory,
+        account_id,
+        message_id,
+        attachment_id,
+        bytes,
+    }: CachedAttachmentSeed<'_>,
 ) -> std::path::PathBuf {
     latentmail_lib::attachments::cache::AttachmentCache::new(directory.join("attachment-cache"))
         .unwrap()
         .write_bytes(
-            account_id,
-            message_id,
-            attachment_id,
-            "attachment.txt",
-            "text/plain",
+            AttachmentDescriptor {
+                target: AttachmentRef {
+                    account_id: account_id,
+                    message_id: message_id,
+                    attachment_id: attachment_id,
+                },
+                filename: "attachment.txt",
+                mime_type: "text/plain",
+            },
             bytes,
         )
         .unwrap()
         .cache_path
 }
 
+struct AttachedMessageSeed<'a> {
+    storage: &'a Storage,
+    account_id: &'a str,
+    message_id: &'a str,
+    attachment_ids: &'a [&'a str],
+}
+
 fn insert_account_message_and_attachment(
-    storage: &Storage,
-    account_id: &str,
-    message_id: &str,
-    attachment_ids: &[&str],
+    AttachedMessageSeed {
+        storage,
+        account_id,
+        message_id,
+        attachment_ids,
+    }: AttachedMessageSeed<'_>,
 ) {
     let connection = storage.connection().unwrap();
     AccountRepository::upsert(
@@ -732,8 +768,15 @@ fn insert_account_message_and_attachment(
             position: 0,
         })
         .collect();
-    AttachmentRepository::replace_for_message(&connection, account_id, message_id, &attachments)
-        .unwrap();
+    AttachmentRepository::replace_for_message(
+        &connection,
+        MessageKey {
+            account_id: account_id,
+            message_id: message_id,
+        },
+        &attachments,
+    )
+    .unwrap();
 }
 
 #[tokio::test]
@@ -741,7 +784,12 @@ async fn ensure_attachment_cached_fails_when_the_attachment_row_is_missing() {
     let app = app();
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    insert_account_message_and_attachment(&storage, "account-missing-row", "m1", &[]);
+    insert_account_message_and_attachment(AttachedMessageSeed {
+        storage: &storage,
+        account_id: "account-missing-row",
+        message_id: "m1",
+        attachment_ids: &[],
+    });
     manage_attachment_command_dependencies(&app, &storage, directory.path());
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -771,7 +819,12 @@ async fn ensure_attachment_cached_fails_when_the_account_has_no_refresh_token() 
     let app = app();
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    insert_account_message_and_attachment(&storage, "account-no-token", "m1", &["a1"]);
+    insert_account_message_and_attachment(AttachedMessageSeed {
+        storage: &storage,
+        account_id: "account-no-token",
+        message_id: "m1",
+        attachment_ids: &["a1"],
+    });
     manage_attachment_command_dependencies(&app, &storage, directory.path());
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -797,15 +850,20 @@ async fn ensure_attachment_cached_fails_when_gmail_rejects_the_fetch() {
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let auth_service = AuthService::new(storage.clone());
     let account_id = auth_service
-        .save_account(
-            "gmail-rejects@example.com".into(),
-            "refresh-token".into(),
-            None,
-        )
+        .save_account(SaveAccountRequest {
+            email: "gmail-rejects@example.com".into(),
+            refresh_token: "refresh-token".into(),
+            target: None,
+        })
         .await
         .unwrap()
         .id;
-    insert_account_message_and_attachment(&storage, &account_id, "m1", &["a1"]);
+    insert_account_message_and_attachment(AttachedMessageSeed {
+        storage: &storage,
+        account_id: &account_id,
+        message_id: "m1",
+        attachment_ids: &["a1"],
+    });
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -828,12 +886,12 @@ async fn ensure_attachment_cached_fails_when_gmail_rejects_the_fetch() {
     std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
 
     app.manage(auth_service);
-    app.manage(SyncEngine::new(
-        storage.clone(),
-        QueueEngine::no_op(),
-        WorkRegistry::new(),
-        noop_event_sink(),
-    ));
+    app.manage(SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: QueueEngine::no_op(),
+        registry: WorkRegistry::new(),
+        events: noop_event_sink(),
+    }));
     app.manage(storage);
     app.manage(std::sync::Arc::new(
         latentmail_lib::compose::staging::Staging::new(directory.path().join("compose-staging")),
@@ -897,12 +955,12 @@ async fn read_and_stage_commands_fail_when_the_cached_entry_is_unreadable() {
     let app = app();
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    insert_account_message_and_attachment(
-        &storage,
-        "account-unreadable-cache",
-        "m1",
-        &["for-bytes", "for-text", "for-stage"],
-    );
+    insert_account_message_and_attachment(AttachedMessageSeed {
+        storage: &storage,
+        account_id: "account-unreadable-cache",
+        message_id: "m1",
+        attachment_ids: &["for-bytes", "for-text", "for-stage"],
+    });
     manage_attachment_command_dependencies(&app, &storage, directory.path());
     let server = mount_authenticated_gmail_server(
         "account-unreadable-cache",
@@ -911,13 +969,13 @@ async fn read_and_stage_commands_fail_when_the_cached_entry_is_unreadable() {
     .await;
 
     for attachment_id in ["for-bytes", "for-text", "for-stage"] {
-        let entry = seed_cached_attachment(
-            directory.path(),
-            "account-unreadable-cache",
-            "m1",
-            attachment_id,
-            b"hello",
-        );
+        let entry = seed_cached_attachment(CachedAttachmentSeed {
+            directory: directory.path(),
+            account_id: "account-unreadable-cache",
+            message_id: "m1",
+            attachment_id: attachment_id,
+            bytes: b"hello",
+        });
         std::fs::remove_file(&entry).unwrap();
         std::fs::create_dir(&entry).unwrap();
     }
@@ -978,7 +1036,12 @@ async fn save_attachment_to_path_fails_when_the_destination_directory_does_not_e
     let app = app();
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    insert_account_message_and_attachment(&storage, "account-bad-destination", "m1", &["a1"]);
+    insert_account_message_and_attachment(AttachedMessageSeed {
+        storage: &storage,
+        account_id: "account-bad-destination",
+        message_id: "m1",
+        attachment_ids: &["a1"],
+    });
     manage_attachment_command_dependencies(&app, &storage, directory.path());
     let server = mount_authenticated_gmail_server(
         "account-bad-destination",
@@ -986,13 +1049,13 @@ async fn save_attachment_to_path_fails_when_the_destination_directory_does_not_e
     )
     .await;
 
-    seed_cached_attachment(
-        directory.path(),
-        "account-bad-destination",
-        "m1",
-        "a1",
-        b"hello",
-    );
+    seed_cached_attachment(CachedAttachmentSeed {
+        directory: directory.path(),
+        account_id: "account-bad-destination",
+        message_id: "m1",
+        attachment_id: "a1",
+        bytes: b"hello",
+    });
 
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -1020,7 +1083,12 @@ async fn stage_attachment_into_draft_fails_when_the_staging_directory_cannot_be_
     let app = app();
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    insert_account_message_and_attachment(&storage, "account-blocked-staging", "m1", &["a1"]);
+    insert_account_message_and_attachment(AttachedMessageSeed {
+        storage: &storage,
+        account_id: "account-blocked-staging",
+        message_id: "m1",
+        attachment_ids: &["a1"],
+    });
     manage_attachment_command_dependencies(&app, &storage, directory.path());
     let server = mount_authenticated_gmail_server(
         "account-blocked-staging",
@@ -1028,13 +1096,13 @@ async fn stage_attachment_into_draft_fails_when_the_staging_directory_cannot_be_
     )
     .await;
 
-    seed_cached_attachment(
-        directory.path(),
-        "account-blocked-staging",
-        "m1",
-        "a1",
-        b"hello",
-    );
+    seed_cached_attachment(CachedAttachmentSeed {
+        directory: directory.path(),
+        account_id: "account-blocked-staging",
+        message_id: "m1",
+        attachment_id: "a1",
+        bytes: b"hello",
+    });
 
     let blocked_account_segment = directory
         .path()
@@ -1100,7 +1168,12 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
     let storage = Storage::open(&database).unwrap();
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = app();
     app.manage(storage.clone());
     app.manage(AuthService::new(storage.clone()));
@@ -1236,7 +1309,11 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     let auth_service = AuthService::new(storage.clone());
     let account_id = {
         auth_service
-            .save_account("me@example.com".into(), "refresh-token".into(), None)
+            .save_account(SaveAccountRequest {
+                email: "me@example.com".into(),
+                refresh_token: "refresh-token".into(),
+                target: None,
+            })
             .await
             .unwrap();
         auth_service.accounts().await.unwrap()[0].id.clone()
@@ -1320,8 +1397,18 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::upsert(
         &connection,
         &Thread {
@@ -1366,8 +1453,18 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, &account_id, "message-2", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-2",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
     ThreadRepository::recompute(&connection, &account_id, "thread-2").unwrap();
     drop(connection);
@@ -1423,8 +1520,12 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let sync_engine =
-        SyncEngine::new_with_unmetered_gmail(storage.clone(), queue, registry, noop_event_sink());
+    let sync_engine = SyncEngine::new_with_unmetered_gmail(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let app = app();
     app.manage(storage);
@@ -1745,7 +1846,11 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
     let auth_service = AuthService::new(storage.clone());
     let account_id = {
         auth_service
-            .save_account("me@example.com".into(), "refresh-token".into(), None)
+            .save_account(SaveAccountRequest {
+                email: "me@example.com".into(),
+                refresh_token: "refresh-token".into(),
+                target: None,
+            })
             .await
             .unwrap();
         auth_service.accounts().await.unwrap()[0].id.clone()
@@ -1829,10 +1934,30 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, &account_id, "message-1", "UNREAD", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
     drop(connection);
 
@@ -1853,8 +1978,12 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let sync_engine =
-        SyncEngine::new_with_unmetered_gmail(storage.clone(), queue, registry, noop_event_sink());
+    let sync_engine = SyncEngine::new_with_unmetered_gmail(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let storage_for_cursor = storage.clone();
 
     let app = app();
@@ -1981,7 +2110,11 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
     let auth_service = AuthService::new(storage.clone());
     let account_id = {
         auth_service
-            .save_account("me@example.com".into(), "refresh-token".into(), None)
+            .save_account(SaveAccountRequest {
+                email: "me@example.com".into(),
+                refresh_token: "refresh-token".into(),
+                target: None,
+            })
             .await
             .unwrap();
         auth_service.accounts().await.unwrap()[0].id.clone()
@@ -2045,8 +2178,18 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
     drop(connection);
 
@@ -2082,7 +2225,12 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let sync_engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let sync_engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let app = app();
     app.manage(storage.clone());
@@ -2161,7 +2309,11 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let auth_service = AuthService::new(storage.clone());
     let account_id = auth_service
-        .save_account("errors@example.com".into(), "refresh-token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "errors@example.com".into(),
+            refresh_token: "refresh-token".into(),
+            target: None,
+        })
         .await
         .unwrap()
         .id;
@@ -2278,8 +2430,12 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine =
-        SyncEngine::new_with_unmetered_gmail(storage.clone(), queue, registry, noop_event_sink());
+    let engine = SyncEngine::new_with_unmetered_gmail(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = app();
     app.manage(storage);
     app.manage(auth_service);
@@ -2356,7 +2512,11 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let auth_service = AuthService::new(storage.clone());
     let account_id = auth_service
-        .save_account("draft@example.com".into(), "refresh-token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "draft@example.com".into(),
+            refresh_token: "refresh-token".into(),
+            target: None,
+        })
         .await
         .unwrap()
         .id;
@@ -2410,10 +2570,14 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
     .unwrap();
     MessageRepository::set_label_membership(
         &connection,
-        &account_id,
-        "message-draft",
-        "DRAFT",
-        true,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-draft",
+        },
+        LabelMembershipChange {
+            label_id: "DRAFT",
+            present: true,
+        },
     )
     .unwrap();
     ThreadRepository::recompute(&connection, &account_id, "thread-draft").unwrap();
@@ -2437,7 +2601,12 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage, queue, registry, noop_event_sink());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = app();
     app.manage(engine);
     app.manage(auth_service);
@@ -2545,7 +2714,11 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let auth_service = AuthService::new(storage.clone());
     let account_id = auth_service
-        .save_account("me@example.com".into(), "refresh-token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "me@example.com".into(),
+            refresh_token: "refresh-token".into(),
+            target: None,
+        })
         .await
         .unwrap()
         .id;
@@ -2615,18 +2788,24 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
     .unwrap();
     MessageRepository::set_recipient_roles(
         &connection,
-        &account_id,
-        "message-1",
-        "me@example.com, bob@example.com",
-        "cc@example.com",
-        "",
-        Some("<prev@example.com>"),
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
+        RecipientRolesUpdate {
+            to: "me@example.com, bob@example.com",
+            cc: "cc@example.com",
+            bcc: "",
+            references: Some("<prev@example.com>"),
+        },
     )
     .unwrap();
     MessageRepository::replace_inline_parts(
         &connection,
-        &account_id,
-        "message-1",
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
         &[InlinePart {
             content_id: "logo".into(),
             mime_type: "image/png".into(),
@@ -2634,12 +2813,24 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
         }],
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     AttachmentRepository::replace_for_message(
         &connection,
-        &account_id,
-        "message-1",
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-1",
+        },
         &[Attachment {
             attachment_id: "gmail-att-1".into(),
             filename: "report.pdf".into(),
@@ -2651,9 +2842,11 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
     .unwrap();
     latentmail_lib::contacts::observe(
         &connection,
-        &account_id,
-        "Alice <alice@example.com>",
-        chrono::Utc::now().timestamp(),
+        ContactObservation {
+            account_id: &account_id,
+            mailbox: "Alice <alice@example.com>",
+            seen_at: chrono::Utc::now().timestamp(),
+        },
     )
     .unwrap();
     latentmail_lib::storage::TraversalCursorRepository::upsert(
@@ -2689,7 +2882,12 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = app();
     app.manage(storage);
     app.manage(auth_service);
@@ -2838,18 +3036,24 @@ async fn forwarding_a_message_whose_only_attachment_shaped_parts_are_inline_imag
     .unwrap();
     MessageRepository::set_recipient_roles(
         &connection,
-        &account_id,
-        "message-inline",
-        "me@example.com",
-        "",
-        "",
-        None,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-inline",
+        },
+        RecipientRolesUpdate {
+            to: "me@example.com",
+            cc: "",
+            bcc: "",
+            references: None,
+        },
     )
     .unwrap();
     MessageRepository::replace_inline_parts(
         &connection,
-        &account_id,
-        "message-inline",
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-inline",
+        },
         &[InlinePart {
             content_id: "logo".into(),
             mime_type: "image/png".into(),
@@ -2857,8 +3061,15 @@ async fn forwarding_a_message_whose_only_attachment_shaped_parts_are_inline_imag
         }],
     )
     .unwrap();
-    AttachmentRepository::replace_for_message(&connection, &account_id, "message-inline", &[])
-        .unwrap();
+    AttachmentRepository::replace_for_message(
+        &connection,
+        MessageKey {
+            account_id: &account_id,
+            message_id: "message-inline",
+        },
+        &[],
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, &account_id, "thread-inline").unwrap();
     drop(connection);
 

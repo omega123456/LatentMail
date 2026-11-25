@@ -55,6 +55,7 @@ export default tseslint.config(
       'object-shorthand': ['error', 'consistent'],
       '@typescript-eslint/no-non-null-assertion': 'error',
       'no-nested-ternary': 'error',
+      'max-params': ['error', 3],
       complexity: ['error', 10],
       'no-restricted-syntax': [
         'error',

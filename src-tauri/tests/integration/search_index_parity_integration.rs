@@ -1,3 +1,6 @@
+use latentmail_lib::storage::{
+    LabelMembershipChange, MessageBodyUpdate, MessageKey, RecipientRolesUpdate,
+};
 use std::collections::HashSet;
 
 use latentmail_lib::storage::{
@@ -129,7 +132,15 @@ fn deleting_by_draft_id_removes_its_search_index_entry() {
     let connection = Storage::in_memory().unwrap();
     AccountRepository::upsert(&connection, &account("account")).unwrap();
     MessageRepository::write_full_state(&connection, &message("account", "one", 1)).unwrap();
-    MessageRepository::set_draft_id(&connection, "account", "one", "draft-1").unwrap();
+    MessageRepository::set_draft_id(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "one",
+        },
+        "draft-1",
+    )
+    .unwrap();
     assert_index_matches_messages(&connection);
 
     MessageRepository::delete_by_draft_id(&connection, "account", "draft-1").unwrap();
@@ -185,11 +196,15 @@ fn setting_the_body_re_indexes_the_message() {
 
     MessageRepository::set_body(
         &connection,
-        "account",
-        "one",
-        None,
-        Some("Unique plain body token quokkasetbody"),
-        HtmlPresence::Absent,
+        MessageKey {
+            account_id: "account",
+            message_id: "one",
+        },
+        MessageBodyUpdate {
+            html_body: None,
+            plain_body: Some("Unique plain body token quokkasetbody"),
+            presence: HtmlPresence::Absent,
+        },
     )
     .unwrap();
 
@@ -209,8 +224,10 @@ fn setting_the_truncated_body_re_indexes_the_message() {
 
     MessageRepository::set_truncated_body(
         &connection,
-        "account",
-        "one",
+        MessageKey {
+            account_id: "account",
+            message_id: "one",
+        },
         Some("Unique plain body token quokkatruncated"),
     )
     .unwrap();
@@ -227,12 +244,16 @@ fn setting_recipient_roles_re_indexes_the_message() {
 
     MessageRepository::set_recipient_roles(
         &connection,
-        "account",
-        "one",
-        "quokkato@example.com",
-        "quokkacc@example.com",
-        "quokkabcc@example.com",
-        None,
+        MessageKey {
+            account_id: "account",
+            message_id: "one",
+        },
+        RecipientRolesUpdate {
+            to: "quokkato@example.com",
+            cc: "quokkacc@example.com",
+            bcc: "quokkabcc@example.com",
+            references: None,
+        },
     )
     .unwrap();
 
@@ -252,9 +273,30 @@ fn marking_unread_or_starred_leaves_the_search_index_untouched() {
     MessageRepository::write_full_state(&connection, &message("account", "one", 1)).unwrap();
     let before = search_index_rowids(&connection);
 
-    MessageRepository::set_label_membership(&connection, "account", "one", "UNREAD", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "one", "STARRED", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "one",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "one",
+        },
+        LabelMembershipChange {
+            label_id: "STARRED",
+            present: true,
+        },
+    )
+    .unwrap();
 
     assert_eq!(
         search_index_rowids(&connection),
@@ -280,8 +322,15 @@ fn changing_label_membership_leaves_the_search_index_untouched() {
     MessageRepository::write_full_state(&connection, &message("account", "one", 1)).unwrap();
     let before = search_index_rowids(&connection);
 
-    MessageRepository::overwrite_membership(&connection, "account", "one", &["INBOX".to_owned()])
-        .unwrap();
+    MessageRepository::overwrite_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "one",
+        },
+        &["INBOX".to_owned()],
+    )
+    .unwrap();
 
     assert_eq!(
         search_index_rowids(&connection),

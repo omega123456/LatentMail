@@ -136,28 +136,29 @@ fn reply_cc_recipients(all: bool, cc: &str) -> Vec<String> {
     Vec::new()
 }
 
-pub fn reply(
-    message: &Message,
-    to: &str,
-    cc: &str,
-    account_email: &str,
-    all: bool,
-    references: Option<&str>,
-    attachments: Vec<ReplyAttachment>,
-) -> ReplyContext {
-    let from_self = address_key(&message.sender) == account_email.to_ascii_lowercase();
-    let mut recipients = initial_reply_recipients(from_self, to, &message.sender);
-    if all {
-        recipients.extend(split_addresses(to));
+pub struct ReplyInput<'a> {
+    pub to: &'a str,
+    pub cc: &'a str,
+    pub account_email: &'a str,
+    pub all: bool,
+    pub references: Option<&'a str>,
+    pub attachments: Vec<ReplyAttachment>,
+}
+
+pub fn reply(message: &Message, input: ReplyInput<'_>) -> ReplyContext {
+    let from_self = address_key(&message.sender) == input.account_email.to_ascii_lowercase();
+    let mut recipients = initial_reply_recipients(from_self, input.to, &message.sender);
+    if input.all {
+        recipients.extend(split_addresses(input.to));
     }
-    let cc = reply_cc_recipients(all, cc);
-    let mut chain = references.map(split_addresses).unwrap_or_default();
+    let cc = reply_cc_recipients(input.all, input.cc);
+    let mut chain = input.references.map(split_addresses).unwrap_or_default();
     if let Some(id) = &message.rfc_message_id {
         chain.push(id.clone());
     }
     ReplyContext {
-        to: without_account(recipients, account_email),
-        cc: without_account(cc, account_email),
+        to: without_account(recipients, input.account_email),
+        cc: without_account(cc, input.account_email),
         subject: prefixed(&message.subject, "Re"),
         original_message_id: message.id.clone(),
         target_thread_id: Some(message.thread_id.clone()),
@@ -165,7 +166,7 @@ pub fn reply(
         references: chain,
         original_gmail_message_id: message.id.clone(),
         display_quote: display_quote(message),
-        attachments: attachments,
+        attachments: input.attachments,
     }
 }
 

@@ -1,7 +1,16 @@
 import { create } from 'zustand';
-import { getTime } from 'date-fns';
 import { invoke } from '@/lib/ipc/commands';
 import type { AiChatSource } from '@/lib/types/ipc';
+import {
+  appendAssistantDelta,
+  applyAssistantSources,
+  beginAssistantExchange,
+  createEmptyAssistantSession,
+  finishAssistantExchange,
+  stepAssistantHistoryNext,
+  stepAssistantHistoryPrevious,
+  type AssistantData,
+} from './assistant/transitions';
 
 export const QUESTION_LIMIT = 2000;
 
@@ -17,18 +26,11 @@ export type AssistantMessage = {
   createdAt: number;
 };
 
-type AssistantState = {
-  sessionId: string;
-  accountId: string | null;
-  messages: AssistantMessage[];
-  activeRequestId: string | null;
-  cancelPending: boolean;
-  draft: string;
-  historyCursor: number | null;
-  displacedDraft: string | null;
+type AssistantState = AssistantData & {
   setDraft: (draft: string) => void;
   selectAccount: (accountId: string) => void;
   newChat: () => void;
+  detachAccount: () => void;
   ask: (question: string) => void;
   stop: () => void;
   adoptRequest: (requestId: string) => void;
@@ -39,53 +41,8 @@ type AssistantState = {
   historyNext: () => void;
 };
 
-let sequence = 0;
-
-function nextId(prefix: string) {
-  sequence += 1;
-  return `${prefix}-${sequence}`;
-}
-
-function emptySession(accountId: string | null) {
-  return {
-    sessionId: nextId('assistant-session'),
-    accountId: accountId,
-    messages: [] as AssistantMessage[],
-    activeRequestId: null,
-    cancelPending: false,
-    draft: '',
-    historyCursor: null,
-    displacedDraft: null,
-  };
-}
-
-function message(role: AssistantRole, text: string, streaming: boolean): AssistantMessage {
-  return {
-    id: nextId(`assistant-${role}`),
-    role: role,
-    text: text,
-    error: null,
-    sources: [],
-    streaming: streaming,
-    createdAt: getTime(new Date()),
-  };
-}
-
-function withLastAssistant(
-  messages: AssistantMessage[],
-  update: (message: AssistantMessage) => AssistantMessage,
-) {
-  const index = messages.map((entry) => entry.role).lastIndexOf('assistant');
-  if (index === -1) return messages;
-  return messages.map((entry, position) => (position === index ? update(entry) : entry));
-}
-
 export function isStreaming(messages: AssistantMessage[]) {
   return messages.some((entry) => entry.streaming);
-}
-
-function questions(messages: AssistantMessage[]) {
-  return messages.filter((entry) => entry.role === 'user').map((entry) => entry.text);
 }
 
 function cancelInFlightRequest(activeRequestId: string | null, markPending: () => void) {
@@ -96,31 +53,33 @@ function cancelInFlightRequest(activeRequestId: string | null, markPending: () =
   void invoke('cancel_ai_chat', { requestId: activeRequestId });
 }
 
+function canAskQuestion(messages: AssistantMessage[], text: string): boolean {
+  const hasValidLength = text.length > 0 && text.length <= QUESTION_LIMIT;
+  return hasValidLength && !isStreaming(messages);
+}
+
 export const useAssistantStore = create<AssistantState>((set, get) => ({
-  ...emptySession(null),
+  ...createEmptyAssistantSession(null),
   setDraft: (draft) => set({ draft }),
   selectAccount: (accountId) => {
     if (get().accountId === accountId) return;
     get().stop();
-    set(emptySession(accountId));
+    set(createEmptyAssistantSession(accountId));
   },
   newChat: () => {
     get().stop();
-    set(emptySession(get().accountId));
+    set(createEmptyAssistantSession(get().accountId));
+  },
+  detachAccount: () => {
+    get().stop();
+    set(createEmptyAssistantSession(null));
   },
   ask: (question) => {
     const { accountId, sessionId, messages } = get();
     const text = question.trim();
-    if (accountId === null || text.length === 0 || text.length > QUESTION_LIMIT) return;
-    if (isStreaming(messages)) return;
-    set({
-      messages: [...messages, message('user', text, false), message('assistant', '', true)],
-      draft: '',
-      historyCursor: null,
-      displacedDraft: null,
-      activeRequestId: null,
-      cancelPending: false,
-    });
+    if (accountId === null) return;
+    if (!canAskQuestion(messages, text)) return;
+    set(beginAssistantExchange(messages, text));
     void invoke('start_ai_chat', { accountId: accountId, sessionId: sessionId, question: text })
       .then((requestId) => {
         if (get().sessionId !== sessionId) {
@@ -146,51 +105,16 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     get().finish({ cancelled: true, error: null });
   },
   adoptRequest: (requestId) => set({ activeRequestId: requestId }),
-  appendDelta: (text) =>
-    set((state) => ({
-      messages: withLastAssistant(state.messages, (entry) => ({
-        ...entry,
-        text: `${entry.text}${text}`,
-      })),
-    })),
+  appendDelta: (text) => set((state) => ({ messages: appendAssistantDelta(state.messages, text) })),
   setSources: (sources, answer) =>
-    set((state) => ({
-      messages: withLastAssistant(state.messages, (entry) => ({
-        ...entry,
-        sources: sources,
-        text: answer,
-      })),
-    })),
-  finish: ({ cancelled, error }) =>
-    set((state) => ({
-      activeRequestId: null,
-      messages: withLastAssistant(state.messages, (entry) => ({
-        ...entry,
-        streaming: false,
-        sources: cancelled ? [] : entry.sources,
-        error: error,
-      })),
-    })),
+    set((state) => ({ messages: applyAssistantSources(state.messages, { sources, answer }) })),
+  finish: (outcome) => set((state) => finishAssistantExchange(state.messages, outcome)),
   historyPrevious: () => {
-    const { messages, historyCursor, draft } = get();
-    const asked = questions(messages);
-    if (asked.length === 0) return;
-    const cursor = historyCursor === null ? asked.length - 1 : Math.max(0, historyCursor - 1);
-    set({
-      historyCursor: cursor,
-      displacedDraft: historyCursor === null ? draft : get().displacedDraft,
-      draft: asked[cursor],
-    });
+    const next = stepAssistantHistoryPrevious(get());
+    if (next) set(next);
   },
   historyNext: () => {
-    const { messages, historyCursor, displacedDraft } = get();
-    if (historyCursor === null) return;
-    const asked = questions(messages);
-    if (historyCursor >= asked.length - 1) {
-      set({ historyCursor: null, displacedDraft: null, draft: displacedDraft ?? '' });
-      return;
-    }
-    const cursor = historyCursor + 1;
-    set({ historyCursor: cursor, draft: asked[cursor] });
+    const next = stepAssistantHistoryNext(get());
+    if (next) set(next);
   },
 }));

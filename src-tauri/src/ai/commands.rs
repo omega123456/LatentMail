@@ -1,222 +1,246 @@
+use serde::Deserialize;
+use tauri::Runtime;
+
+use crate::ipc::{AppServices, CommandPayload};
+
 use super::{
-    chat, credentials,
-    provider::{Provider, ProviderModel},
-    AiConfigDto, AiService,
+    chat::{self, ChatBeginRequest},
+    index::{self, IndexContext, PauseUpdate},
+    provider::ProviderModel,
+    AiConfigDto, ApiKeyUpdate, BaseUrlUpdate, ChatModelUpdate, EnabledUpdate,
+    SelectEmbeddingRequest,
 };
-use tauri::{AppHandle, Runtime, State};
-#[tauri::command]
-pub async fn read_ai_configs(service: State<'_, AiService>) -> Result<Vec<AiConfigDto>, String> {
-    service.configs().await
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAiEnabledPayload {
+    pub account_id: String,
+    pub enabled: bool,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAiBaseUrlPayload {
+    pub account_id: String,
+    pub base_url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAiApiKeyPayload {
+    pub account_id: String,
+    pub api_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectAiChatModelPayload {
+    pub account_id: String,
+    pub model: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectAiEmbeddingModelPayload {
+    pub account_id: String,
+    pub model: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartAiChatPayload {
+    pub account_id: String,
+    pub session_id: String,
+    pub question: String,
+}
+
+fn index_context<R: Runtime>(services: &AppServices<'_, R>) -> Result<IndexContext<R>, String> {
+    Ok(IndexContext {
+        app: services.app().clone(),
+        service: services.ai()?.inner().clone(),
+        sync: services.sync()?.inner().clone(),
+    })
+}
+
+#[tauri::command]
+pub async fn read_ai_configs<R: Runtime>(
+    services: AppServices<'_, R>,
+) -> Result<Vec<AiConfigDto>, String> {
+    services.ai()?.configs().await
+}
+
 #[tauri::command]
 pub async fn set_ai_enabled<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    account_id: String,
-    enabled: bool,
+    services: AppServices<'_, R>,
+    CommandPayload(payload): CommandPayload<SetAiEnabledPayload>,
 ) -> Result<(), String> {
-    service.set_enabled(&app, account_id, enabled).await
-}
-#[tauri::command]
-pub async fn set_ai_base_url<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    account_id: String,
-    base_url: String,
-) -> Result<(), String> {
-    service.set_base_url(&app, account_id, base_url).await
-}
-#[tauri::command]
-pub async fn set_ai_api_key<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    account_id: String,
-    api_key: String,
-) -> Result<(), String> {
-    if api_key.is_empty() {
-        return Err("API key cannot be empty".to_owned());
-    }
-    service.require_account(&account_id).await?;
-    credentials::save(&account_id, &api_key)?;
-    tauri::Emitter::emit(
-        &app,
-        crate::events::AI_CONFIG,
-        serde_json::json!({"accountId":account_id}),
-    )
-    .map_err(|error| error.to_string())
-}
-#[tauri::command]
-pub async fn clear_ai_api_key<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    account_id: String,
-) -> Result<(), String> {
-    service.require_account(&account_id).await?;
-    credentials::clear(&account_id)?;
-    tauri::Emitter::emit(
-        &app,
-        crate::events::AI_CONFIG,
-        serde_json::json!({"accountId":account_id}),
-    )
-    .map_err(|error| error.to_string())
-}
-async fn provider_for(service: &AiService, account_id: &str) -> Result<Provider, String> {
-    let config = service.config_for(account_id).await?;
-    let base_url = config
-        .base_url
-        .ok_or_else(|| "Save an API root first".to_owned())?;
-    Provider::new(&base_url, credentials::load(account_id)?)
-}
-#[tauri::command]
-pub async fn test_ai_connection(
-    service: State<'_, AiService>,
-    account_id: String,
-) -> Result<usize, String> {
-    Ok(provider_for(&service, &account_id)
-        .await?
-        .models()
-        .await
-        .map_err(|error| error.to_string())?
-        .len())
-}
-#[tauri::command]
-pub async fn list_ai_models(
-    service: State<'_, AiService>,
-    account_id: String,
-) -> Result<Vec<ProviderModel>, String> {
-    provider_for(&service, &account_id)
-        .await?
-        .models()
-        .await
-        .map_err(|error| error.to_string())
-}
-#[tauri::command]
-pub async fn select_ai_chat_model<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    account_id: String,
-    model: Option<String>,
-) -> Result<(), String> {
-    service.set_chat_model(&app, account_id, model).await
-}
-#[tauri::command]
-pub async fn select_ai_embedding_model<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    sync: State<'_, std::sync::Arc<crate::sync::SyncEngine>>,
-    account_id: String,
-    model: String,
-) -> Result<(), String> {
-    let vector = provider_for(&service, &account_id)
-        .await?
-        .embed(&model, vec!["LatentMail embedding validation".to_owned()])
-        .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .next()
-        .ok_or_else(|| "Provider returned no embedding".to_owned())?;
-    if vector.is_empty() {
-        return Err("Provider returned an empty embedding".to_owned());
-    }
-    let dimensions =
-        i64::try_from(vector.len()).map_err(|_| "Embedding dimension is too large".to_owned())?;
-    let service = service.inner().clone();
-    service.begin_reconfiguration(&account_id)?;
-    sync.cancel_embedding(&account_id).await;
-    let queued_service = service.clone();
-    let control_service = service.clone();
-    let queued_sync = sync.inner().clone();
-    let queued_account = account_id.clone();
-    let control_account = account_id.clone();
-    let queued = sync
-        .enqueue_embedding(
-            &account_id.clone(),
-            "Change embedding model".to_owned(),
-            async move {
-                let changed = service
-                    .set_embedding_model(&app, account_id.clone(), model, dimensions)
-                    .await;
-                service.finish_reconfiguration(&queued_account)?;
-                changed?;
-                super::index::enqueue(app, queued_service, queued_sync, queued_account).await
+    services
+        .ai()?
+        .set_enabled(
+            services.app(),
+            EnabledUpdate {
+                account_id: payload.account_id,
+                enabled: payload.enabled,
             },
         )
         .await
-        .map_err(|error| error.to_string());
-    if queued.is_err() {
-        control_service.finish_reconfiguration(&control_account)?;
-    }
-    queued
 }
+
 #[tauri::command]
-pub async fn read_ai_index_status(
-    service: State<'_, AiService>,
-) -> Result<Vec<super::index::IndexStatus>, String> {
-    super::index::statuses(&service).await
+pub async fn set_ai_base_url<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(payload): CommandPayload<SetAiBaseUrlPayload>,
+) -> Result<(), String> {
+    services
+        .ai()?
+        .set_base_url(
+            services.app(),
+            BaseUrlUpdate {
+                account_id: payload.account_id,
+                base_url: payload.base_url,
+            },
+        )
+        .await
 }
+
+#[tauri::command]
+pub async fn set_ai_api_key<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(payload): CommandPayload<SetAiApiKeyPayload>,
+) -> Result<(), String> {
+    services
+        .ai()?
+        .set_api_key(
+            services.app(),
+            ApiKeyUpdate {
+                account_id: payload.account_id,
+                api_key: payload.api_key,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn clear_ai_api_key<R: Runtime>(
+    services: AppServices<'_, R>,
+    account_id: String,
+) -> Result<(), String> {
+    services
+        .ai()?
+        .clear_api_key(services.app(), &account_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn test_ai_connection<R: Runtime>(
+    services: AppServices<'_, R>,
+    account_id: String,
+) -> Result<usize, String> {
+    services.ai()?.test_connection(&account_id).await
+}
+
+#[tauri::command]
+pub async fn list_ai_models<R: Runtime>(
+    services: AppServices<'_, R>,
+    account_id: String,
+) -> Result<Vec<ProviderModel>, String> {
+    services.ai()?.list_models(&account_id).await
+}
+
+#[tauri::command]
+pub async fn select_ai_chat_model<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(payload): CommandPayload<SelectAiChatModelPayload>,
+) -> Result<(), String> {
+    services
+        .ai()?
+        .set_chat_model(
+            services.app(),
+            ChatModelUpdate {
+                account_id: payload.account_id,
+                model: payload.model,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn select_ai_embedding_model<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(payload): CommandPayload<SelectAiEmbeddingModelPayload>,
+) -> Result<(), String> {
+    services
+        .ai()?
+        .select_embedding_model(
+            index_context(&services)?,
+            SelectEmbeddingRequest {
+                account_id: payload.account_id,
+                model: payload.model,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn read_ai_index_status<R: Runtime>(
+    services: AppServices<'_, R>,
+) -> Result<Vec<index::IndexStatus>, String> {
+    index::statuses(services.ai()?.inner()).await
+}
+
 #[tauri::command]
 pub async fn start_ai_index<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    sync: State<'_, std::sync::Arc<crate::sync::SyncEngine>>,
+    services: AppServices<'_, R>,
     account_id: String,
 ) -> Result<(), String> {
-    super::index::set_paused(&app, &service, account_id.clone(), false).await?;
-    super::index::enqueue(
-        app,
-        service.inner().clone(),
-        sync.inner().clone(),
-        account_id,
-    )
-    .await
+    index::start(index_context(&services)?, account_id).await
 }
+
 #[tauri::command]
 pub async fn cancel_ai_index<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
+    services: AppServices<'_, R>,
     account_id: String,
 ) -> Result<(), String> {
-    super::index::set_paused(&app, &service, account_id, true).await
-}
-#[tauri::command]
-pub async fn rebuild_ai_index<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    sync: State<'_, std::sync::Arc<crate::sync::SyncEngine>>,
-    account_id: String,
-) -> Result<(), String> {
-    service.require_account(&account_id).await?;
-    let service = service.inner().clone();
-    sync.cancel_embedding(&account_id).await;
-    let queued_sync = sync.inner().clone();
-    sync.enqueue_embedding(
-        &account_id.clone(),
-        "Rebuild semantic index".to_owned(),
-        async move { super::index::rebuild(&app, &service, queued_sync, account_id).await },
+    index::set_paused(
+        services.app(),
+        services.ai()?.inner(),
+        PauseUpdate {
+            account_id: account_id,
+            paused: true,
+        },
     )
     .await
-    .map_err(|error| error.to_string())
 }
+
+#[tauri::command]
+pub async fn rebuild_ai_index<R: Runtime>(
+    services: AppServices<'_, R>,
+    account_id: String,
+) -> Result<(), String> {
+    index::request_rebuild(index_context(&services)?, account_id).await
+}
+
 #[tauri::command]
 pub async fn start_ai_chat<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, AiService>,
-    account_id: String,
-    session_id: String,
-    question: String,
+    services: AppServices<'_, R>,
+    CommandPayload(payload): CommandPayload<StartAiChatPayload>,
 ) -> Result<String, String> {
-    let question = chat::validate_question(&question)?;
-    service.chat_ready(&account_id).await?;
-    let request = service.chat().begin(&account_id, &session_id, &question)?;
-    let request_id = request.request_id.clone();
-    let service = service.inner().clone();
-    tauri::async_runtime::spawn(async move { chat::run(&app, &service, request).await });
-    Ok(request_id)
+    chat::start(
+        services.app().clone(),
+        services.ai()?.inner(),
+        ChatBeginRequest {
+            account_id: &payload.account_id,
+            session_id: &payload.session_id,
+            question: &payload.question,
+        },
+    )
+    .await
 }
+
 #[tauri::command]
-pub async fn cancel_ai_chat(
-    service: State<'_, AiService>,
+pub async fn cancel_ai_chat<R: Runtime>(
+    services: AppServices<'_, R>,
     request_id: String,
 ) -> Result<bool, String> {
-    service.chat().cancel(&request_id)
+    services.ai()?.chat().cancel(&request_id)
 }

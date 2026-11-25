@@ -10,14 +10,14 @@ const ERROR_WELL_CLASS =
 const NEUTRAL_WELL_CLASS =
   'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant';
 
-function wellClass(
-  failed: boolean,
-  coloured: boolean,
-  wellClassName: string,
-  inkClassName: string,
-): string {
-  if (failed) return ERROR_WELL_CLASS;
-  if (coloured) return `${wellClassName} ${inkClassName}`;
+function wellClass(input: {
+  failed: boolean;
+  coloured: boolean;
+  wellClassName: string;
+  inkClassName: string;
+}): string {
+  if (input.failed) return ERROR_WELL_CLASS;
+  if (input.coloured) return `${input.wellClassName} ${input.inkClassName}`;
   return NEUTRAL_WELL_CLASS;
 }
 
@@ -54,7 +54,7 @@ export function AttachmentChip({
     >
       <div
         aria-hidden="true"
-        className={`grid size-7 shrink-0 place-items-center rounded ${wellClass(failed, coloured, wellClassName, inkClassName)}`}
+        className={`grid size-7 shrink-0 place-items-center rounded ${wellClass({ failed, coloured, wellClassName, inkClassName })}`}
       >
         {wellGlyph(attachment.state, Icon)}
       </div>

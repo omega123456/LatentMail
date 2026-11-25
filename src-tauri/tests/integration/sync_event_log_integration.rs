@@ -11,9 +11,8 @@ fn emitted_events_are_logged_by_name_and_size_without_their_mail_content() {
         .unwrap();
     let sink = emitting_event_sink(application.handle().clone());
     let logs = tempfile::tempdir().unwrap();
-    let (dispatch, guard, _handle) =
-        latentmail_lib::logging::subscriber(logs.path(), LevelFilter::DEBUG).unwrap();
-    tracing::dispatcher::with_default(&dispatch, || {
+    let log_parts = latentmail_lib::logging::subscriber(logs.path(), LevelFilter::DEBUG).unwrap();
+    tracing::dispatcher::with_default(&log_parts.dispatch, || {
         sink(
             latentmail_lib::events::MAIL_NEW,
             serde_json::json!({
@@ -24,7 +23,7 @@ fn emitted_events_are_logged_by_name_and_size_without_their_mail_content() {
             }),
         );
     });
-    drop(guard);
+    drop(log_parts.guard);
 
     let log_path = std::fs::read_dir(logs.path())
         .unwrap()

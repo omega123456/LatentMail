@@ -57,12 +57,17 @@ export type AvatarProps = {
   className?: string;
 };
 
-function avatarCircleClassName(
-  showImage: boolean,
-  textSize: string,
-  fallbackClassName: string | undefined,
-  ring: boolean,
-): string {
+function avatarCircleClassName({
+  showImage,
+  textSize,
+  fallbackClassName,
+  ring,
+}: {
+  showImage: boolean;
+  textSize: string;
+  fallbackClassName: string | undefined;
+  ring: boolean;
+}): string {
   const base =
     'flex size-full items-center justify-center overflow-hidden rounded-full font-semibold';
   if (showImage) {
@@ -105,12 +110,12 @@ export function Avatar({
     setFailed(false);
   }
   const imageSrc = resolveImageSrc(src, failed);
-  const circleClassName = avatarCircleClassName(
-    imageSrc !== null,
-    textSize,
-    fallbackClassName,
-    ring,
-  );
+  const circleClassName = avatarCircleClassName({
+    showImage: imageSrc !== null,
+    textSize: textSize,
+    fallbackClassName: fallbackClassName,
+    ring: ring,
+  });
 
   return (
     <span

@@ -1,3 +1,4 @@
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey, ThreadKey};
 use latentmail_lib::{
     search::scope::SearchScope,
     storage::{
@@ -33,7 +34,18 @@ fn seed_message(connection: &rusqlite::Connection, id: &str, labels: &[&str]) {
     .unwrap();
     for label in labels {
         LabelRepository::ensure_placeholder(connection, "account", label).unwrap();
-        MessageRepository::set_label_membership(connection, "account", id, label, true).unwrap();
+        MessageRepository::set_label_membership(
+            connection,
+            MessageKey {
+                account_id: "account",
+                message_id: id,
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: true,
+            },
+        )
+        .unwrap();
     }
 }
 
@@ -61,11 +73,18 @@ fn seeded_connection() -> rusqlite::Connection {
 }
 
 fn ids(connection: &rusqlite::Connection, scope: Option<&ConversationEntryScope>) -> Vec<String> {
-    MessageRepository::list_conversation_metadata(connection, "account", "thread", scope)
-        .unwrap()
-        .into_iter()
-        .map(|message| message.message.id)
-        .collect()
+    MessageRepository::list_conversation_metadata(
+        connection,
+        ThreadKey {
+            account_id: "account",
+            thread_id: "thread",
+        },
+        scope,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|message| message.message.id)
+    .collect()
 }
 
 #[test]
@@ -161,16 +180,22 @@ fn a_hidden_messages_labels_attachments_and_inline_parts_never_reach_a_visible_m
         LabelRepository::ensure_placeholder(&connection, "account", "Label_hidden").unwrap();
         MessageRepository::set_label_membership(
             &connection,
-            "account",
-            hidden,
-            "Label_hidden",
-            true,
+            MessageKey {
+                account_id: "account",
+                message_id: hidden,
+            },
+            LabelMembershipChange {
+                label_id: "Label_hidden",
+                present: true,
+            },
         )
         .unwrap();
         AttachmentRepository::replace_for_message(
             &connection,
-            "account",
-            hidden,
+            MessageKey {
+                account_id: "account",
+                message_id: hidden,
+            },
             &[Attachment {
                 attachment_id: format!("{hidden}-attachment"),
                 filename: "hidden.pdf".into(),
@@ -182,8 +207,10 @@ fn a_hidden_messages_labels_attachments_and_inline_parts_never_reach_a_visible_m
         .unwrap();
         MessageRepository::replace_inline_parts(
             &connection,
-            "account",
-            hidden,
+            MessageKey {
+                account_id: "account",
+                message_id: hidden,
+            },
             &[InlinePart {
                 content_id: format!("{hidden}-cid"),
                 mime_type: "image/png".into(),
@@ -193,9 +220,15 @@ fn a_hidden_messages_labels_attachments_and_inline_parts_never_reach_a_visible_m
         .unwrap();
     }
 
-    let visible =
-        MessageRepository::list_conversation_metadata(&connection, "account", "thread", None)
-            .unwrap();
+    let visible = MessageRepository::list_conversation_metadata(
+        &connection,
+        ThreadKey {
+            account_id: "account",
+            thread_id: "thread",
+        },
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         visible

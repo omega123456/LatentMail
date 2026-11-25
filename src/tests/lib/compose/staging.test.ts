@@ -30,12 +30,12 @@ describe('compose staging', () => {
       size: 42,
     }));
     ipc.override('stage_attachment_from_path', stage);
-    await expect(stageAttachmentPath('account', 'session', '/tmp/deck.pdf')).resolves.toMatchObject(
-      {
-        id: 'part-1',
-        assetUrl: expect.stringContaining(encodeURIComponent('/stage/deck.pdf')),
-      },
-    );
+    await expect(
+      stageAttachmentPath({ accountId: 'account', owner: 'session', path: '/tmp/deck.pdf' }),
+    ).resolves.toMatchObject({
+      id: 'part-1',
+      assetUrl: expect.stringContaining(encodeURIComponent('/stage/deck.pdf')),
+    });
     expect(stage).toHaveBeenCalledWith({
       accountId: 'account',
       owner: 'session',

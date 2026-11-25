@@ -17,6 +17,7 @@ import { useToastStore } from '@/stores/toast';
 import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { useLayoutStore } from '@/stores/layout';
+import { clearStateForRemovedAccount } from '@/lib/accounts/reset-account-state';
 import { UPDATE_INTERVAL_MS } from '@/lib/update-intervals';
 import { minutesToMilliseconds } from 'date-fns';
 
@@ -135,7 +136,7 @@ export function useRemoveAccountMutation() {
   return useCommandMutation(
     (accountId: string) => invoke('remove_account', { accountId }),
     'Couldn’t remove that account.',
-    (_result, accountId) => useSelectionStore.getState().clearStateForRemovedAccount(accountId),
+    (_result, accountId) => clearStateForRemovedAccount(accountId),
   );
 }
 
@@ -314,12 +315,12 @@ function useConversationRequest() {
 export function useConversationQuery(accountId: string | null, threadId: string | null) {
   const { imagePolicy, entryScope } = useConversationRequest();
   return useQuery({
-    queryKey: queryKeys.conversation(
-      accountId ?? '',
-      threadId ?? '',
-      JSON.stringify(imagePolicy),
-      entryScope,
-    ),
+    queryKey: queryKeys.conversation({
+      accountId: accountId ?? '',
+      threadId: threadId ?? '',
+      policyKey: JSON.stringify(imagePolicy),
+      entryScope: entryScope,
+    }),
     queryFn: () =>
       invoke('load_conversation', {
         accountId: accountId as string,
@@ -339,12 +340,12 @@ export function useMessageBodyQuery(
 ) {
   const { imagePolicy, entryScope } = useConversationRequest();
   return useQuery({
-    queryKey: queryKeys.messageBody(
-      accountId ?? '',
-      messageId ?? '',
-      JSON.stringify(imagePolicy),
-      entryScope,
-    ),
+    queryKey: queryKeys.messageBody({
+      accountId: accountId ?? '',
+      messageId: messageId ?? '',
+      policyKey: JSON.stringify(imagePolicy),
+      entryScope: entryScope,
+    }),
     queryFn: () =>
       invoke('load_message_body', {
         accountId: accountId as string,
@@ -371,12 +372,19 @@ export function useMessageSourceQuery(accountId: string | null, messageId: strin
   });
 }
 
-export function useCachedAttachmentQuery(
-  accountId: string | null,
-  messageId: string | null,
-  attachmentId: string | null,
+export type AttachmentQueryInput = {
+  accountId: string | null;
+  messageId: string | null;
+  attachmentId: string | null;
+  enabled?: boolean;
+};
+
+export function useCachedAttachmentQuery({
+  accountId,
+  messageId,
+  attachmentId,
   enabled = true,
-) {
+}: AttachmentQueryInput) {
   return useQuery({
     queryKey: queryKeys.cachedAttachment(accountId ?? '', messageId ?? '', attachmentId ?? ''),
     queryFn: () =>
@@ -390,12 +398,12 @@ export function useCachedAttachmentQuery(
   });
 }
 
-export function useAttachmentTextQuery(
-  accountId: string | null,
-  messageId: string | null,
-  attachmentId: string | null,
+export function useAttachmentTextQuery({
+  accountId,
+  messageId,
+  attachmentId,
   enabled = true,
-) {
+}: AttachmentQueryInput) {
   return useQuery({
     queryKey: queryKeys.attachmentText(accountId ?? '', messageId ?? '', attachmentId ?? ''),
     queryFn: () =>
@@ -419,12 +427,17 @@ export function useTraversalStatusQuery(accountId: string | null) {
   });
 }
 
-function useAvatarQuery<Command extends 'read_sender_avatar' | 'read_account_avatar'>(
-  queryKey: QueryKey,
-  command: Command,
-  payload: IpcCommandMap[Command]['args'],
-  enabled: boolean,
-) {
+function useAvatarQuery<Command extends 'read_sender_avatar' | 'read_account_avatar'>({
+  queryKey,
+  command,
+  payload,
+  enabled,
+}: {
+  queryKey: QueryKey;
+  command: Command;
+  payload: IpcCommandMap[Command]['args'];
+  enabled: boolean;
+}) {
   return useQuery({
     queryKey: queryKey,
     queryFn: async () => {
@@ -442,21 +455,21 @@ function useAvatarQuery<Command extends 'read_sender_avatar' | 'read_account_ava
 
 export function useSenderAvatarQuery(domain: string | null) {
   const showSenderAvatars = useLayoutStore((layout) => layout.showSenderAvatars);
-  return useAvatarQuery(
-    queryKeys.senderAvatar(domain ?? ''),
-    'read_sender_avatar',
-    { domain: domain as string },
-    domain !== null && showSenderAvatars,
-  );
+  return useAvatarQuery({
+    queryKey: queryKeys.senderAvatar(domain ?? ''),
+    command: 'read_sender_avatar',
+    payload: { domain: domain as string },
+    enabled: domain !== null && showSenderAvatars,
+  });
 }
 
 export function useAccountAvatarQuery(accountId: string | null) {
-  return useAvatarQuery(
-    queryKeys.accountAvatar(accountId ?? ''),
-    'read_account_avatar',
-    { accountId: accountId as string },
-    accountId !== null,
-  );
+  return useAvatarQuery({
+    queryKey: queryKeys.accountAvatar(accountId ?? ''),
+    command: 'read_account_avatar',
+    payload: { accountId: accountId as string },
+    enabled: accountId !== null,
+  });
 }
 
 export function useFetchMessageBodyMutation(accountId: string | null) {

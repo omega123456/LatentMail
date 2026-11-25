@@ -16,6 +16,17 @@ pub struct EmbeddingCounts {
     pub indexed_passages: i64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NearestPassage {
+    pub message_seq: i64,
+    pub distance: f64,
+}
+
+pub struct NearestQuery<'a> {
+    pub vector: &'a [f32],
+    pub limit: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EmbeddingBacklog {
     pub message_seq: i64,
@@ -211,18 +222,21 @@ impl EmbeddingRepository {
     pub fn nearest(
         connection: &Connection,
         account_id: &str,
-        vector: &[f32],
-        limit: i64,
-    ) -> Result<Vec<(i64, f64)>> {
+        query: NearestQuery<'_>,
+    ) -> Result<Vec<NearestPassage>> {
         let table = Self::table_name(Self::account_seq(connection, account_id)?);
-        let bytes: Vec<u8> = vector
+        let bytes: Vec<u8> = query
+            .vector
             .iter()
             .flat_map(|value| value.to_le_bytes())
             .collect();
         let mut statement = connection.prepare_cached(&format!("SELECT e.message_seq,v.distance FROM {table} v JOIN message_embeddings e ON e.seq=v.rowid WHERE v.embedding MATCH ?1 AND k=?2 AND e.account_id=?3 ORDER BY v.distance"))?;
         let rows = statement
-            .query_map(params![bytes, limit, account_id], |row| {
-                Ok((row.get(0)?, row.get(1)?))
+            .query_map(params![bytes, query.limit, account_id], |row| {
+                Ok(NearestPassage {
+                    message_seq: row.get(0)?,
+                    distance: row.get(1)?,
+                })
             })?
             .collect();
         rows

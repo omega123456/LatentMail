@@ -8,9 +8,9 @@ use tracing_subscriber::filter::LevelFilter;
 #[test]
 fn writer_records_frontend_messages_but_filters_debug() {
     let directory = tempfile::tempdir().unwrap();
-    let (subscriber, guard, _handle) = subscriber(directory.path(), LevelFilter::INFO).unwrap();
+    let parts = subscriber(directory.path(), LevelFilter::INFO).unwrap();
 
-    tracing::dispatcher::with_default(&subscriber, || {
+    tracing::dispatcher::with_default(&parts.dispatch, || {
         write_frontend_log(FrontendLogLevel::Debug, "filtered record".into());
         write_frontend_log(FrontendLogLevel::Info, "info record".into());
         write_frontend_log(FrontendLogLevel::Warn, "warn record".into());
@@ -18,7 +18,7 @@ fn writer_records_frontend_messages_but_filters_debug() {
         tracing::event!(Level::DEBUG, "filtered record");
     });
 
-    drop(guard);
+    drop(parts.guard);
 
     let path = fs::read_dir(directory.path())
         .unwrap()
@@ -44,10 +44,10 @@ fn init_installs_a_global_dispatcher_and_creates_the_log_directory() {
     let directory = tempfile::tempdir().unwrap();
     let log_directory = directory.path().join("nested");
 
-    let (guard, _handle) = init(&log_directory).unwrap();
+    let handles = init(&log_directory).unwrap();
 
     tracing::info!("routed through the global dispatcher");
-    drop(guard);
+    drop(handles.guard);
 
     assert!(fs::read_dir(&log_directory).unwrap().next().is_some());
 }
@@ -55,17 +55,17 @@ fn init_installs_a_global_dispatcher_and_creates_the_log_directory() {
 #[test]
 fn reload_handle_changes_the_level_without_a_restart() {
     let directory = tempfile::tempdir().unwrap();
-    let (subscriber, guard, handle) = subscriber(directory.path(), LevelFilter::INFO).unwrap();
+    let parts = subscriber(directory.path(), LevelFilter::INFO).unwrap();
 
-    tracing::dispatcher::with_default(&subscriber, || {
+    tracing::dispatcher::with_default(&parts.dispatch, || {
         tracing::event!(Level::DEBUG, "before reload");
     });
-    handle.reload(LevelFilter::DEBUG).unwrap();
-    tracing::dispatcher::with_default(&subscriber, || {
+    parts.level_handle.reload(LevelFilter::DEBUG).unwrap();
+    tracing::dispatcher::with_default(&parts.dispatch, || {
         tracing::event!(Level::DEBUG, "after reload");
     });
 
-    drop(guard);
+    drop(parts.guard);
 
     let contents = fs::read_to_string(
         fs::read_dir(directory.path())

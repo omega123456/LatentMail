@@ -1,10 +1,12 @@
+use crate::support::{app, sync_engine as engine};
 use latentmail_lib::auth::AuthService;
+use latentmail_lib::ipc::{AccountMessageRequest, AppServices, CommandPayload};
 use latentmail_lib::storage::{
     Account, AccountRepository, AttachmentRepository, HtmlPresence, Message, MessageRepository,
     Storage,
 };
+use latentmail_lib::storage::{MessageBodyUpdate, MessageKey};
 use latentmail_lib::sync::commands::fetch_message_body;
-use crate::support::{app, sync_engine as engine};
 use tauri::Manager;
 use wiremock::{
     matchers::{method, path, query_param},
@@ -14,7 +16,8 @@ use wiremock::{
 fn message(presence: HtmlPresence) -> Message {
     Message {
         truncated_body: Some("cut off embedding text".into()),
-        ..crate::support::message("account", "message", "thread", presence)
+        html_presence: presence,
+        ..crate::support::message("account", "message", "thread")
     }
 }
 
@@ -51,11 +54,15 @@ fn lazy_body_cache_distinguishes_never_fetched_present_and_absent() {
         .body_is_empty());
     MessageRepository::set_body(
         &connection,
-        "account",
-        "message",
-        Some("<p>full body</p>"),
-        None,
-        HtmlPresence::Present,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        MessageBodyUpdate {
+            html_body: Some("<p>full body</p>"),
+            plain_body: None,
+            presence: HtmlPresence::Present,
+        },
     )
     .unwrap();
     let cached = MessageRepository::get(&connection, "account", "message")
@@ -66,11 +73,15 @@ fn lazy_body_cache_distinguishes_never_fetched_present_and_absent() {
     assert!(!cached.body_is_empty());
     MessageRepository::set_body(
         &connection,
-        "account",
-        "message",
-        None,
-        Some("plain-only bounce notice"),
-        HtmlPresence::Absent,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        MessageBodyUpdate {
+            html_body: None,
+            plain_body: Some("plain-only bounce notice"),
+            presence: HtmlPresence::Absent,
+        },
     )
     .unwrap();
     let absent = MessageRepository::get(&connection, "account", "message")
@@ -184,12 +195,11 @@ async fn fetch_message_body_persists_too_large_and_never_redownloads_it() {
     application.manage(storage.clone());
 
     fetch_message_body(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        application.state(),
-        "account".into(),
-        "m1".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+        }),
     )
     .await
     .unwrap();
@@ -201,12 +211,11 @@ async fn fetch_message_body_persists_too_large_and_never_redownloads_it() {
     assert!(stored.html_body.is_none());
 
     fetch_message_body(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        application.state(),
-        "account".into(),
-        "m1".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+        }),
     )
     .await
     .unwrap();
@@ -299,12 +308,11 @@ async fn a_stored_body_with_an_unresolved_cid_downloads_the_inline_image() {
     application.manage(storage.clone());
 
     fetch_message_body(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        application.state(),
-        "account".into(),
-        "m1".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+        }),
     )
     .await
     .unwrap();
@@ -405,12 +413,11 @@ async fn an_inline_image_that_will_not_download_stores_no_inline_part() {
     application.manage(storage.clone());
 
     fetch_message_body(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        application.state(),
-        "account".into(),
-        "m1".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+        }),
     )
     .await
     .unwrap();

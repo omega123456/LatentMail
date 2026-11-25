@@ -9,6 +9,20 @@ use crate::{avatars::cache::hash_key, gmail::GmailClient};
 pub const CACHE_CEILING_BYTES: u64 = 512 * 1024 * 1024;
 const UNSAFE_PATH_CHARACTERS: [char; 4] = ['/', '\\', ':', '\0'];
 
+#[derive(Clone, Copy, Debug)]
+pub struct AttachmentRef<'a> {
+    pub account_id: &'a str,
+    pub message_id: &'a str,
+    pub attachment_id: &'a str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AttachmentDescriptor<'a> {
+    pub target: AttachmentRef<'a>,
+    pub filename: &'a str,
+    pub mime_type: &'a str,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedAttachment {
     pub cache_path: PathBuf,
@@ -36,26 +50,16 @@ impl AttachmentCache {
         Ok(self.root.join(account_component).join(message_component))
     }
 
-    fn raw_path(
-        &self,
-        account_id: &str,
-        message_id: &str,
-        attachment_id: &str,
-    ) -> io::Result<PathBuf> {
+    fn raw_path(&self, target: AttachmentRef<'_>) -> io::Result<PathBuf> {
         Ok(self
-            .message_dir(account_id, message_id)?
-            .join(hash_key(attachment_id)))
+            .message_dir(target.account_id, target.message_id)?
+            .join(hash_key(target.attachment_id)))
     }
 
-    fn raster_path(
-        &self,
-        account_id: &str,
-        message_id: &str,
-        attachment_id: &str,
-    ) -> io::Result<PathBuf> {
+    fn raster_path(&self, target: AttachmentRef<'_>) -> io::Result<PathBuf> {
         Ok(self
-            .message_dir(account_id, message_id)?
-            .join(format!("{}.png", hash_key(attachment_id))))
+            .message_dir(target.account_id, target.message_id)?
+            .join(format!("{}.png", hash_key(target.attachment_id))))
     }
 
     fn is_tiff(mime_type: &str) -> bool {
@@ -64,19 +68,16 @@ impl AttachmentCache {
 
     fn write_display_path(
         &self,
-        account_id: &str,
-        message_id: &str,
-        attachment_id: &str,
-        mime_type: &str,
+        descriptor: AttachmentDescriptor<'_>,
         bytes: &[u8],
-        raw: &Path,
     ) -> io::Result<PathBuf> {
-        if !Self::is_tiff(mime_type) {
-            return Ok(raw.to_path_buf());
+        let raw = self.raw_path(descriptor.target)?;
+        if !Self::is_tiff(descriptor.mime_type) {
+            return Ok(raw);
         }
-        let raster = self.raster_path(account_id, message_id, attachment_id)?;
+        let raster = self.raster_path(descriptor.target)?;
         let Ok(png) = super::thumbnail::rasterize_tiff(bytes) else {
-            return Ok(raw.to_path_buf());
+            return Ok(raw);
         };
         fs::write(&raster, &png)?;
         Ok(raster)
@@ -84,18 +85,13 @@ impl AttachmentCache {
 
     fn lookup_display_path(
         &self,
-        account_id: &str,
-        message_id: &str,
-        attachment_id: &str,
-        mime_type: &str,
+        descriptor: AttachmentDescriptor<'_>,
         raw: &Path,
     ) -> Option<PathBuf> {
-        if !Self::is_tiff(mime_type) {
+        if !Self::is_tiff(descriptor.mime_type) {
             return Some(raw.to_path_buf());
         }
-        let raster = self
-            .raster_path(account_id, message_id, attachment_id)
-            .ok()?;
+        let raster = self.raster_path(descriptor.target).ok()?;
         if !raster.exists() {
             return Some(raw.to_path_buf());
         }
@@ -105,52 +101,33 @@ impl AttachmentCache {
 
     pub fn write_bytes(
         &self,
-        account_id: &str,
-        message_id: &str,
-        attachment_id: &str,
-        filename: &str,
-        mime_type: &str,
+        descriptor: AttachmentDescriptor<'_>,
         bytes: &[u8],
     ) -> io::Result<CachedAttachment> {
-        let dir = self.message_dir(account_id, message_id)?;
+        let dir = self.message_dir(descriptor.target.account_id, descriptor.target.message_id)?;
         fs::create_dir_all(&dir)?;
-        let raw = self.raw_path(account_id, message_id, attachment_id)?;
+        let raw = self.raw_path(descriptor.target)?;
         fs::write(&raw, bytes)?;
-        let display_path = self.write_display_path(
-            account_id,
-            message_id,
-            attachment_id,
-            mime_type,
-            bytes,
-            &raw,
-        )?;
+        let display_path = self.write_display_path(descriptor, bytes)?;
         Ok(CachedAttachment {
             cache_path: raw,
             display_path: display_path,
-            mime_type: mime_type.to_owned(),
-            filename: filename.to_owned(),
+            mime_type: descriptor.mime_type.to_owned(),
+            filename: descriptor.filename.to_owned(),
             size: bytes.len() as u64,
         })
     }
 
-    pub fn lookup(
-        &self,
-        account_id: &str,
-        message_id: &str,
-        attachment_id: &str,
-        filename: &str,
-        mime_type: &str,
-    ) -> Option<CachedAttachment> {
-        let raw = self.raw_path(account_id, message_id, attachment_id).ok()?;
+    pub fn lookup(&self, descriptor: AttachmentDescriptor<'_>) -> Option<CachedAttachment> {
+        let raw = self.raw_path(descriptor.target).ok()?;
         let metadata = fs::metadata(&raw).ok()?;
         let _ = touch(&raw);
-        let display_path =
-            self.lookup_display_path(account_id, message_id, attachment_id, mime_type, &raw)?;
+        let display_path = self.lookup_display_path(descriptor, &raw)?;
         Some(CachedAttachment {
             cache_path: raw,
             display_path: display_path,
-            mime_type: mime_type.to_owned(),
-            filename: filename.to_owned(),
+            mime_type: descriptor.mime_type.to_owned(),
+            filename: descriptor.filename.to_owned(),
             size: metadata.len(),
         })
     }
@@ -158,18 +135,14 @@ impl AttachmentCache {
     pub async fn ensure(
         &self,
         client: &GmailClient,
-        account_id: &str,
-        message_id: &str,
-        attachment_id: &str,
-        filename: &str,
-        mime_type: &str,
+        descriptor: AttachmentDescriptor<'_>,
     ) -> Result<CachedAttachment, String> {
         let cache = self.clone();
-        let account_id = account_id.to_owned();
-        let message_id = message_id.to_owned();
-        let attachment_id = attachment_id.to_owned();
-        let filename = filename.to_owned();
-        let mime_type = mime_type.to_owned();
+        let account_id = descriptor.target.account_id.to_owned();
+        let message_id = descriptor.target.message_id.to_owned();
+        let attachment_id = descriptor.target.attachment_id.to_owned();
+        let filename = descriptor.filename.to_owned();
+        let mime_type = descriptor.mime_type.to_owned();
         if let Some(cached) = tokio::task::spawn_blocking({
             let cache = cache.clone();
             let account_id = account_id.clone();
@@ -178,13 +151,15 @@ impl AttachmentCache {
             let filename = filename.clone();
             let mime_type = mime_type.clone();
             move || {
-                cache.lookup(
-                    &account_id,
-                    &message_id,
-                    &attachment_id,
-                    &filename,
-                    &mime_type,
-                )
+                cache.lookup(AttachmentDescriptor {
+                    target: AttachmentRef {
+                        account_id: &account_id,
+                        message_id: &message_id,
+                        attachment_id: &attachment_id,
+                    },
+                    filename: &filename,
+                    mime_type: &mime_type,
+                })
             }
         })
         .await
@@ -198,11 +173,15 @@ impl AttachmentCache {
             .map_err(|error| error.to_string())?;
         tokio::task::spawn_blocking(move || {
             cache.write_bytes(
-                &account_id,
-                &message_id,
-                &attachment_id,
-                &filename,
-                &mime_type,
+                AttachmentDescriptor {
+                    target: AttachmentRef {
+                        account_id: &account_id,
+                        message_id: &message_id,
+                        attachment_id: &attachment_id,
+                    },
+                    filename: &filename,
+                    mime_type: &mime_type,
+                },
                 &bytes,
             )
         })

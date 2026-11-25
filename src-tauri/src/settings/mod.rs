@@ -5,7 +5,10 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 use tracing_subscriber::filter::LevelFilter;
 
-use crate::storage::{SettingRepository, Storage, StorageError};
+use crate::{
+    ipc::{AppServices, CommandPayload},
+    storage::{SettingRepository, Storage, StorageError},
+};
 
 const WINDOW_STATE_KEY: &str = "windowState";
 const LOG_LEVEL_KEY: &str = "logLevel";
@@ -162,6 +165,7 @@ impl SettingsService {
             .run(|connection| {
                 let values = SettingRepository::list(connection)?
                     .into_iter()
+                    .map(|entry| (entry.key, entry.value))
                     .collect::<HashMap<_, _>>();
                 let mut settings = Settings::default();
                 for (key, value) in values {
@@ -387,26 +391,44 @@ fn live_handler<R: Runtime>(key: &str) -> Option<LiveHandler<R>> {
         .map(|(_, handler)| handler)
 }
 
+#[derive(Deserialize)]
+pub struct WriteSettingRequest {
+    pub key: String,
+    pub value: Value,
+}
+
+impl SettingsService {
+    pub async fn write_live<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        request: WriteSettingRequest,
+    ) -> Result<(), String> {
+        if let Some(handler) = pre_write_handler::<R>(&request.key) {
+            handler(app, &request.value)?;
+        }
+        self.write(request.key.clone(), request.value.clone())
+            .await?;
+        if let Some(handler) = live_handler::<R>(&request.key) {
+            handler(app, &request.value);
+        }
+        Ok(())
+    }
+}
+
 #[tauri::command]
-pub async fn read_settings(service: tauri::State<'_, SettingsService>) -> Result<Settings, String> {
-    Ok(string_try!(service.read().await))
+pub async fn read_settings<R: Runtime>(services: AppServices<'_, R>) -> Result<Settings, String> {
+    Ok(string_try!(services.settings()?.read().await))
 }
 
 #[tauri::command]
 pub async fn write_setting<R: Runtime>(
-    app: AppHandle<R>,
-    service: tauri::State<'_, SettingsService>,
-    key: String,
-    value: Value,
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<WriteSettingRequest>,
 ) -> Result<(), String> {
-    if let Some(handler) = pre_write_handler::<R>(&key) {
-        handler(&app, &value)?;
-    }
-    service.write(key.clone(), value.clone()).await?;
-    if let Some(handler) = live_handler::<R>(&key) {
-        handler(&app, &value);
-    }
-    Ok(())
+    services
+        .settings()?
+        .write_live(services.app(), request)
+        .await
 }
 
 pub fn restore_window<R: Runtime>(window: &WebviewWindow<R>, service: &SettingsService) {

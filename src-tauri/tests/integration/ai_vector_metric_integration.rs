@@ -1,3 +1,4 @@
+use latentmail_lib::storage::{CandidateQuery, EmbeddingModelSpec, MessageBodyUpdate, MessageKey};
 use latentmail_lib::{
     ai::{index, AiService, IndexState},
     storage::{
@@ -118,8 +119,15 @@ async fn a_legacy_table_outranks_paused_and_building_and_fails_the_readiness_che
         AccountAiConfigRepository::set_enabled(&connection, "account", true).unwrap();
         AccountAiConfigRepository::set_base_url(&connection, "account", "http://localhost/v1")
             .unwrap();
-        AccountAiConfigRepository::set_embedding_model(&connection, "account", "embedding", 2)
-            .unwrap();
+        AccountAiConfigRepository::set_embedding_model(
+            &connection,
+            "account",
+            EmbeddingModelSpec {
+                model: "embedding",
+                dimensions: 2,
+            },
+        )
+        .unwrap();
         connection
             .execute_batch("CREATE VIRTUAL TABLE message_vectors_1 USING vec0(embedding float[2])")
             .unwrap();
@@ -167,10 +175,12 @@ fn cosine_distance_scores_a_near_identical_vector_far_above_an_unrelated_one() {
     .unwrap();
     let candidates = RetrievalRepository::candidates(
         &connection,
-        "account",
-        &[1.0, 0.0],
-        10,
-        &RetrievalFilters::default(),
+        &CandidateQuery {
+            account_id: "account",
+            vector: &[1.0, 0.0],
+            limit: 10,
+            filters: &RetrievalFilters::default(),
+        },
     )
     .unwrap();
     let near = candidates
@@ -238,11 +248,15 @@ fn the_invalidation_trigger_follows_an_html_body_change_without_a_truncated_body
     assert_eq!(vector_count(&connection), 1);
     MessageRepository::set_body(
         &connection,
-        "account",
-        "html",
-        Some("<p>second</p>"),
-        None,
-        HtmlPresence::Present,
+        MessageKey {
+            account_id: "account",
+            message_id: "html",
+        },
+        MessageBodyUpdate {
+            html_body: Some("<p>second</p>"),
+            plain_body: None,
+            presence: HtmlPresence::Present,
+        },
     )
     .unwrap();
     assert_eq!(vector_count(&connection), 0);

@@ -1,3 +1,5 @@
+use latentmail_lib::sync::traversal::{BackfillStepContext, FetchPersistRequest};
+use latentmail_lib::sync::{EventSink, QueueRateConfig, SyncEngine, SyncEngineDeps, WorkRegistry};
 use std::sync::{Arc, Mutex};
 
 use latentmail_lib::gmail::GmailClient;
@@ -6,7 +8,6 @@ use latentmail_lib::storage::{
     TraversalCursorRepository, TraversalKind,
 };
 use latentmail_lib::sync::traversal::run_backfill_step;
-use latentmail_lib::sync::{EventSink, SyncEngine, WorkRegistry};
 use wiremock::{
     matchers::{method, path, query_param, query_param_is_missing},
     Mock, MockServer, ResponseTemplate,
@@ -42,7 +43,21 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<serde_json::Value>>>) {
     (sink, events)
 }
 
-fn message_json(id: &str, thread_id: &str, history_id: &str, subject: &str) -> serde_json::Value {
+struct MessageJson<'a> {
+    id: &'a str,
+    thread_id: &'a str,
+    history_id: &'a str,
+    subject: &'a str,
+}
+
+fn message_json(
+    MessageJson {
+        id,
+        thread_id,
+        history_id,
+        subject,
+    }: MessageJson<'_>,
+) -> serde_json::Value {
     serde_json::json!({
         "id": id, "threadId": thread_id, "historyId": history_id,
         "labelIds": ["TRASH", "STARRED"], "snippet": format!("snippet for {id}"),
@@ -113,7 +128,12 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(message_json(id, thread, "10", id)),
+                ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                    id: id,
+                    thread_id: thread,
+                    history_id: "10",
+                    subject: id,
+                })),
             )
             .mount(&server)
             .await;
@@ -129,7 +149,12 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
             pause_queue.pause();
         }
     });
-    let engine = SyncEngine::new(storage.clone(), queue.clone(), registry, sink);
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue.clone(),
+        registry: registry,
+        events: sink,
+    });
     let client = GmailClient::with_base_url("token", server.uri());
     engine.initial_sync("account", client).await.unwrap();
 
@@ -247,7 +272,12 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(message_json(id, thread, "10", id)),
+                ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                    id: id,
+                    thread_id: thread,
+                    history_id: "10",
+                    subject: id,
+                })),
             )
             .mount(&server)
             .await;
@@ -285,7 +315,12 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
             sink_pauses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     });
-    let engine = SyncEngine::new(storage.clone(), queue.clone(), registry, sink);
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue.clone(),
+        registry: registry,
+        events: sink,
+    });
     let client = GmailClient::with_base_url("token", server.uri());
     engine.initial_sync("account", client).await.unwrap();
 
@@ -355,7 +390,12 @@ async fn backfill_enumeration_has_no_label_filter_no_date_bound_and_includes_spa
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
@@ -363,14 +403,14 @@ async fn backfill_enumeration_has_no_label_filter_no_date_bound_and_includes_spa
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri());
 
-    run_backfill_step(
-        &storage,
-        &client.traversal_scoped(),
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        false,
-        None,
-    )
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client.traversal_scoped(),
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await
     .unwrap();
 
@@ -391,21 +431,26 @@ async fn persisted_messages_carry_metadata_membership_and_truncated_body_only() 
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
 
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri());
-    run_backfill_step(
-        &storage,
-        &client.traversal_scoped(),
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        false,
-        None,
-    )
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client.traversal_scoped(),
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await
     .unwrap();
 
@@ -454,7 +499,12 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "First")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "First",
+            })),
         )
         .expect(1)
         .mount(&server)
@@ -469,7 +519,12 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m2"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m2", "t2", "20", "Second")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m2",
+                thread_id: "t2",
+                history_id: "20",
+                subject: "Second",
+            })),
         )
         .mount(&server)
         .await;
@@ -477,26 +532,26 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
 
-    let page_one = run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        false,
-        None,
-    )
+    let page_one = run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await;
     assert!(page_one.is_ok(), "page 1 must commit cleanly");
     assert!(!page_one.unwrap(), "page 1 alone is not the whole backfill");
 
-    let page_two = run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        false,
-        None,
-    )
+    let page_two = run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await;
     assert!(
         page_two.is_err(),
@@ -513,14 +568,14 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     assert!(!cursor.completed);
     drop(connection);
 
-    let second_attempt = run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        false,
-        None,
-    )
+    let second_attempt = run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await;
     assert!(second_attempt.unwrap(), "the resumed page is the last one");
 
@@ -589,7 +644,12 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(message_json(id, thread, "10", id)),
+                ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                    id: id,
+                    thread_id: thread,
+                    history_id: "10",
+                    subject: id,
+                })),
             )
             .mount(&server)
             .await;
@@ -601,8 +661,10 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
     let queue_events = Arc::new(Mutex::new(Vec::new()));
     let sink_events = Arc::clone(&queue_events);
     let queue = latentmail_lib::sync::create_queue_engine_with_events(
-        250,
-        250,
+        QueueRateConfig {
+            rate_per_second: 250,
+            burst: 250,
+        },
         registry.clone(),
         Arc::new(move |name, payload| {
             if name == latentmail_lib::events::QUEUE_ITEM {
@@ -617,7 +679,12 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
             pause_queue.pause();
         }
     });
-    let engine = SyncEngine::new(storage.clone(), queue.clone(), registry, sink);
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue.clone(),
+        registry: registry,
+        events: sink,
+    });
     let client = GmailClient::with_base_url("token", server.uri());
 
     engine
@@ -730,7 +797,12 @@ async fn enqueue_backfill_still_starts_a_chain_when_the_cursor_stopped_short_of_
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m2"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m2", "t2", "20", "Second")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m2",
+                thread_id: "t2",
+                history_id: "20",
+                subject: "Second",
+            })),
         )
         .mount(&server)
         .await;
@@ -757,12 +829,12 @@ async fn enqueue_backfill_still_starts_a_chain_when_the_cursor_stopped_short_of_
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(
-        storage.clone(),
-        queue,
-        registry,
-        latentmail_lib::sync::noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: latentmail_lib::sync::noop_event_sink(),
+    });
 
     engine
         .enqueue_backfill("account", GmailClient::with_base_url("token", server.uri()))
@@ -803,7 +875,12 @@ async fn backfill_runs_normally_alongside_an_unrelated_reconciliation_cursor_row
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
@@ -830,14 +907,14 @@ async fn backfill_runs_normally_alongside_an_unrelated_reconciliation_cursor_row
 
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
 
-    run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        false,
-        None,
-    )
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await
     .unwrap();
 
@@ -936,12 +1013,12 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         .unwrap();
 
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        latentmail_lib::sync::create_queue_engine(250, 250, registry.clone()),
-        registry,
-        latentmail_lib::sync::noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: latentmail_lib::sync::create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: latentmail_lib::sync::noop_event_sink(),
+    });
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
@@ -982,21 +1059,26 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
 
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
 
-    run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        true,
-        None,
-    )
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: true,
+        cache: None,
+    })
     .await
     .unwrap();
 
@@ -1026,31 +1108,38 @@ async fn fetch_and_persist_writes_messages_and_returns_touched_thread_ids() {
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(message_json(
-            "m2",
-            "t1",
-            "11",
-            "Hello again",
-        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m2",
+                thread_id: "t1",
+                history_id: "11",
+                subject: "Hello again",
+            })),
+        )
         .mount(&server)
         .await;
 
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
 
-    let mut thread_ids = latentmail_lib::sync::traversal::fetch_and_persist(
-        &storage,
-        &client,
-        "account",
-        &["m1".to_owned(), "m2".to_owned()],
-        None,
-    )
+    let mut thread_ids = latentmail_lib::sync::traversal::fetch_and_persist(FetchPersistRequest {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        ids: &["m1".to_owned(), "m2".to_owned()],
+        cache: None,
+    })
     .await
     .unwrap();
     thread_ids.sort();
@@ -1100,14 +1189,14 @@ async fn a_completed_cursor_is_not_restarted() {
         .unwrap();
 
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
-    run_backfill_step(
-        &storage,
-        &client,
-        "account",
-        &latentmail_lib::sync::noop_event_sink(),
-        false,
-        None,
-    )
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: false,
+        cache: None,
+    })
     .await
     .unwrap();
 }
@@ -1127,7 +1216,12 @@ async fn progress_events_carry_counts_only_never_a_percentage_or_estimate() {
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
@@ -1135,9 +1229,16 @@ async fn progress_events_carry_counts_only_never_a_percentage_or_estimate() {
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
     let (sink, events) = collecting_sink();
-    run_backfill_step(&storage, &client, "account", &sink, false, None)
-        .await
-        .unwrap();
+    run_backfill_step(BackfillStepContext {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        events: &sink,
+        resumed: false,
+        cache: None,
+    })
+    .await
+    .unwrap();
 
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1);
@@ -1181,7 +1282,12 @@ async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
@@ -1207,12 +1313,12 @@ async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
     }
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(
-        storage.clone(),
-        queue,
-        registry,
-        latentmail_lib::sync::noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: latentmail_lib::sync::noop_event_sink(),
+    });
     let client = GmailClient::with_base_url("token", server.uri());
 
     engine.initial_sync("account", client).await.unwrap();
@@ -1273,7 +1379,14 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
     for id in ["m1", "m2"] {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(message_json(id, id, "10", id)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                    id: id,
+                    thread_id: id,
+                    history_id: "10",
+                    subject: id,
+                })),
+            )
             .mount(&server)
             .await;
     }
@@ -1302,8 +1415,10 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
     let queue_events = Arc::new(Mutex::new(Vec::new()));
     let sink_events = Arc::clone(&queue_events);
     let queue = latentmail_lib::sync::create_queue_engine_with_events(
-        250,
-        250,
+        QueueRateConfig {
+            rate_per_second: 250,
+            burst: 250,
+        },
         registry.clone(),
         Arc::new(move |name, payload| {
             if name == latentmail_lib::events::QUEUE_ITEM {
@@ -1311,12 +1426,12 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
             }
         }),
     );
-    let engine = SyncEngine::new(
-        storage.clone(),
-        queue,
-        registry,
-        latentmail_lib::sync::noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: latentmail_lib::sync::noop_event_sink(),
+    });
     let client = GmailClient::with_base_url("token", server.uri());
 
     engine.initial_sync("account", client).await.unwrap();
@@ -1364,28 +1479,50 @@ async fn a_newer_traversal_snapshot_removes_labels_the_message_lost_upstream() {
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
         )
         .mount(&server)
         .await;
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
     let ids = ["m1".to_owned()];
-    latentmail_lib::sync::traversal::fetch_and_persist(&storage, &client, "account", &ids, None)
-        .await
-        .unwrap();
+    latentmail_lib::sync::traversal::fetch_and_persist(FetchPersistRequest {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        ids: &ids,
+        cache: None,
+    })
+    .await
+    .unwrap();
 
     server.reset().await;
-    let mut newer = message_json("m1", "t1", "20", "Hello");
+    let mut newer = message_json(MessageJson {
+        id: "m1",
+        thread_id: "t1",
+        history_id: "20",
+        subject: "Hello",
+    });
     newer["labelIds"] = serde_json::json!(["INBOX"]);
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(newer))
         .mount(&server)
         .await;
-    latentmail_lib::sync::traversal::fetch_and_persist(&storage, &client, "account", &ids, None)
-        .await
-        .unwrap();
+    latentmail_lib::sync::traversal::fetch_and_persist(FetchPersistRequest {
+        storage: &storage,
+        client: &client,
+        account_id: "account",
+        ids: &ids,
+        cache: None,
+    })
+    .await
+    .unwrap();
 
     let connection = storage.connection().unwrap();
     assert_eq!(

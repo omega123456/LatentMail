@@ -23,8 +23,7 @@ pub struct UpdateCheckDto {
 }
 
 #[cfg(not(feature = "test-utils"))]
-#[tauri::command]
-pub async fn check_for_update<R: Runtime>(app: AppHandle<R>) -> Result<UpdateCheckDto, String> {
+async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<UpdateCheckDto, String> {
     let current_version = app.package_info().version.to_string();
     let update = app
         .updater()
@@ -44,8 +43,7 @@ pub async fn check_for_update<R: Runtime>(app: AppHandle<R>) -> Result<UpdateChe
 }
 
 #[cfg(feature = "test-utils")]
-#[tauri::command]
-pub async fn check_for_update<R: Runtime>(app: AppHandle<R>) -> Result<UpdateCheckDto, String> {
+async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<UpdateCheckDto, String> {
     Ok(UpdateCheckDto {
         current_version: app.package_info().version.to_string(),
         available: None,
@@ -53,8 +51,7 @@ pub async fn check_for_update<R: Runtime>(app: AppHandle<R>) -> Result<UpdateChe
 }
 
 #[cfg(not(feature = "test-utils"))]
-#[tauri::command]
-pub async fn install_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let update = app
         .updater()
         .map_err(|error| error.to_string())?
@@ -73,7 +70,16 @@ pub async fn install_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
 }
 
 #[cfg(feature = "test-utils")]
-#[tauri::command]
-pub async fn install_update<R: Runtime>(_app: AppHandle<R>) -> Result<(), String> {
+async fn install<R: Runtime>(_app: &AppHandle<R>) -> Result<(), String> {
     Err("Update installation is unsupported in this build".to_owned())
+}
+
+#[tauri::command]
+pub async fn check_for_update<R: Runtime>(app: AppHandle<R>) -> Result<UpdateCheckDto, String> {
+    check(&app).await
+}
+
+#[tauri::command]
+pub async fn install_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    install(&app).await
 }

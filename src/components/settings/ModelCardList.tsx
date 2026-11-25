@@ -31,12 +31,17 @@ function modelDetail(
   return owner;
 }
 
-function resolveShownModel(
-  loadingId: string | null | undefined,
-  selected: AiModel | null,
-  selectedId: string | null,
-  selectedDimension: number | null | undefined,
-): ShownModel | null {
+function resolveShownModel({
+  loadingId,
+  selected,
+  selectedId,
+  selectedDimension,
+}: {
+  loadingId: string | null | undefined;
+  selected: AiModel | null;
+  selectedId: string | null;
+  selectedDimension: number | null | undefined;
+}): ShownModel | null {
   if (loadingId) return { id: loadingId, detail: 'Loading model…' };
   if (!selected) return null;
   return { id: selected.id, detail: modelDetail(selected, selectedId, selectedDimension) };
@@ -119,7 +124,7 @@ export function ModelCardList({
   );
   const selected = models.find((model) => model.id === selectedId) ?? null;
   const isLoading = Boolean(loadingId);
-  const shown = resolveShownModel(loadingId, selected, selectedId, selectedDimension);
+  const shown = resolveShownModel({ loadingId, selected, selectedId, selectedDimension });
 
   return (
     <div className="flex flex-col gap-2.25">

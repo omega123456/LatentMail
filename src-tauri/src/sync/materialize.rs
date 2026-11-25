@@ -2,10 +2,17 @@ use crate::{
     gmail::GmailMessage,
     storage::{
         Attachment, AttachmentRepository, HtmlPresence, InlinePart, LabelRepository, Message,
-        MessageRepository, ThreadRepository,
+        MessageKey, MessageRepository, RecipientRolesUpdate, ThreadRepository,
     },
 };
 use rusqlite::Connection;
+
+pub struct DraftReplacement<'a> {
+    pub account_id: &'a str,
+    pub draft_id: &'a str,
+    pub replacement: &'a GmailMessage,
+    pub consumed: bool,
+}
 
 pub fn attachment_records(value: &GmailMessage) -> Vec<Attachment> {
     attachment_records_from_parts(&value.attachment_parts)
@@ -51,17 +58,22 @@ pub fn persist(
     account_id: &str,
     value: &GmailMessage,
 ) -> rusqlite::Result<()> {
+    let key = MessageKey {
+        account_id: account_id,
+        message_id: &value.id,
+    };
     if MessageRepository::write_full_state(connection, &message(account_id, value))? {
         MessageRepository::set_recipient_roles(
             connection,
-            account_id,
-            &value.id,
-            &value.to_recipients,
-            &value.cc_recipients,
-            &value.bcc_recipients,
-            value.rfc_references.as_deref(),
+            key,
+            RecipientRolesUpdate {
+                to: &value.to_recipients,
+                cc: &value.cc_recipients,
+                bcc: &value.bcc_recipients,
+                references: value.rfc_references.as_deref(),
+            },
         )?;
-        write_label_membership(connection, account_id, &value.id, &value.label_ids)?;
+        write_label_membership(connection, key, &value.label_ids)?;
         let parts = value
             .inline_parts
             .iter()
@@ -71,60 +83,60 @@ pub fn persist(
                 bytes: part.bytes.clone(),
             })
             .collect::<Vec<_>>();
-        MessageRepository::replace_inline_parts(connection, account_id, &value.id, &parts)?;
+        MessageRepository::replace_inline_parts(connection, key, &parts)?;
     }
 
-    AttachmentRepository::replace_for_message(
-        connection,
-        account_id,
-        &value.id,
-        &attachment_records(value),
-    )?;
+    AttachmentRepository::replace_for_message(connection, key, &attachment_records(value))?;
     Ok(())
 }
 
 pub(crate) fn write_label_membership(
     connection: &Connection,
-    account_id: &str,
-    message_id: &str,
+    message: MessageKey<'_>,
     label_ids: &[String],
 ) -> rusqlite::Result<()> {
     for label_id in label_ids {
-        LabelRepository::ensure_placeholder(connection, account_id, label_id)?;
+        LabelRepository::ensure_placeholder(connection, message.account_id, label_id)?;
     }
-    MessageRepository::overwrite_membership(connection, account_id, message_id, label_ids)
+    MessageRepository::overwrite_membership(connection, message, label_ids)
 }
 
 pub fn replace_draft(
     connection: &Connection,
-    account_id: &str,
-    draft_id: &str,
-    replacement: &GmailMessage,
-    consumed: bool,
+    update: DraftReplacement<'_>,
 ) -> rusqlite::Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    replace_draft_rows(&transaction, account_id, draft_id, replacement, consumed)?;
+    replace_draft_rows(&transaction, update)?;
     transaction.commit()
 }
 
 pub(crate) fn replace_draft_rows(
     connection: &Connection,
-    account_id: &str,
-    draft_id: &str,
-    replacement: &GmailMessage,
-    consumed: bool,
+    update: DraftReplacement<'_>,
 ) -> rusqlite::Result<()> {
-    let old_thread = MessageRepository::delete_by_draft_id(connection, account_id, draft_id)?;
-    persist(connection, account_id, replacement)?;
-    if !consumed {
-        MessageRepository::set_draft_id(connection, account_id, &replacement.id, draft_id)?;
+    let old_thread =
+        MessageRepository::delete_by_draft_id(connection, update.account_id, update.draft_id)?;
+    persist(connection, update.account_id, update.replacement)?;
+    if !update.consumed {
+        MessageRepository::set_draft_id(
+            connection,
+            MessageKey {
+                account_id: update.account_id,
+                message_id: &update.replacement.id,
+            },
+            update.draft_id,
+        )?;
     }
-    if consumed {
-        crate::storage::ComposeDraftMetadataRepository::remove(connection, account_id, draft_id)?;
+    if update.consumed {
+        crate::storage::ComposeDraftMetadataRepository::remove(
+            connection,
+            update.account_id,
+            update.draft_id,
+        )?;
     }
-    ThreadRepository::recompute(connection, account_id, &replacement.thread_id)?;
-    if let Some(thread) = old_thread.filter(|thread| thread != &replacement.thread_id) {
-        ThreadRepository::recompute(connection, account_id, &thread)?;
+    ThreadRepository::recompute(connection, update.account_id, &update.replacement.thread_id)?;
+    if let Some(thread) = old_thread.filter(|thread| thread != &update.replacement.thread_id) {
+        ThreadRepository::recompute(connection, update.account_id, &thread)?;
     }
     Ok(())
 }

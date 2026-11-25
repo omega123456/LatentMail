@@ -13,9 +13,11 @@ describe('queryKeys', () => {
       'thread-1',
     ]);
     expect(
-      queryKeys.conversation('account-1', 'thread-1', 'policy', {
-        kind: 'mailbox',
-        mailboxId: 'INBOX',
+      queryKeys.conversation({
+        accountId: 'account-1',
+        threadId: 'thread-1',
+        policyKey: 'policy',
+        entryScope: { kind: 'mailbox', mailboxId: 'INBOX' },
       }),
     ).toEqual([
       'conversation',

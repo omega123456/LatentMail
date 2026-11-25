@@ -87,6 +87,37 @@ impl<Value: Clone> AccountMap<Value> {
     }
 }
 
+pub struct EnabledUpdate {
+    pub account_id: String,
+    pub enabled: bool,
+}
+
+pub struct BaseUrlUpdate {
+    pub account_id: String,
+    pub base_url: String,
+}
+
+pub struct ApiKeyUpdate {
+    pub account_id: String,
+    pub api_key: String,
+}
+
+pub struct ChatModelUpdate {
+    pub account_id: String,
+    pub model: Option<String>,
+}
+
+pub struct EmbeddingModelUpdate {
+    pub account_id: String,
+    pub model: String,
+    pub dimensions: i64,
+}
+
+pub struct SelectEmbeddingRequest {
+    pub account_id: String,
+    pub model: String,
+}
+
 #[derive(Clone)]
 pub struct AiService {
     storage: Storage,
@@ -96,6 +127,7 @@ pub struct AiService {
     index_states: AccountMap<IndexState>,
     chat: chat::ChatRegistry,
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum IndexState {
@@ -109,6 +141,7 @@ pub enum IndexState {
     Unavailable,
     NeedsRebuild,
 }
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfigDto {
@@ -135,9 +168,11 @@ impl AiService {
             chat: chat::ChatRegistry::default(),
         }
     }
+
     pub fn chat(&self) -> &chat::ChatRegistry {
         &self.chat
     }
+
     pub async fn chat_ready(&self, account_id: &str) -> Result<(), String> {
         let config = self.config_for(account_id).await?;
         if !config.enabled {
@@ -158,6 +193,7 @@ impl AiService {
         }
         Ok(())
     }
+
     pub async fn configs(&self) -> Result<Vec<AiConfigDto>, String> {
         let rows = self
             .storage
@@ -191,6 +227,7 @@ impl AiService {
             .map_err(|error| error.to_string())?;
         Ok(rows)
     }
+
     pub async fn config_for(
         &self,
         account_id: &str,
@@ -204,6 +241,7 @@ impl AiService {
             .await
             .map_err(|error| error.to_string())
     }
+
     pub async fn require_account(&self, account_id: &str) -> Result<(), String> {
         let account_id = account_id.to_owned();
         self.storage
@@ -213,24 +251,68 @@ impl AiService {
             .ok_or_else(|| "Account does not exist".to_owned())
             .map(|_| ())
     }
+
+    pub async fn provider_for(&self, account_id: &str) -> Result<provider::Provider, String> {
+        let config = self.config_for(account_id).await?;
+        let base_url = config
+            .base_url
+            .ok_or_else(|| "Save an API root first".to_owned())?;
+        provider::Provider::new(&base_url, credentials::load(account_id)?)
+    }
+
+    pub async fn test_connection(&self, account_id: &str) -> Result<usize, String> {
+        Ok(self.list_models(account_id).await?.len())
+    }
+
+    pub async fn list_models(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<provider::ProviderModel>, String> {
+        self.provider_for(account_id)
+            .await?
+            .models()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn set_api_key<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        update: ApiKeyUpdate,
+    ) -> Result<(), String> {
+        if update.api_key.is_empty() {
+            return Err("API key cannot be empty".to_owned());
+        }
+        self.require_account(&update.account_id).await?;
+        credentials::save(&update.account_id, &update.api_key)?;
+        emit_config_changed(app, &update.account_id)
+    }
+
+    pub async fn clear_api_key<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        account_id: &str,
+    ) -> Result<(), String> {
+        self.require_account(account_id).await?;
+        credentials::clear(account_id)?;
+        emit_config_changed(app, account_id)
+    }
+
     pub async fn set_enabled<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        account_id: String,
-        enabled: bool,
+        update: EnabledUpdate,
     ) -> Result<(), String> {
-        let id = account_id.clone();
+        let id = update.account_id.clone();
+        let enabled = update.enabled;
         self.storage
             .run(move |connection| AccountAiConfigRepository::set_enabled(connection, &id, enabled))
             .await
             .map_err(|error| error.to_string())?;
-        self.sync_enabled_index_state(&account_id, enabled)?;
-        app.emit(
-            crate::events::AI_CONFIG,
-            serde_json::json!({"accountId":account_id}),
-        )
-        .map_err(|error| error.to_string())
+        self.sync_enabled_index_state(&update.account_id, enabled)?;
+        emit_config_changed(app, &update.account_id)
     }
+
     fn sync_enabled_index_state(&self, account_id: &str, enabled: bool) -> Result<(), String> {
         if enabled {
             return self.clear_index_state(account_id);
@@ -238,54 +320,45 @@ impl AiService {
         self.clear_index_error(account_id)?;
         self.set_index_state(account_id, IndexState::Unavailable)
     }
+
     pub async fn set_base_url<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        account_id: String,
-        base_url: String,
+        update: BaseUrlUpdate,
     ) -> Result<(), String> {
-        let root = provider::api_root(&base_url)?.to_string();
-        let id = account_id.clone();
-        let stored = root.clone();
+        let root = provider::api_root(&update.base_url)?.to_string();
+        let id = update.account_id.clone();
         self.storage
-            .run(move |connection| {
-                AccountAiConfigRepository::set_base_url(connection, &id, &stored)
-            })
+            .run(move |connection| AccountAiConfigRepository::set_base_url(connection, &id, &root))
             .await
             .map_err(|error| error.to_string())?;
-        app.emit(
-            crate::events::AI_CONFIG,
-            serde_json::json!({"accountId":account_id}),
-        )
-        .map_err(|error| error.to_string())
+        emit_config_changed(app, &update.account_id)
     }
+
     pub async fn set_chat_model<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        account_id: String,
-        model: Option<String>,
+        update: ChatModelUpdate,
     ) -> Result<(), String> {
-        let id = account_id.clone();
+        let id = update.account_id.clone();
+        let model = update.model;
         self.storage
             .run(move |connection| {
                 AccountAiConfigRepository::set_chat_model(connection, &id, model.as_deref())
             })
             .await
             .map_err(|error| error.to_string())?;
-        app.emit(
-            crate::events::AI_CONFIG,
-            serde_json::json!({"accountId":account_id}),
-        )
-        .map_err(|error| error.to_string())
+        emit_config_changed(app, &update.account_id)
     }
+
     pub async fn set_embedding_model<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        account_id: String,
-        model: String,
-        dimensions: i64,
+        update: EmbeddingModelUpdate,
     ) -> Result<(), String> {
-        let id = account_id.clone();
+        let id = update.account_id.clone();
+        let model = update.model;
+        let dimensions = update.dimensions;
         self.storage
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
@@ -294,20 +367,80 @@ impl AiService {
                 AccountAiConfigRepository::set_embedding_model(
                     &transaction,
                     &id,
-                    &model,
-                    dimensions,
+                    crate::storage::EmbeddingModelSpec {
+                        model: &model,
+                        dimensions: dimensions,
+                    },
                 )?;
                 AccountAiConfigRepository::set_index_paused(&transaction, &id, false)?;
                 transaction.commit()
             })
             .await
             .map_err(|error| error.to_string())?;
-        app.emit(
-            crate::events::AI_CONFIG,
-            serde_json::json!({"accountId":account_id}),
-        )
-        .map_err(|error| error.to_string())
+        emit_config_changed(app, &update.account_id)
     }
+
+    pub async fn select_embedding_model<R: Runtime>(
+        &self,
+        context: index::IndexContext<R>,
+        request: SelectEmbeddingRequest,
+    ) -> Result<(), String> {
+        let vector = self
+            .provider_for(&request.account_id)
+            .await?
+            .embed(
+                &request.model,
+                vec!["LatentMail embedding validation".to_owned()],
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Provider returned no embedding".to_owned())?;
+        if vector.is_empty() {
+            return Err("Provider returned an empty embedding".to_owned());
+        }
+        let dimensions = i64::try_from(vector.len())
+            .map_err(|_| "Embedding dimension is too large".to_owned())?;
+        self.begin_reconfiguration(&request.account_id)?;
+        context.sync.cancel_embedding(&request.account_id).await;
+        let queued_context = context.clone();
+        let queued_account = request.account_id.clone();
+        let model = request.model;
+        let queued = context
+            .sync
+            .enqueue_embedding(
+                crate::sync::EmbeddingJob {
+                    account_id: &request.account_id,
+                    description: "Change embedding model".to_owned(),
+                },
+                async move {
+                    let changed = queued_context
+                        .service
+                        .set_embedding_model(
+                            &queued_context.app,
+                            EmbeddingModelUpdate {
+                                account_id: queued_account.clone(),
+                                model: model,
+                                dimensions: dimensions,
+                            },
+                        )
+                        .await;
+                    queued_context
+                        .service
+                        .finish_reconfiguration(&queued_account)?;
+                    changed?;
+                    index::enqueue(queued_context, queued_account).await
+                },
+            )
+            .await
+            .map_err(|error| error.to_string());
+        if queued.is_err() {
+            self.finish_reconfiguration(&request.account_id)?;
+        }
+        queued
+    }
+
     pub fn storage(&self) -> Storage {
         self.storage.clone()
     }
@@ -369,6 +502,15 @@ impl AiService {
             .map_err(|error| error.to_string())
     }
 }
+
+fn emit_config_changed<R: Runtime>(app: &AppHandle<R>, account_id: &str) -> Result<(), String> {
+    app.emit(
+        crate::events::AI_CONFIG,
+        serde_json::json!({"accountId": account_id}),
+    )
+    .map_err(|error| error.to_string())
+}
+
 pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {
     let connection = storage.connection().map_err(|error| error.to_string())?;
     for config in AccountAiConfigRepository::list(&connection).map_err(|error| error.to_string())? {

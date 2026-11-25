@@ -1,3 +1,7 @@
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey, ThreadPageQuery};
+use latentmail_lib::sync::{
+    EventSink, SyncEngine, SyncEngineDeps, ThreadPageDirection, WorkRegistry,
+};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -6,7 +10,6 @@ use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
     Storage, ThreadRepository,
 };
-use latentmail_lib::sync::{EventSink, SyncEngine, WorkRegistry};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, Request, Respond, ResponseTemplate,
@@ -103,7 +106,15 @@ fn engine_with_labels(
     });
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new_with_clock(storage.clone(), queue, registry, sink, fixture_now);
+    let engine = SyncEngine::new_with_clock(
+        SyncEngineDeps {
+            storage: storage.clone(),
+            queue: queue,
+            registry: registry,
+            events: sink,
+        },
+        fixture_now,
+    );
     (engine, storage, directory, events)
 }
 
@@ -199,13 +210,44 @@ async fn deleting_a_remote_label_drops_its_thread_label_rows() {
     ]);
     let connection = storage.connection().unwrap();
     MessageRepository::write_full_state(&connection, &seed_message("m1", "t1")).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_9", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "Label_9",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     assert_eq!(
-        ThreadRepository::list_paginated(&connection, "account", Some("Label_9"), None, 10)
-            .unwrap()
-            .len(),
+        ThreadRepository::list_paginated(
+            &connection,
+            ThreadPageQuery {
+                account_id: "account",
+                label_id: Some("Label_9"),
+                cursor: None,
+                limit: 10,
+                direction: ThreadPageDirection::default()
+            }
+        )
+        .unwrap()
+        .len(),
         1
     );
     drop(connection);
@@ -216,15 +258,31 @@ async fn deleting_a_remote_label_drops_its_thread_label_rows() {
         .unwrap();
 
     let connection = storage.connection().unwrap();
-    assert!(
-        ThreadRepository::list_paginated(&connection, "account", Some("Label_9"), None, 10)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(ThreadRepository::list_paginated(
+        &connection,
+        ThreadPageQuery {
+            account_id: "account",
+            label_id: Some("Label_9"),
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default()
+        }
+    )
+    .unwrap()
+    .is_empty());
     assert_eq!(
-        ThreadRepository::list_paginated(&connection, "account", Some("INBOX"), None, 10)
-            .unwrap()
-            .len(),
+        ThreadRepository::list_paginated(
+            &connection,
+            ThreadPageQuery {
+                account_id: "account",
+                label_id: Some("INBOX"),
+                cursor: None,
+                limit: 10,
+                direction: ThreadPageDirection::default()
+            }
+        )
+        .unwrap()
+        .len(),
         1
     );
 }
@@ -300,9 +358,18 @@ fn remote_label(id: &str, name: &str) -> serde_json::Value {
 
 fn labelled_thread_count(storage: &Storage, label_id: &str) -> usize {
     let connection = storage.connection().unwrap();
-    ThreadRepository::list_paginated(&connection, "account", Some(label_id), None, 10)
-        .unwrap()
-        .len()
+    ThreadRepository::list_paginated(
+        &connection,
+        ThreadPageQuery {
+            account_id: "account",
+            label_id: Some(label_id),
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap()
+    .len()
 }
 
 #[tokio::test]
@@ -341,10 +408,30 @@ async fn a_remote_delete_after_a_local_delete_still_prunes_the_last_label() {
         let message = format!("m{index}");
         let thread = format!("t{index}");
         MessageRepository::write_full_state(&connection, &seed_message(&message, &thread)).unwrap();
-        MessageRepository::set_label_membership(&connection, "account", &message, "INBOX", true)
-            .unwrap();
-        MessageRepository::set_label_membership(&connection, "account", &message, label, true)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: &message,
+            },
+            LabelMembershipChange {
+                label_id: "INBOX",
+                present: true,
+            },
+        )
+        .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: &message,
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: true,
+            },
+        )
+        .unwrap();
         ThreadRepository::recompute(&connection, "account", &thread).unwrap();
     }
     drop(connection);

@@ -1,5 +1,7 @@
 use chrono::{Duration, Utc};
-use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheAnswer, CacheDomain};
+use latentmail_lib::avatars::cache::{
+    hash_key, AvatarCache, CacheAnswer, CacheDomain, CachedAvatar,
+};
 use latentmail_lib::storage::{
     AvatarCacheOutcome, AvatarCacheRecord, AvatarCacheRepository, Storage,
 };
@@ -36,7 +38,11 @@ async fn store_hit_surfaces_a_readable_error_when_the_target_path_cannot_be_writ
     let (cache, _directory) = cache();
 
     let error = cache
-        .store_hit("nested/missing-dir-key", CacheDomain::Sender, b"bytes")
+        .store_hit(CachedAvatar {
+            cache_key: "nested/missing-dir-key",
+            domain: CacheDomain::Sender,
+            png_bytes: b"bytes",
+        })
         .await
         .unwrap_err();
     assert!(!error.is_empty());
@@ -79,7 +85,11 @@ async fn store_hit_surfaces_a_readable_error_when_the_cache_record_cannot_be_per
     }
 
     let error = cache
-        .store_hit("unindexed-key", CacheDomain::Sender, b"bytes")
+        .store_hit(CachedAvatar {
+            cache_key: "unindexed-key",
+            domain: CacheDomain::Sender,
+            png_bytes: b"bytes",
+        })
         .await
         .unwrap_err();
     assert!(!error.is_empty());
@@ -156,7 +166,11 @@ async fn a_cache_miss_answers_stale_and_a_stored_hit_answers_fresh_with_a_path()
     );
 
     let path = cache
-        .store_hit(&key, CacheDomain::Sender, b"not-really-a-png")
+        .store_hit(CachedAvatar {
+            cache_key: &key,
+            domain: CacheDomain::Sender,
+            png_bytes: b"not-really-a-png",
+        })
         .await
         .unwrap();
     assert!(path.exists());
@@ -185,12 +199,22 @@ async fn a_stored_miss_answers_fresh_with_no_path_and_writes_no_file() {
     assert_eq!(count, 0);
 }
 
-async fn seeded(
-    cache: &AvatarCache,
-    storage_path: &std::path::Path,
-    key: &str,
+struct SeededRecord<'a> {
+    cache: &'a AvatarCache,
+    storage_path: &'a std::path::Path,
+    key: &'a str,
     outcome: AvatarCacheOutcome,
     age: Duration,
+}
+
+async fn seeded(
+    SeededRecord {
+        cache,
+        storage_path,
+        key,
+        outcome,
+        age,
+    }: SeededRecord<'_>,
 ) {
     let storage = Storage::open(storage_path).unwrap();
     let record = AvatarCacheRecord {
@@ -214,13 +238,13 @@ async fn sender_positive_hits_expire_after_thirty_days_not_before() {
     let cache = AvatarCache::new(storage, directory.path().join("avatar-cache")).unwrap();
     let key = hash_key("fresh-enough.example");
 
-    seeded(
-        &cache,
-        &db_path,
-        &key,
-        AvatarCacheOutcome::Hit,
-        Duration::days(29),
-    )
+    seeded(SeededRecord {
+        cache: &cache,
+        storage_path: &db_path,
+        key: &key,
+        outcome: AvatarCacheOutcome::Hit,
+        age: Duration::days(29),
+    })
     .await;
     assert!(matches!(
         cache.answer(&key, CacheDomain::Sender).await,
@@ -228,13 +252,13 @@ async fn sender_positive_hits_expire_after_thirty_days_not_before() {
     ));
 
     let expired_key = hash_key("too-old.example");
-    seeded(
-        &cache,
-        &db_path,
-        &expired_key,
-        AvatarCacheOutcome::Hit,
-        Duration::days(31),
-    )
+    seeded(SeededRecord {
+        cache: &cache,
+        storage_path: &db_path,
+        key: &expired_key,
+        outcome: AvatarCacheOutcome::Hit,
+        age: Duration::days(31),
+    })
     .await;
     assert_eq!(
         cache.answer(&expired_key, CacheDomain::Sender).await,
@@ -250,13 +274,13 @@ async fn sender_negative_misses_expire_after_seven_days_not_before() {
     let cache = AvatarCache::new(storage, directory.path().join("avatar-cache")).unwrap();
 
     let fresh_key = hash_key("checked-recently.example");
-    seeded(
-        &cache,
-        &db_path,
-        &fresh_key,
-        AvatarCacheOutcome::Miss,
-        Duration::days(6),
-    )
+    seeded(SeededRecord {
+        cache: &cache,
+        storage_path: &db_path,
+        key: &fresh_key,
+        outcome: AvatarCacheOutcome::Miss,
+        age: Duration::days(6),
+    })
     .await;
     assert_eq!(
         cache.answer(&fresh_key, CacheDomain::Sender).await,
@@ -264,13 +288,13 @@ async fn sender_negative_misses_expire_after_seven_days_not_before() {
     );
 
     let expired_key = hash_key("checked-a-while-ago.example");
-    seeded(
-        &cache,
-        &db_path,
-        &expired_key,
-        AvatarCacheOutcome::Miss,
-        Duration::days(8),
-    )
+    seeded(SeededRecord {
+        cache: &cache,
+        storage_path: &db_path,
+        key: &expired_key,
+        outcome: AvatarCacheOutcome::Miss,
+        age: Duration::days(8),
+    })
     .await;
     assert_eq!(
         cache.answer(&expired_key, CacheDomain::Sender).await,
@@ -286,13 +310,13 @@ async fn account_cache_expires_after_one_day_for_both_outcomes() {
     let cache = AvatarCache::new(storage, directory.path().join("avatar-cache")).unwrap();
 
     let fresh_key = hash_key("account-fresh");
-    seeded(
-        &cache,
-        &db_path,
-        &fresh_key,
-        AvatarCacheOutcome::Hit,
-        Duration::hours(23),
-    )
+    seeded(SeededRecord {
+        cache: &cache,
+        storage_path: &db_path,
+        key: &fresh_key,
+        outcome: AvatarCacheOutcome::Hit,
+        age: Duration::hours(23),
+    })
     .await;
     assert!(matches!(
         cache.answer(&fresh_key, CacheDomain::Account).await,
@@ -300,13 +324,13 @@ async fn account_cache_expires_after_one_day_for_both_outcomes() {
     ));
 
     let expired_key = hash_key("account-stale");
-    seeded(
-        &cache,
-        &db_path,
-        &expired_key,
-        AvatarCacheOutcome::Miss,
-        Duration::hours(25),
-    )
+    seeded(SeededRecord {
+        cache: &cache,
+        storage_path: &db_path,
+        key: &expired_key,
+        outcome: AvatarCacheOutcome::Miss,
+        age: Duration::hours(25),
+    })
     .await;
     assert_eq!(
         cache.answer(&expired_key, CacheDomain::Account).await,

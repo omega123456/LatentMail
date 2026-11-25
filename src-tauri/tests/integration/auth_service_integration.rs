@@ -1,14 +1,17 @@
+use latentmail_lib::auth::{
+    load_refresh_token, parse_callback, CodeExchangeRequest, SaveAccountRequest,
+};
+use latentmail_lib::ipc::{AccountIdRequest, AppServices, CommandPayload};
+use latentmail_lib::storage::{Account, AccountRepository, Storage};
 use std::sync::{Arc, Mutex};
 
+use crate::support::app;
 use latentmail_lib::auth::{
     self, begin_reauthentication, begin_sign_in, initialize, list_accounts, profile, receive_code,
     save_refresh_token, AuthService,
 };
-use latentmail_lib::auth::{load_refresh_token, parse_callback};
-use latentmail_lib::storage::{Account, AccountRepository, Storage};
 use tauri::Manager;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::support::app;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -26,7 +29,11 @@ async fn accounts_lists_what_is_persisted() {
     assert_eq!(service.accounts().await.unwrap(), Vec::new());
 
     let saved = service
-        .save_account("me@example.com".into(), "refresh-token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "me@example.com".into(),
+            refresh_token: "refresh-token".into(),
+            target: None,
+        })
         .await
         .unwrap();
     assert_eq!(saved.email, "me@example.com");
@@ -45,17 +52,21 @@ async fn accounts_lists_what_is_persisted() {
 async fn save_account_reconnects_an_existing_account_by_target_id() {
     let (service, _directory) = service_with_storage();
     service
-        .save_account("me@example.com".into(), "first-token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "me@example.com".into(),
+            refresh_token: "first-token".into(),
+            target: None,
+        })
         .await
         .unwrap();
     let account_id = service.accounts().await.unwrap()[0].id.clone();
 
     service
-        .save_account(
-            "me@example.com".into(),
-            "second-token".into(),
-            Some(account_id.clone()),
-        )
+        .save_account(SaveAccountRequest {
+            email: "me@example.com".into(),
+            refresh_token: "second-token".into(),
+            target: Some(account_id.clone()),
+        })
         .await
         .unwrap();
 
@@ -68,17 +79,21 @@ async fn save_account_reconnects_an_existing_account_by_target_id() {
 async fn save_account_rejects_a_target_whose_email_does_not_match() {
     let (service, _directory) = service_with_storage();
     service
-        .save_account("first@example.com".into(), "token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "first@example.com".into(),
+            refresh_token: "token".into(),
+            target: None,
+        })
         .await
         .unwrap();
     let account_id = service.accounts().await.unwrap()[0].id.clone();
 
     let result = service
-        .save_account(
-            "second@example.com".into(),
-            "token".into(),
-            Some(account_id),
-        )
+        .save_account(SaveAccountRequest {
+            email: "second@example.com".into(),
+            refresh_token: "token".into(),
+            target: Some(account_id),
+        })
         .await;
 
     assert!(result.is_err());
@@ -88,7 +103,11 @@ async fn save_account_rejects_a_target_whose_email_does_not_match() {
 async fn mark_needs_reauthentication_emits_account_state_and_rejects_unknown_accounts() {
     let (service, _directory) = service_with_storage();
     service
-        .save_account("me@example.com".into(), "token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "me@example.com".into(),
+            refresh_token: "token".into(),
+            target: None,
+        })
         .await
         .unwrap();
     let account_id = service.accounts().await.unwrap()[0].id.clone();
@@ -258,11 +277,11 @@ async fn refresh_access_token_marks_reauthentication_after_three_consecutive_fai
 
     let (service, _directory) = service_with_storage();
     service
-        .save_account(
-            "flaky@example.com".into(),
-            "stored-refresh-token".into(),
-            None,
-        )
+        .save_account(SaveAccountRequest {
+            email: "flaky@example.com".into(),
+            refresh_token: "stored-refresh-token".into(),
+            target: None,
+        })
         .await
         .unwrap();
     let account_id = "flaky@example.com".to_owned();
@@ -295,7 +314,11 @@ async fn assert_three_failures_leave_reauthentication_unmarked(
     std::env::set_var("LATENTMAIL_GOOGLE_TOKEN_URL", token_url);
     let (service, _directory) = service_with_storage();
     service
-        .save_account(account_id.into(), "stored-refresh-token".into(), None)
+        .save_account(SaveAccountRequest {
+            email: account_id.into(),
+            refresh_token: "stored-refresh-token".into(),
+            target: None,
+        })
         .await
         .unwrap();
     save_refresh_token(account_id, "stored-refresh-token").unwrap();
@@ -433,18 +456,19 @@ async fn list_accounts_begin_sign_in_and_begin_reauthentication_commands() {
     let application = app();
     application.manage(service);
 
-    let accounts = list_accounts(application.state()).await.unwrap();
+    let accounts = list_accounts(AppServices::new(application.handle()))
+        .await
+        .unwrap();
     assert!(accounts.is_empty());
 
-    assert!(
-        begin_sign_in(application.handle().clone(), application.state())
-            .await
-            .is_err()
-    );
+    assert!(begin_sign_in(AppServices::new(application.handle()))
+        .await
+        .is_err());
     assert!(begin_reauthentication(
-        application.handle().clone(),
-        application.state(),
-        "any".into()
+        AppServices::new(application.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: "any".into()
+        })
     )
     .await
     .is_err());
@@ -531,9 +555,14 @@ async fn exchange_code_round_trips_against_a_mock_token_endpoint() {
 
     let authorization = auth::authorization("client", "http://127.0.0.1:0").unwrap();
     let code = oauth2::AuthorizationCode::new("code".into());
-    let token = auth::exchange_code("client", "http://127.0.0.1:0", code, authorization.verifier)
-        .await
-        .unwrap();
+    let token = auth::exchange_code(CodeExchangeRequest {
+        client_id: "client",
+        redirect: "http://127.0.0.1:0",
+        code: code,
+        verifier: authorization.verifier,
+    })
+    .await
+    .unwrap();
 
     use oauth2::TokenResponse;
     assert_eq!(token.access_token().secret(), "exchanged-access-token");
@@ -668,24 +697,24 @@ async fn exchange_and_profile_surface_http_and_payload_errors() {
         format!("{}/token", server.uri()),
     );
 
-    assert!(auth::exchange_code(
-        "client",
-        "not a URL",
-        oauth2::AuthorizationCode::new("code".into()),
-        auth::authorization("client", "http://127.0.0.1:0")
+    assert!(auth::exchange_code(CodeExchangeRequest {
+        client_id: "client",
+        redirect: "not a URL",
+        code: oauth2::AuthorizationCode::new("code".into()),
+        verifier: auth::authorization("client", "http://127.0.0.1:0")
             .unwrap()
-            .verifier,
-    )
+            .verifier
+    })
     .await
     .is_err());
-    assert!(auth::exchange_code(
-        "client",
-        "http://127.0.0.1:0",
-        oauth2::AuthorizationCode::new("code".into()),
-        auth::authorization("client", "http://127.0.0.1:0")
+    assert!(auth::exchange_code(CodeExchangeRequest {
+        client_id: "client",
+        redirect: "http://127.0.0.1:0",
+        code: oauth2::AuthorizationCode::new("code".into()),
+        verifier: auth::authorization("client", "http://127.0.0.1:0")
             .unwrap()
-            .verifier,
-    )
+            .verifier
+    })
     .await
     .is_err());
 
@@ -736,7 +765,11 @@ async fn auth_validation_handles_missing_codes_tokens_and_local_part_fallbacks()
 
     let (service, _directory) = service_with_storage();
     let account = service
-        .save_account("local-only".into(), "refresh".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "local-only".into(),
+            refresh_token: "refresh".into(),
+            target: None,
+        })
         .await
         .unwrap();
     assert_eq!(account.display_name, "local-only");

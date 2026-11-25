@@ -1,3 +1,9 @@
+use latentmail_lib::ipc::{AppServices, CommandPayload};
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey, ThreadPageQuery};
+use latentmail_lib::sync::triage::{
+    DeleteMessagesRequest, DeleteThreadsRequest, MoveMessagesRequest, MoveThreadsRequest,
+};
+use latentmail_lib::sync::{LabelDelta, SyncEngineDeps, ThreadPageDirection};
 use std::{collections::HashSet, sync::Arc};
 
 use latentmail_lib::{
@@ -82,8 +88,17 @@ fn thread_exists_under_label(
     label_id: &str,
     thread_id: &str,
 ) -> bool {
-    let rows =
-        ThreadRepository::list_paginated(connection, "account", Some(label_id), None, 100).unwrap();
+    let rows = ThreadRepository::list_paginated(
+        connection,
+        ThreadPageQuery {
+            account_id: "account",
+            label_id: Some(label_id),
+            cursor: None,
+            limit: 100,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap();
     rows.iter().any(|row| row.thread.id == thread_id)
 }
 
@@ -93,21 +108,67 @@ fn deleting_a_thread_found_in_sent_removes_it_from_sent_and_shows_it_in_trash() 
     AccountRepository::upsert(&connection, &account()).unwrap();
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "SENT", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "SENT",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "Label_1",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     assert!(thread_exists_under_label(&connection, "SENT", "thread-1"));
     assert!(!thread_exists_under_label(&connection, "TRASH", "thread-1"));
 
     let membership = thread_raw_membership(&connection, "account", "thread-1").unwrap();
-    let (add, remove) = delete_labels(&membership);
+    let LabelDelta {
+        additions: add,
+        removals: remove,
+    } = delete_labels(&membership);
     assert_eq!(add, HashSet::from(["TRASH".to_owned()]));
     assert!(remove.is_empty(), "SENT must never be removed by delete");
-    MessageRepository::set_label_membership(&connection, "account", "m1", "TRASH", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: true,
+        },
+    )
+    .unwrap();
     for label in &remove {
-        MessageRepository::set_label_membership(&connection, "account", "m1", label, false)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: "m1",
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: false,
+            },
+        )
+        .unwrap();
     }
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
@@ -127,7 +188,18 @@ fn deleting_a_thread_found_in_sent_removes_it_from_sent_and_shows_it_in_trash() 
         "delete must never remove a user label"
     );
 
-    MessageRepository::set_label_membership(&connection, "account", "m1", "TRASH", false).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: false,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
     assert!(
         thread_exists_under_label(&connection, "SENT", "thread-1"),
@@ -142,8 +214,30 @@ fn trash_and_spam_list_exactly_what_they_contain() {
     AccountRepository::upsert(&connection, &account()).unwrap();
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "TRASH", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     assert_eq!(
@@ -157,8 +251,30 @@ fn trash_and_spam_list_exactly_what_they_contain() {
     );
 
     MessageRepository::write_full_state(&connection, &message("m2", "thread-2", 20)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m2", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m2", "SPAM", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m2",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m2",
+        },
+        LabelMembershipChange {
+            label_id: "SPAM",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-2").unwrap();
 
     assert_eq!(
@@ -175,9 +291,31 @@ fn a_thread_with_one_trashed_and_one_live_message_still_appears_in_the_live_fold
     AccountRepository::upsert(&connection, &account()).unwrap();
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     MessageRepository::write_full_state(&connection, &message("m2", "thread-1", 20)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m2", "TRASH", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m2",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     let labels = indexed_labels(&connection, "thread-1");
@@ -188,13 +326,22 @@ fn a_thread_with_one_trashed_and_one_live_message_still_appears_in_the_live_fold
 }
 
 fn listed_message_count(connection: &rusqlite::Connection, label_id: &str, thread_id: &str) -> i64 {
-    ThreadRepository::list_paginated(connection, "account", Some(label_id), None, 100)
-        .unwrap()
-        .into_iter()
-        .find(|row| row.thread.id == thread_id)
-        .expect("thread must be listed under the label")
-        .thread
-        .message_count
+    ThreadRepository::list_paginated(
+        connection,
+        ThreadPageQuery {
+            account_id: "account",
+            label_id: Some(label_id),
+            cursor: None,
+            limit: 100,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap()
+    .into_iter()
+    .find(|row| row.thread.id == thread_id)
+    .expect("thread must be listed under the label")
+    .thread
+    .message_count
 }
 
 #[test]
@@ -205,18 +352,73 @@ fn the_listed_message_count_leaves_out_trashed_and_spammed_messages_outside_tras
     for (id, sent_at) in [("m1", 10), ("m2", 20), ("m3", 30)] {
         MessageRepository::write_full_state(&connection, &message(id, "thread-1", sent_at))
             .unwrap();
-        MessageRepository::set_label_membership(&connection, "account", id, "INBOX", true).unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: id,
+            },
+            LabelMembershipChange {
+                label_id: "INBOX",
+                present: true,
+            },
+        )
+        .unwrap();
     }
     MessageRepository::write_full_state(&connection, &message("m4", "thread-1", 40)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m4", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m4", "TRASH", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m4",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m4",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     assert_eq!(listed_message_count(&connection, "INBOX", "thread-1"), 3);
     assert_eq!(listed_message_count(&connection, "TRASH", "thread-1"), 4);
 
-    MessageRepository::set_label_membership(&connection, "account", "m4", "TRASH", false).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m4", "SPAM", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m4",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: false,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m4",
+        },
+        LabelMembershipChange {
+            label_id: "SPAM",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     assert_eq!(listed_message_count(&connection, "INBOX", "thread-1"), 3);
@@ -229,14 +431,58 @@ fn trashing_every_message_removes_the_thread_from_every_listing_but_trash() {
     AccountRepository::upsert(&connection, &account()).unwrap();
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     MessageRepository::write_full_state(&connection, &message("m2", "thread-1", 20)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m2", "INBOX", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m2",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
     assert!(thread_exists_under_label(&connection, "INBOX", "thread-1"));
 
-    MessageRepository::set_label_membership(&connection, "account", "m1", "TRASH", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m2", "TRASH", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m2",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     assert_eq!(
@@ -254,14 +500,20 @@ fn delete_and_move_never_emit_sent_or_draft_and_never_remove_a_user_label() {
         .map(str::to_owned)
         .collect();
 
-    let (add, remove) = delete_labels(&membership);
+    let LabelDelta {
+        additions: add,
+        removals: remove,
+    } = delete_labels(&membership);
     assert_eq!(add, HashSet::from(["TRASH".to_owned()]));
     assert_eq!(remove, HashSet::from(["INBOX".to_owned()]));
     assert!(!add.contains("SENT") && !remove.contains("SENT"));
     assert!(!add.contains("DRAFT") && !remove.contains("DRAFT"));
     assert!(!remove.contains("Label_1"));
 
-    let (add, remove) = move_labels(&membership, "SPAM");
+    let LabelDelta {
+        additions: add,
+        removals: remove,
+    } = move_labels(&membership, "SPAM");
     assert_eq!(add, HashSet::from(["SPAM".to_owned()]));
     assert_eq!(remove, HashSet::from(["INBOX".to_owned()]));
     assert!(!add.contains("SENT") && !remove.contains("SENT"));
@@ -275,8 +527,30 @@ fn delete_and_move_produce_identical_label_changes_regardless_of_which_mailbox_i
     AccountRepository::upsert(&connection, &account()).unwrap();
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "Label_1",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     let membership = thread_raw_membership(&connection, "account", "thread-1").unwrap();
@@ -298,18 +572,64 @@ fn moving_a_thread_out_of_a_user_label_view_leaves_it_in_that_label() {
     AccountRepository::upsert(&connection, &account()).unwrap();
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "Label_1",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     let membership = thread_raw_membership(&connection, "account", "thread-1").unwrap();
-    let (add, remove) = move_labels(&membership, "SPAM");
+    let LabelDelta {
+        additions: add,
+        removals: remove,
+    } = move_labels(&membership, "SPAM");
     assert!(!remove.contains("Label_1"));
 
-    MessageRepository::set_label_membership(&connection, "account", "m1", "SPAM", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "SPAM",
+            present: true,
+        },
+    )
+    .unwrap();
     for label in &remove {
-        MessageRepository::set_label_membership(&connection, "account", "m1", label, false)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: "m1",
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: false,
+            },
+        )
+        .unwrap();
     }
     let _ = add;
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
@@ -333,17 +653,45 @@ fn message_level_delete_and_move_follow_the_messages_own_membership() {
     AccountRepository::upsert(&connection, &account()).unwrap();
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     MessageRepository::write_full_state(&connection, &message("m2", "thread-1", 20)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m2", "SPAM", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m2",
+        },
+        LabelMembershipChange {
+            label_id: "SPAM",
+            present: true,
+        },
+    )
+    .unwrap();
 
     let m1_membership = message_raw_membership(&connection, "account", "m1").unwrap();
-    let (m1_add, m1_remove) = delete_labels(&m1_membership);
+    let LabelDelta {
+        additions: m1_add,
+        removals: m1_remove,
+    } = delete_labels(&m1_membership);
     assert_eq!(m1_add, HashSet::from(["TRASH".to_owned()]));
     assert_eq!(m1_remove, HashSet::from(["INBOX".to_owned()]));
 
     let m2_membership = message_raw_membership(&connection, "account", "m2").unwrap();
-    let (m2_add, m2_remove) = move_labels(&m2_membership, "INBOX");
+    let LabelDelta {
+        additions: m2_add,
+        removals: m2_remove,
+    } = move_labels(&m2_membership, "INBOX");
     assert_eq!(m2_add, HashSet::from(["INBOX".to_owned()]));
     assert_eq!(m2_remove, HashSet::from(["SPAM".to_owned()]));
 }
@@ -394,13 +742,28 @@ fn seeded_intent_engine(account_id: &str) -> (Arc<SyncEngine>, tempfile::TempDir
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, account_id, "message-1", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: account_id,
+            message_id: "message-1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     drop(connection);
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(1_000, 1_000, Arc::clone(&registry));
     (
-        SyncEngine::new(storage, queue, registry, noop_event_sink()),
+        SyncEngine::new(SyncEngineDeps {
+            storage: storage,
+            queue: queue,
+            registry: registry,
+            events: noop_event_sink(),
+        }),
         directory,
     )
 }
@@ -451,11 +814,11 @@ async fn delete_threads_intent_computes_labels_from_real_membership_and_batch_mo
     app.manage(engine);
 
     let results = delete_threads(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account-delete-threads".into(),
-        vec!["thread-1".into()],
+        AppServices::new(app.handle()),
+        CommandPayload(DeleteThreadsRequest {
+            account_id: "account-delete-threads".into(),
+            thread_ids: vec!["thread-1".into()],
+        }),
     )
     .await
     .unwrap();
@@ -490,12 +853,12 @@ async fn move_threads_intent_computes_labels_from_real_membership_and_batch_modi
     app.manage(engine);
 
     let results = move_threads(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account-move-threads".into(),
-        vec!["thread-1".into()],
-        "SPAM".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(MoveThreadsRequest {
+            account_id: "account-move-threads".into(),
+            thread_ids: vec!["thread-1".into()],
+            destination: "SPAM".into(),
+        }),
     )
     .await
     .unwrap();
@@ -530,12 +893,12 @@ async fn move_threads_rejects_an_unrecognised_destination_before_touching_gmail(
     app.manage(engine);
 
     let error = move_threads(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account-move-invalid".into(),
-        vec!["thread-1".into()],
-        "SENT".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(MoveThreadsRequest {
+            account_id: "account-move-invalid".into(),
+            thread_ids: vec!["thread-1".into()],
+            destination: "SENT".into(),
+        }),
     )
     .await
     .unwrap_err();
@@ -561,11 +924,11 @@ async fn delete_messages_intent_computes_labels_from_the_messages_own_membership
     app.manage(engine);
 
     delete_messages(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account-delete-messages".into(),
-        vec!["message-1".into()],
+        AppServices::new(app.handle()),
+        CommandPayload(DeleteMessagesRequest {
+            account_id: "account-delete-messages".into(),
+            message_ids: vec!["message-1".into()],
+        }),
     )
     .await
     .unwrap();
@@ -599,12 +962,12 @@ async fn move_messages_intent_computes_labels_from_the_messages_own_membership()
     app.manage(engine);
 
     move_messages(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account-move-messages".into(),
-        vec!["message-1".into()],
-        "SPAM".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(MoveMessagesRequest {
+            account_id: "account-move-messages".into(),
+            message_ids: vec!["message-1".into()],
+            destination: "SPAM".into(),
+        }),
     )
     .await
     .unwrap();
@@ -638,12 +1001,12 @@ async fn move_messages_rejects_an_unrecognised_destination_before_touching_gmail
     app.manage(engine);
 
     let error = move_messages(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account-move-messages-invalid".into(),
-        vec!["message-1".into()],
-        "DRAFT".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(MoveMessagesRequest {
+            account_id: "account-move-messages-invalid".into(),
+            message_ids: vec!["message-1".into()],
+            destination: "DRAFT".into(),
+        }),
     )
     .await
     .unwrap_err();
@@ -728,27 +1091,36 @@ fn deleting_a_draft_thread_through_the_delete_intent_never_batch_modifies_it() {
         .unwrap();
         MessageRepository::set_label_membership(
             &connection,
-            "account-delete-draft-thread",
-            "message-draft",
-            "DRAFT",
-            true,
+            MessageKey {
+                account_id: "account-delete-draft-thread",
+                message_id: "message-draft",
+            },
+            LabelMembershipChange {
+                label_id: "DRAFT",
+                present: true,
+            },
         )
         .unwrap();
         drop(connection);
 
         let registry = WorkRegistry::new();
         let queue = create_queue_engine(1_000, 1_000, Arc::clone(&registry));
-        let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+        let engine = SyncEngine::new(SyncEngineDeps {
+            storage: storage.clone(),
+            queue: queue,
+            registry: registry,
+            events: noop_event_sink(),
+        });
         let app = app();
         app.manage(storage.clone());
         app.manage(AuthService::new(storage));
         app.manage(engine);
         delete_threads(
-            app.handle().clone(),
-            app.state(),
-            app.state(),
-            "account-delete-draft-thread".into(),
-            vec!["thread-draft".into()],
+            AppServices::new(app.handle()),
+            CommandPayload(DeleteThreadsRequest {
+                account_id: "account-delete-draft-thread".into(),
+                thread_ids: vec!["thread-draft".into()],
+            }),
         )
         .await
         .unwrap();
@@ -760,11 +1132,20 @@ fn deleting_a_draft_thread_through_the_delete_intent_never_batch_modifies_it() {
 }
 
 fn listed_order(connection: &rusqlite::Connection, label_id: &str) -> Vec<(String, i64)> {
-    ThreadRepository::list_paginated(connection, "account", Some(label_id), None, 100)
-        .unwrap()
-        .into_iter()
-        .map(|row| (row.thread.id, row.thread.latest_at))
-        .collect()
+    ThreadRepository::list_paginated(
+        connection,
+        ThreadPageQuery {
+            account_id: "account",
+            label_id: Some(label_id),
+            cursor: None,
+            limit: 100,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap()
+    .into_iter()
+    .map(|row| (row.thread.id, row.thread.latest_at))
+    .collect()
 }
 
 #[test]
@@ -774,17 +1155,47 @@ fn forwarding_an_old_message_does_not_bump_its_thread_up_the_inbox() {
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("received", "thread-old", 10))
         .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "received", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "received",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     MessageRepository::write_full_state(&connection, &message("forward", "thread-old", 100))
         .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "forward", "SENT", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "forward",
+        },
+        LabelMembershipChange {
+            label_id: "SENT",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-old").unwrap();
 
     MessageRepository::write_full_state(&connection, &message("newer", "thread-new", 50)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "newer", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "newer",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-new").unwrap();
 
     assert_eq!(

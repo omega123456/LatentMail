@@ -1,6 +1,5 @@
-use std::sync::mpsc;
-
 use latentmail_lib::storage::{Account, AccountRepository, Storage};
+use std::sync::mpsc;
 
 fn account(id: &str) -> Account {
     Account {

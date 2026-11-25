@@ -1,3 +1,4 @@
+use latentmail_lib::contacts::ContactObservation;
 use latentmail_lib::{
     contacts,
     storage::{Account, AccountRepository, Storage},
@@ -22,9 +23,33 @@ fn contacts_are_normalized_ranked_and_account_scoped() {
         )
         .unwrap();
     }
-    contacts::observe(&connection, "one", "First Name <PERSON@Example.com>", 1).unwrap();
-    contacts::observe(&connection, "one", "New Name <person@example.com>", 2).unwrap();
-    contacts::observe(&connection, "two", "person@example.com", 3).unwrap();
+    contacts::observe(
+        &connection,
+        ContactObservation {
+            account_id: "one",
+            mailbox: "First Name <PERSON@Example.com>",
+            seen_at: 1,
+        },
+    )
+    .unwrap();
+    contacts::observe(
+        &connection,
+        ContactObservation {
+            account_id: "one",
+            mailbox: "New Name <person@example.com>",
+            seen_at: 2,
+        },
+    )
+    .unwrap();
+    contacts::observe(
+        &connection,
+        ContactObservation {
+            account_id: "two",
+            mailbox: "person@example.com",
+            seen_at: 3,
+        },
+    )
+    .unwrap();
     let one = contacts::lookup(&connection, "one", "pe").unwrap();
     assert_eq!(one[0].address, "person@example.com");
     assert_eq!(one[0].display_name.as_deref(), Some("New Name"));
@@ -111,7 +136,15 @@ fn a_mailbox_whose_closing_bracket_precedes_its_opening_bracket_is_not_learned()
         },
     )
     .unwrap();
-    contacts::observe(&connection, "one", "Broken> name <", 1).unwrap();
+    contacts::observe(
+        &connection,
+        ContactObservation {
+            account_id: "one",
+            mailbox: "Broken> name <",
+            seen_at: 1,
+        },
+    )
+    .unwrap();
     contacts::observe_many(&connection, "one", &[("odd> <".to_owned(), 2)]).unwrap();
     assert!(contacts::lookup(&connection, "one", "").unwrap().is_empty());
 }
@@ -133,8 +166,24 @@ fn a_quoted_display_name_keeps_its_comma_and_lowercases_the_address() {
         },
     )
     .unwrap();
-    contacts::observe(&connection, "one", r#""Doe, John" <John@Example.com>"#, 1).unwrap();
-    contacts::observe(&connection, "one", "<bare@example.com>", 1).unwrap();
+    contacts::observe(
+        &connection,
+        ContactObservation {
+            account_id: "one",
+            mailbox: r#""Doe, John" <John@Example.com>"#,
+            seen_at: 1,
+        },
+    )
+    .unwrap();
+    contacts::observe(
+        &connection,
+        ContactObservation {
+            account_id: "one",
+            mailbox: "<bare@example.com>",
+            seen_at: 1,
+        },
+    )
+    .unwrap();
     let doe = contacts::lookup(&connection, "one", "john").unwrap();
     assert_eq!(doe[0].address, "john@example.com");
     assert_eq!(doe[0].display_name.as_deref(), Some("Doe, John"));

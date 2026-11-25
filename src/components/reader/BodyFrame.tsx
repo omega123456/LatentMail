@@ -8,12 +8,17 @@ const allowedUriSchemes =
   /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|inlineimg|remoteimg):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i;
 const wiredDocuments = new WeakSet<Document>();
 
-function wireFrame(
-  frame: HTMLIFrameElement,
-  heightConstrained: boolean,
-  setHeight: (height: number) => void,
-  loaded: boolean,
-) {
+function wireFrame({
+  frame,
+  heightConstrained,
+  setHeight,
+  loaded,
+}: {
+  frame: HTMLIFrameElement;
+  heightConstrained: boolean;
+  setHeight: (height: number) => void;
+  loaded: boolean;
+}) {
   const frameDocument = frame.contentDocument;
   if (!frameDocument?.body) return false;
   if (!loaded && frameDocument.documentElement.scrollHeight === 0) return false;
@@ -79,7 +84,16 @@ export function BodyFrame({
     const tick = () => {
       const frame = frameRef.current;
       if (!watching || !frame?.isConnected) return;
-      if (!wireFrame(frame, heightConstrained, setHeight, false)) requestAnimationFrame(tick);
+      if (
+        !wireFrame({
+          frame: frame,
+          heightConstrained: heightConstrained,
+          setHeight: setHeight,
+          loaded: false,
+        })
+      ) {
+        requestAnimationFrame(tick);
+      }
     };
     requestAnimationFrame(tick);
     return () => {
@@ -109,7 +123,12 @@ export function BodyFrame({
       height={heightConstrained ? undefined : height}
       srcDoc={srcDoc}
       onLoad={(event) => {
-        wireFrame(event.currentTarget, heightConstrained, setHeight, true);
+        wireFrame({
+          frame: event.currentTarget,
+          heightConstrained: heightConstrained,
+          setHeight: setHeight,
+          loaded: true,
+        });
       }}
     />
   );

@@ -1,3 +1,4 @@
+use latentmail_lib::sync::{LabelDelta, QueueRateConfig, SyncEngineDeps, ThreadMutation};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -102,26 +103,30 @@ async fn a_move_produces_one_batch_call_carrying_both_directions() {
     let (storage, _directory) = seed_many_threads(1);
     let registry = WorkRegistry::new();
     let queue = create_queue_engine_with_events(
-        1_000,
-        1_000,
+        QueueRateConfig {
+            rate_per_second: 1_000,
+            burst: 1_000,
+        },
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(
-        storage.clone(),
-        Arc::clone(&queue),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let outcome = engine
-        .mutate(
-            "account",
-            GmailClient::with_base_url("token", server.uri()),
-            "thread-0".into(),
-            HashSet::from(["TRASH".to_owned()]),
-            HashSet::from(["INBOX".to_owned()]),
-        )
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: GmailClient::with_base_url("token", server.uri()),
+            thread_id: "thread-0".into(),
+            labels: LabelDelta {
+                additions: HashSet::from(["TRASH".to_owned()]),
+                removals: HashSet::from(["INBOX".to_owned()]),
+            },
+        })
         .await
         .unwrap();
     assert_eq!(outcome, MutationOutcome::Applied);
@@ -173,12 +178,19 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
     let (storage, _directory) = seed_many_threads(COUNT);
     let registry = WorkRegistry::new();
     let queue = create_queue_engine_with_events(
-        1_000_000,
-        1_000_000,
+        QueueRateConfig {
+            rate_per_second: 1_000_000,
+            burst: 1_000_000,
+        },
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, noop_event_sink());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let tasks = (0..COUNT)
         .map(|index| {
@@ -186,13 +198,15 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
             let base_url = server.uri();
             tokio::spawn(async move {
                 engine
-                    .mutate(
-                        "account",
-                        GmailClient::with_base_url("token", base_url),
-                        format!("thread-{index}"),
-                        HashSet::from(["STARRED".to_owned()]),
-                        HashSet::new(),
-                    )
+                    .mutate(ThreadMutation {
+                        account_id: "account".to_owned(),
+                        client: GmailClient::with_base_url("token", base_url),
+                        thread_id: format!("thread-{index}"),
+                        labels: LabelDelta {
+                            additions: HashSet::from(["STARRED".to_owned()]),
+                            removals: HashSet::new(),
+                        },
+                    })
                     .await
             })
         })
@@ -239,31 +253,42 @@ async fn sequential_mutations_outside_the_coalescing_window_are_separate_batch_c
     let (storage, _directory) = seed_many_threads(1);
     let registry = WorkRegistry::new();
     let queue = create_queue_engine_with_events(
-        1_000,
-        1_000,
+        QueueRateConfig {
+            rate_per_second: 1_000,
+            burst: 1_000,
+        },
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, noop_event_sink());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let first = engine
-        .mutate(
-            "account",
-            GmailClient::with_base_url("token", server.uri()),
-            "thread-0".into(),
-            HashSet::from(["STARRED".to_owned()]),
-            HashSet::new(),
-        )
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: GmailClient::with_base_url("token", server.uri()),
+            thread_id: "thread-0".into(),
+            labels: LabelDelta {
+                additions: HashSet::from(["STARRED".to_owned()]),
+                removals: HashSet::new(),
+            },
+        })
         .await
         .unwrap();
     let second = engine
-        .mutate(
-            "account",
-            GmailClient::with_base_url("token", server.uri()),
-            "thread-0".into(),
-            HashSet::new(),
-            HashSet::from(["STARRED".to_owned()]),
-        )
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: GmailClient::with_base_url("token", server.uri()),
+            thread_id: "thread-0".into(),
+            labels: LabelDelta {
+                additions: HashSet::new(),
+                removals: HashSet::from(["STARRED".to_owned()]),
+            },
+        })
         .await
         .unwrap();
 
@@ -291,38 +316,44 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
     let (storage, _directory) = seed_many_threads(1);
     let registry = WorkRegistry::new();
     let queue = create_queue_engine_with_events(
-        1_000,
-        1_000,
+        QueueRateConfig {
+            rate_per_second: 1_000,
+            burst: 1_000,
+        },
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(
-        storage.clone(),
-        Arc::clone(&queue),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let read = engine
-        .mutate(
-            "account",
-            GmailClient::with_base_url("token", server.uri()),
-            "thread-0".into(),
-            HashSet::new(),
-            HashSet::from(["UNREAD".to_owned()]),
-        )
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: GmailClient::with_base_url("token", server.uri()),
+            thread_id: "thread-0".into(),
+            labels: LabelDelta {
+                additions: HashSet::new(),
+                removals: HashSet::from(["UNREAD".to_owned()]),
+            },
+        })
         .await
         .unwrap();
     assert_eq!(read, MutationOutcome::Applied);
 
     let unread = engine
-        .mutate(
-            "account",
-            GmailClient::with_base_url("token", server.uri()),
-            "thread-0".into(),
-            HashSet::from(["UNREAD".to_owned()]),
-            HashSet::new(),
-        )
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: GmailClient::with_base_url("token", server.uri()),
+            thread_id: "thread-0".into(),
+            labels: LabelDelta {
+                additions: HashSet::from(["UNREAD".to_owned()]),
+                removals: HashSet::new(),
+            },
+        })
         .await
         .unwrap();
     assert_eq!(unread, MutationOutcome::Applied);
@@ -348,21 +379,30 @@ async fn a_request_with_no_labels_settles_as_superseded_without_dispatching() {
     let (storage, _directory) = seed_many_threads(1);
     let registry = WorkRegistry::new();
     let queue = create_queue_engine_with_events(
-        1_000,
-        1_000,
+        QueueRateConfig {
+            rate_per_second: 1_000,
+            burst: 1_000,
+        },
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, noop_event_sink());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     let outcome = engine
-        .mutate(
-            "account",
-            GmailClient::with_base_url("token", "http://127.0.0.1:0"),
-            "thread-0".into(),
-            HashSet::new(),
-            HashSet::new(),
-        )
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: GmailClient::with_base_url("token", "http://127.0.0.1:0"),
+            thread_id: "thread-0".into(),
+            labels: LabelDelta {
+                additions: HashSet::new(),
+                removals: HashSet::new(),
+            },
+        })
         .await
         .unwrap();
     assert_eq!(outcome, MutationOutcome::Superseded);

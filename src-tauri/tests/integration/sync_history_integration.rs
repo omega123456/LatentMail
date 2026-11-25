@@ -1,3 +1,7 @@
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey, StagedIds};
+use latentmail_lib::sync::{
+    EventSink, SyncEngine, SyncEngineDeps, SyncError, SyncScheduler, WorkRegistry,
+};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -10,7 +14,6 @@ use latentmail_lib::storage::{
     LabelRepository, Message, MessageRepository, Operation, OperationRepository, Storage,
     StorageError, ThreadRepository, TraversalCursor, TraversalKind,
 };
-use latentmail_lib::sync::{EventSink, SyncEngine, SyncError, SyncScheduler, WorkRegistry};
 use tauri::Manager;
 use wiremock::{
     matchers::{method, path},
@@ -31,7 +34,21 @@ fn storage_errors_convert_to_sync_errors_with_the_storage_context() {
     assert!(error.to_string().starts_with("storage error: "));
 }
 
-fn seed_message(id: &str, thread_id: &str, sent_at: i64, unread: bool) -> Message {
+struct SeedMessage<'a> {
+    id: &'a str,
+    thread_id: &'a str,
+    sent_at: i64,
+    unread: bool,
+}
+
+fn seed_message(
+    SeedMessage {
+        id,
+        thread_id,
+        sent_at,
+        unread,
+    }: SeedMessage<'_>,
+) -> Message {
     Message {
         account_id: "account".into(),
         id: id.into(),
@@ -85,20 +102,84 @@ fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEven
         )
         .unwrap();
     }
-    MessageRepository::write_full_state(&connection, &seed_message("existing1", "t1", 1, false))
-        .unwrap();
-    MessageRepository::write_full_state(&connection, &seed_message("existing2", "t1", 2, true))
-        .unwrap();
-    MessageRepository::write_full_state(&connection, &seed_message("existing3", "t3", 1, false))
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "existing1", "INBOX", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "existing2", "INBOX", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "existing2", "UNREAD", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "existing3", "INBOX", true)
-        .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &seed_message(SeedMessage {
+            id: "existing1",
+            thread_id: "t1",
+            sent_at: 1,
+            unread: false,
+        }),
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &seed_message(SeedMessage {
+            id: "existing2",
+            thread_id: "t1",
+            sent_at: 2,
+            unread: true,
+        }),
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &seed_message(SeedMessage {
+            id: "existing3",
+            thread_id: "t3",
+            sent_at: 1,
+            unread: false,
+        }),
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "existing1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "existing2",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "existing2",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "existing3",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     ThreadRepository::recompute(&connection, "account", "t3").unwrap();
     drop(connection);
@@ -113,7 +194,15 @@ fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEven
     });
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new_with_clock(storage.clone(), queue, registry, sink, fixture_now);
+    let engine = SyncEngine::new_with_clock(
+        SyncEngineDeps {
+            storage: storage.clone(),
+            queue: queue,
+            registry: registry,
+            events: sink,
+        },
+        fixture_now,
+    );
     (engine, storage, directory, events)
 }
 
@@ -587,8 +676,10 @@ async fn resumed_reconciliation_leaves_later_history_for_the_next_incremental_sy
     ReconcileStagingRepository::begin(&connection, &cursor).unwrap();
     ReconcileStagingRepository::stage_universe_page(
         &connection,
-        "account",
-        &["reconciled".into()],
+        StagedIds {
+            account_id: "account",
+            ids: &["reconciled".into()],
+        },
         &cursor,
     )
     .unwrap();
@@ -695,7 +786,12 @@ async fn a_stale_full_state_write_from_history_is_rejected_by_the_existing_gate(
         },
     )
     .unwrap();
-    let mut ahead = seed_message("raced", "t1", 1, false);
+    let mut ahead = seed_message(SeedMessage {
+        id: "raced",
+        thread_id: "t1",
+        sent_at: 1,
+        unread: false,
+    });
     ahead.history_id = 100;
     ahead.subject = "Already ahead".into();
     MessageRepository::write_full_state(&connection, &ahead).unwrap();
@@ -734,12 +830,12 @@ async fn a_stale_full_state_write_from_history_is_rejected_by_the_existing_gate(
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(
-        storage.clone(),
-        queue,
-        registry,
-        latentmail_lib::sync::noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: latentmail_lib::sync::noop_event_sink(),
+    });
     let client = GmailClient::with_base_url("token", server.uri());
     engine.run_sync("account", client).await.unwrap();
 

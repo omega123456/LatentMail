@@ -86,14 +86,24 @@ describe('capturing a key combination', () => {
 
 describe('conflict detection', () => {
   it('names the other command that already owns a candidate binding', () => {
-    expect(findConflictingCommand(DEFAULT_COMMAND_BINDINGS, 'newMessage', 'r', true)).toBe(
-      'replyToMessage',
-    );
+    expect(
+      findConflictingCommand({
+        bindings: DEFAULT_COMMAND_BINDINGS,
+        command: 'newMessage',
+        candidate: 'r',
+        isMac: true,
+      }),
+    ).toBe('replyToMessage');
   });
 
   it('reports no conflict for a binding nobody owns', () => {
     expect(
-      findConflictingCommand(DEFAULT_COMMAND_BINDINGS, 'newMessage', 'Meta+Shift+Z', true),
+      findConflictingCommand({
+        bindings: DEFAULT_COMMAND_BINDINGS,
+        command: 'newMessage',
+        candidate: 'Meta+Shift+Z',
+        isMac: true,
+      }),
     ).toBeNull();
   });
 
@@ -102,7 +112,21 @@ describe('conflict detection', () => {
       ...DEFAULT_COMMAND_BINDINGS,
       newMessage: ['Control+K'],
     };
-    expect(findConflictingCommand(bindings, 'toggleStar', 'Control+K', true)).toBeNull();
-    expect(findConflictingCommand(bindings, 'toggleStar', 'Control+K', false)).toBe('newMessage');
+    expect(
+      findConflictingCommand({
+        bindings: bindings,
+        command: 'toggleStar',
+        candidate: 'Control+K',
+        isMac: true,
+      }),
+    ).toBeNull();
+    expect(
+      findConflictingCommand({
+        bindings: bindings,
+        command: 'toggleStar',
+        candidate: 'Control+K',
+        isMac: false,
+      }),
+    ).toBe('newMessage');
   });
 });

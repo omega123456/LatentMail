@@ -1,7 +1,7 @@
+use latentmail_lib::sanitize::{referenced_content_ids, sanitize, MAX_SANITIZED_HTML_BYTES};
 use std::collections::HashMap;
 
 use latentmail_lib::remote_images::proxy_url;
-use latentmail_lib::sanitize::{referenced_content_ids, sanitize, MAX_SANITIZED_HTML_BYTES};
 
 #[test]
 fn resolves_cid_images_and_rewrites_remote_images() {

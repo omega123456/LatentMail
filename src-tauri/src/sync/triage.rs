@@ -4,16 +4,20 @@ use std::{
 };
 
 use rusqlite::{params, Connection};
-use tauri::{AppHandle, Runtime};
+use serde::Deserialize;
+use tauri::Runtime;
 
-use crate::gmail::system_labels::{SPAM, TRASH};
 use crate::{
-    auth::AuthService,
+    gmail::system_labels::{SPAM, TRASH},
+    ipc::{AppServices, CommandPayload},
     storage::{MessageRepository, Storage},
 };
 
 use super::{
-    announce::MailChangeAnnouncer, dto::MutationResultDto, MutationOutcome, SyncEngine,
+    announce::MailChangeAnnouncer,
+    dto::MutationResultDto,
+    mutations::{DraftMessageRef, LabelDelta, MessageMutation, ThreadMutation},
+    MutationOutcome,
 };
 
 pub const REMOVABLE_SYSTEM_FOLDER_LABELS: [&str; 3] = ["INBOX", SPAM, TRASH];
@@ -85,47 +89,47 @@ async fn message_raw_membership_many(
         .map_err(|error| error.to_string())
 }
 
-pub fn delete_labels(membership: &HashSet<String>) -> (HashSet<String>, HashSet<String>) {
-    let add = HashSet::from([TRASH.to_owned()]);
-    let remove = REMOVABLE_SYSTEM_FOLDER_LABELS
+pub fn delete_labels(membership: &HashSet<String>) -> LabelDelta {
+    let additions = HashSet::from([TRASH.to_owned()]);
+    let removals = REMOVABLE_SYSTEM_FOLDER_LABELS
         .iter()
         .filter(|label| **label != TRASH && membership.contains(**label))
         .map(|label| (*label).to_owned())
         .collect();
-    (add, remove)
+    LabelDelta {
+        additions: additions,
+        removals: removals,
+    }
 }
 
-pub fn move_labels(
-    membership: &HashSet<String>,
-    destination: &str,
-) -> (HashSet<String>, HashSet<String>) {
-    let add = HashSet::from([destination.to_owned()]);
-    let remove = REMOVABLE_SYSTEM_FOLDER_LABELS
+pub fn move_labels(membership: &HashSet<String>, destination: &str) -> LabelDelta {
+    let additions = HashSet::from([destination.to_owned()]);
+    let removals = REMOVABLE_SYSTEM_FOLDER_LABELS
         .iter()
         .filter(|label| **label != destination && membership.contains(**label))
         .map(|label| (*label).to_owned())
         .collect();
-    (add, remove)
+    LabelDelta {
+        additions: additions,
+        removals: removals,
+    }
 }
 
 const PROTECTED_LABELS: [&str; 2] = ["DRAFT", "SENT"];
 
 #[derive(Clone)]
 pub(super) enum LabelChange {
-    Explicit {
-        add: HashSet<String>,
-        remove: HashSet<String>,
-    },
+    Explicit(LabelDelta),
     Delete,
     Move(String),
 }
 
 impl LabelChange {
     pub(super) fn explicit(add: Vec<String>, remove: Vec<String>) -> Result<Self, String> {
-        let change = Self::Explicit {
-            add: add.into_iter().collect(),
-            remove: remove.into_iter().collect(),
-        };
+        let change = Self::Explicit(LabelDelta {
+            additions: add.into_iter().collect(),
+            removals: remove.into_iter().collect(),
+        });
         change.reject_protected_labels()?;
         Ok(change)
     }
@@ -136,30 +140,31 @@ impl LabelChange {
     }
 
     fn reads_membership(&self) -> bool {
-        !matches!(self, Self::Explicit { .. })
+        !matches!(self, Self::Explicit(_))
     }
 
     fn deletes_drafts(&self) -> bool {
-        let Self::Explicit { add, remove } = self else {
+        let Self::Explicit(delta) = self else {
             return true;
         };
-        let trashes_only = *add == HashSet::from([TRASH.to_owned()]);
-        trashes_only && remove.is_empty()
+        let trashes_only = delta.additions == HashSet::from([TRASH.to_owned()]);
+        trashes_only && delta.removals.is_empty()
     }
 
-    fn labels_for(&self, membership: &HashSet<String>) -> (HashSet<String>, HashSet<String>) {
+    fn labels_for(&self, membership: &HashSet<String>) -> LabelDelta {
         match self {
-            Self::Explicit { add, remove } => (add.clone(), remove.clone()),
+            Self::Explicit(delta) => delta.clone(),
             Self::Delete => delete_labels(membership),
             Self::Move(destination) => move_labels(membership, destination),
         }
     }
 
     fn reject_protected_labels(&self) -> Result<(), String> {
-        let (add, remove) = self.labels_for(&HashSet::new());
-        let touches_protected = add
+        let delta = self.labels_for(&HashSet::new());
+        let touches_protected = delta
+            .additions
             .iter()
-            .chain(&remove)
+            .chain(&delta.removals)
             .any(|label| PROTECTED_LABELS.contains(&label.as_str()));
         if touches_protected {
             return Err("Draft and Sent labels cannot be modified.".into());
@@ -168,43 +173,97 @@ impl LabelChange {
     }
 }
 
+struct AccountIds<'a> {
+    account_id: &'a str,
+    ids: &'a [String],
+}
+
 async fn membership_for_threads(
     storage: &Storage,
-    account_id: &str,
-    thread_ids: &[String],
+    target: AccountIds<'_>,
     change: &LabelChange,
 ) -> Result<HashMap<String, HashSet<String>>, String> {
     if !change.reads_membership() {
         return Ok(HashMap::new());
     }
-    thread_raw_membership_many(storage, account_id, thread_ids).await
+    thread_raw_membership_many(storage, target.account_id, target.ids).await
 }
 
 async fn membership_for_messages(
     storage: &Storage,
-    account_id: &str,
-    message_ids: &[String],
+    target: AccountIds<'_>,
     change: &LabelChange,
 ) -> Result<HashMap<String, HashSet<String>>, String> {
     if !change.reads_membership() {
         return Ok(HashMap::new());
     }
-    message_raw_membership_many(storage, account_id, message_ids).await
+    message_raw_membership_many(storage, target.account_id, target.ids).await
+}
+
+pub(super) struct ThreadsChangeRequest {
+    pub account_id: String,
+    pub thread_ids: Vec<String>,
+    pub change: LabelChange,
+}
+
+pub(super) struct MessagesChangeRequest {
+    pub account_id: String,
+    pub message_ids: Vec<String>,
+    pub change: LabelChange,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteThreadsRequest {
+    pub account_id: String,
+    pub thread_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveThreadsRequest {
+    pub account_id: String,
+    pub thread_ids: Vec<String>,
+    pub destination: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMessagesRequest {
+    pub account_id: String,
+    pub message_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveMessagesRequest {
+    pub account_id: String,
+    pub message_ids: Vec<String>,
+    pub destination: String,
 }
 
 pub(super) async fn apply_to_threads<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_ids: Vec<String>,
-    change: LabelChange,
+    services: &AppServices<'_, R>,
+    request: ThreadsChangeRequest,
 ) -> Result<Vec<MutationResultDto>, String> {
-    let client = super::commands::gmail_client_for(&app, &auth, &engine, &account_id).await?;
+    let ThreadsChangeRequest {
+        account_id,
+        thread_ids,
+        change,
+    } = request;
+    let engine = services.sync()?;
+    let client = services.gmail_client(&account_id).await?;
     let drafts_by_thread =
         super::mutations::draft_message_ids(engine.storage(), &account_id, &thread_ids).await?;
-    let membership_by_thread =
-        membership_for_threads(engine.storage(), &account_id, &thread_ids, &change).await?;
+    let membership_by_thread = membership_for_threads(
+        engine.storage(),
+        AccountIds {
+            account_id: &account_id,
+            ids: &thread_ids,
+        },
+        &change,
+    )
+    .await?;
 
     let mut results = Vec::with_capacity(thread_ids.len());
     let mut tasks = tokio::task::JoinSet::new();
@@ -218,8 +277,15 @@ pub(super) async fn apply_to_threads<R: Runtime>(
                 return Err("Draft messages cannot be modified; delete them instead.".into());
             }
             for message_id in drafts {
-                super::mutations::delete_draft(engine.storage(), &client, &account_id, &message_id)
-                    .await?;
+                super::mutations::delete_draft(
+                    engine.storage(),
+                    &client,
+                    DraftMessageRef {
+                        account_id: &account_id,
+                        message_id: &message_id,
+                    },
+                )
+                .await?;
             }
             results.push(MutationResultDto {
                 thread_id: thread_id,
@@ -234,10 +300,15 @@ pub(super) async fn apply_to_threads<R: Runtime>(
             .get(&thread_id)
             .cloned()
             .unwrap_or_default();
-        let (add, remove) = change.labels_for(&membership);
+        let labels = change.labels_for(&membership);
         tasks.spawn(async move {
             let outcome = engine
-                .mutate(&account_id, client, thread_id.clone(), add, remove)
+                .mutate(ThreadMutation {
+                    account_id: account_id,
+                    client: client,
+                    thread_id: thread_id.clone(),
+                    labels: labels,
+                })
                 .await;
             (thread_id, outcome)
         });
@@ -254,16 +325,25 @@ pub(super) async fn apply_to_threads<R: Runtime>(
 }
 
 pub(super) async fn apply_to_messages<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_ids: Vec<String>,
-    change: LabelChange,
+    services: &AppServices<'_, R>,
+    request: MessagesChangeRequest,
 ) -> Result<(), String> {
-    let client = super::commands::gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    let membership_by_message =
-        membership_for_messages(engine.storage(), &account_id, &message_ids, &change).await?;
+    let MessagesChangeRequest {
+        account_id,
+        message_ids,
+        change,
+    } = request;
+    let engine = services.sync()?;
+    let client = services.gmail_client(&account_id).await?;
+    let membership_by_message = membership_for_messages(
+        engine.storage(),
+        AccountIds {
+            account_id: &account_id,
+            ids: &message_ids,
+        },
+        &change,
+    )
+    .await?;
     let mut tasks = tokio::task::JoinSet::new();
     for message_id in message_ids {
         let engine = Arc::clone(&engine);
@@ -273,10 +353,15 @@ pub(super) async fn apply_to_messages<R: Runtime>(
             .get(&message_id)
             .cloned()
             .unwrap_or_default();
-        let (add, remove) = change.labels_for(&membership);
+        let labels = change.labels_for(&membership);
         tasks.spawn(async move {
             engine
-                .mutate_message(&account_id, client, message_id, add, remove)
+                .mutate_message(MessageMutation {
+                    account_id: account_id,
+                    client: client,
+                    message_id: message_id,
+                    labels: labels,
+                })
                 .await
                 .map_err(|error| error.to_string())
         });
@@ -287,101 +372,112 @@ pub(super) async fn apply_to_messages<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn delete_threads<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_ids: Vec<String>,
+async fn run_delete_threads<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: DeleteThreadsRequest,
 ) -> Result<Vec<MutationResultDto>, String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome = apply_delete_threads(app, auth, engine, account_id, thread_ids).await;
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = apply_to_threads(
+        &services,
+        ThreadsChangeRequest {
+            account_id: request.account_id,
+            thread_ids: request.thread_ids,
+            change: LabelChange::Delete,
+        },
+    )
+    .await;
     announcer.announce(outcome)
 }
 
-async fn apply_delete_threads<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_ids: Vec<String>,
+async fn run_move_threads<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: MoveThreadsRequest,
 ) -> Result<Vec<MutationResultDto>, String> {
-    apply_to_threads(app, auth, engine, account_id, thread_ids, LabelChange::Delete).await
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = match LabelChange::moving_to(request.destination) {
+        Ok(change) => {
+            apply_to_threads(
+                &services,
+                ThreadsChangeRequest {
+                    account_id: request.account_id,
+                    thread_ids: request.thread_ids,
+                    change: change,
+                },
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    announcer.announce(outcome)
+}
+
+async fn run_delete_messages<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: DeleteMessagesRequest,
+) -> Result<(), String> {
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = apply_to_messages(
+        &services,
+        MessagesChangeRequest {
+            account_id: request.account_id,
+            message_ids: request.message_ids,
+            change: LabelChange::Delete,
+        },
+    )
+    .await;
+    announcer.announce(outcome)
+}
+
+async fn run_move_messages<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: MoveMessagesRequest,
+) -> Result<(), String> {
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = match LabelChange::moving_to(request.destination) {
+        Ok(change) => {
+            apply_to_messages(
+                &services,
+                MessagesChangeRequest {
+                    account_id: request.account_id,
+                    message_ids: request.message_ids,
+                    change: change,
+                },
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    announcer.announce(outcome)
+}
+
+#[tauri::command]
+pub async fn delete_threads<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<DeleteThreadsRequest>,
+) -> Result<Vec<MutationResultDto>, String> {
+    run_delete_threads(services, request).await
 }
 
 #[tauri::command]
 pub async fn move_threads<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_ids: Vec<String>,
-    destination: String,
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<MoveThreadsRequest>,
 ) -> Result<Vec<MutationResultDto>, String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome = apply_move_threads(app, auth, engine, account_id, thread_ids, destination).await;
-    announcer.announce(outcome)
-}
-
-async fn apply_move_threads<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_ids: Vec<String>,
-    destination: String,
-) -> Result<Vec<MutationResultDto>, String> {
-    let change = LabelChange::moving_to(destination)?;
-    apply_to_threads(app, auth, engine, account_id, thread_ids, change).await
+    run_move_threads(services, request).await
 }
 
 #[tauri::command]
 pub async fn delete_messages<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_ids: Vec<String>,
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<DeleteMessagesRequest>,
 ) -> Result<(), String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome = apply_delete_messages(app, auth, engine, account_id, message_ids).await;
-    announcer.announce(outcome)
-}
-
-async fn apply_delete_messages<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_ids: Vec<String>,
-) -> Result<(), String> {
-    apply_to_messages(app, auth, engine, account_id, message_ids, LabelChange::Delete).await
+    run_delete_messages(services, request).await
 }
 
 #[tauri::command]
 pub async fn move_messages<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_ids: Vec<String>,
-    destination: String,
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<MoveMessagesRequest>,
 ) -> Result<(), String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome =
-        apply_move_messages(app, auth, engine, account_id, message_ids, destination).await;
-    announcer.announce(outcome)
-}
-
-async fn apply_move_messages<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_ids: Vec<String>,
-    destination: String,
-) -> Result<(), String> {
-    let change = LabelChange::moving_to(destination)?;
-    apply_to_messages(app, auth, engine, account_id, message_ids, change).await
+    run_move_messages(services, request).await
 }

@@ -1,4 +1,5 @@
 use latentmail_lib::inline_images::{proxy_url, respond, target, SCHEME};
+use latentmail_lib::storage::MessageKey;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, InlinePart, Message, MessageRepository, Storage,
 };
@@ -46,8 +47,10 @@ fn storage_with_one_inline_part() -> (tempfile::TempDir, Storage) {
     .unwrap();
     MessageRepository::replace_inline_parts(
         &connection,
-        "account",
-        "message",
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
         &[InlinePart {
             content_id: "logo@example.com".into(),
             mime_type: "image/jpeg".into(),
@@ -66,11 +69,11 @@ fn builds_a_proxy_url_that_carries_the_account_message_and_content_id() {
     assert!(url.contains(SCHEME), "{url}");
     assert_eq!(
         target(&url),
-        Some((
-            "account".to_owned(),
-            "message".to_owned(),
-            "logo@example.com".to_owned()
-        ))
+        Some(latentmail_lib::inline_images::InlineImageTarget {
+            account_id: "account".to_owned(),
+            message_id: "message".to_owned(),
+            content_id: "logo@example.com".to_owned(),
+        })
     );
 }
 

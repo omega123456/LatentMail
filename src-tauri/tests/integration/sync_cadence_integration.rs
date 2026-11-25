@@ -1,3 +1,6 @@
+use latentmail_lib::auth::SaveAccountRequest;
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey};
+use latentmail_lib::sync::SyncEngineDeps;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -78,8 +81,18 @@ fn engine_with_seed() -> (
         .unwrap();
     }
     MessageRepository::write_full_state(&connection, &seed_message("existing1", "t1", 1)).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "existing1", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "existing1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     drop(connection);
 
@@ -93,7 +106,12 @@ fn engine_with_seed() -> (
     });
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, sink);
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: sink,
+    });
     (engine, queue, storage, directory, events)
 }
 
@@ -264,9 +282,13 @@ async fn suspended_queue_skips_both_cadence_network_paths() {
         format!("{}/token", server.uri()),
     );
     std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
-    auth.save_account("cadence@example.com".into(), "refresh-token".into(), None)
-        .await
-        .unwrap();
+    auth.save_account(SaveAccountRequest {
+        email: "cadence@example.com".into(),
+        refresh_token: "refresh-token".into(),
+        target: None,
+    })
+    .await
+    .unwrap();
     queue.set_suspended(true);
 
     run_fast_cadence(app.handle(), &auth, &engine).await;

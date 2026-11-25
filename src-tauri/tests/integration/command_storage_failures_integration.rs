@@ -1,10 +1,13 @@
+use latentmail_lib::attachments::commands::AttachmentKey;
+use latentmail_lib::ipc::{AccountIdRequest, AppServices, CommandPayload};
+use latentmail_lib::search::{SearchThreadsRequest, SearchTotalRequest};
+use latentmail_lib::settings::WriteSettingRequest;
+use latentmail_lib::sync::commands::DiscardDraftRequest;
+use latentmail_lib::sync::SyncEngineDeps;
 use std::sync::Arc;
 
 use latentmail_lib::{
-    attachments::{
-        commands::{ensure_attachment_cached, AttachmentServices},
-        AttachmentCache,
-    },
+    attachments::{commands::ensure_attachment_cached, AttachmentCache},
     auth::{save_refresh_token, AuthService},
     compose::staging::Staging,
     queue::commands::{retry_failed_operations, retry_queue_operation},
@@ -13,9 +16,7 @@ use latentmail_lib::{
     storage::{Account, AccountRepository, Storage},
     sync::{
         commands::{discard_compose_draft, read_traversal_status},
-        create_queue_engine, noop_event_sink,
-        services::GmailServices,
-        SyncEngine, WorkRegistry,
+        create_queue_engine, noop_event_sink, SyncEngine, WorkRegistry,
     },
 };
 use tauri::Manager;
@@ -46,12 +47,12 @@ fn harness() -> Harness {
     AccountRepository::upsert(&storage.connection().unwrap(), &account()).unwrap();
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(
-        storage.clone(),
-        Arc::clone(&queue),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -86,22 +87,31 @@ async fn search_commands_reject_an_overlong_query() {
 
     assert_eq!(
         search_threads(
-            app.state(),
-            "account".into(),
-            overlong_query(),
-            None,
-            None,
-            None,
-            None,
+            AppServices::new(app.handle()),
+            CommandPayload(SearchThreadsRequest {
+                account_id: "account".into(),
+                query: overlong_query(),
+                scope: None,
+                cursor: None,
+                direction: None,
+                limit: None
+            })
         )
         .await
         .unwrap_err(),
         "search query exceeds 2048 characters"
     );
     assert_eq!(
-        search_total(app.state(), "account".into(), overlong_query(), None)
-            .await
-            .unwrap_err(),
+        search_total(
+            AppServices::new(app.handle()),
+            CommandPayload(SearchTotalRequest {
+                account_id: "account".into(),
+                query: overlong_query(),
+                scope: None
+            })
+        )
+        .await
+        .unwrap_err(),
         "search query exceeds 2048 characters"
     );
 }
@@ -113,21 +123,28 @@ async fn search_commands_surface_an_unreadable_database() {
     harness.corrupt();
 
     assert!(search_threads(
-        app.state(),
-        "account".into(),
-        "invoice".into(),
-        None,
-        None,
-        None,
-        None,
+        AppServices::new(app.handle()),
+        CommandPayload(SearchThreadsRequest {
+            account_id: "account".into(),
+            query: "invoice".into(),
+            scope: None,
+            cursor: None,
+            direction: None,
+            limit: None
+        })
     )
     .await
     .is_err());
-    assert!(
-        search_total(app.state(), "account".into(), "invoice".into(), None)
-            .await
-            .is_err()
-    );
+    assert!(search_total(
+        AppServices::new(app.handle()),
+        CommandPayload(SearchTotalRequest {
+            account_id: "account".into(),
+            query: "invoice".into(),
+            scope: None
+        })
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -137,10 +154,11 @@ async fn writing_start_at_login_rejects_a_non_boolean_value() {
 
     assert_eq!(
         write_setting(
-            app.handle().clone(),
-            app.state(),
-            "startAtLogin".into(),
-            serde_json::json!("yes"),
+            AppServices::new(app.handle()),
+            CommandPayload(WriteSettingRequest {
+                key: "startAtLogin".into(),
+                value: serde_json::json!("yes")
+            })
         )
         .await
         .unwrap_err(),
@@ -155,13 +173,15 @@ async fn queue_commands_surface_an_unreadable_database() {
     harness.corrupt();
 
     assert!(
-        retry_queue_operation(app.state(), app.state(), "operation".into())
+        retry_queue_operation(AppServices::new(app.handle()), "operation".into())
             .await
             .is_err()
     );
-    assert!(retry_failed_operations(app.state(), app.state(), None)
-        .await
-        .is_err());
+    assert!(
+        retry_failed_operations(AppServices::new(app.handle()), None)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -170,9 +190,14 @@ async fn reading_traversal_status_surfaces_an_unreadable_database() {
     let app = &harness.app;
     harness.corrupt();
 
-    assert!(read_traversal_status(app.state(), "account".into())
-        .await
-        .is_err());
+    assert!(read_traversal_status(
+        AppServices::new(app.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: "account".into()
+        })
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -183,10 +208,12 @@ async fn caching_an_attachment_surfaces_an_unreadable_database() {
     harness.corrupt();
 
     assert!(ensure_attachment_cached(
-        AttachmentServices::new(app.handle()).unwrap(),
-        "account".into(),
-        "message-1".into(),
-        "attachment-1".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(AttachmentKey {
+            account_id: "account".into(),
+            message_id: "message-1".into(),
+            attachment_id: "attachment-1".into()
+        })
     )
     .await
     .is_err());
@@ -199,11 +226,12 @@ async fn discarding_a_compose_draft_surfaces_an_unreadable_database() {
     harness.corrupt();
 
     assert!(discard_compose_draft(
-        GmailServices::new(app.handle()).unwrap(),
-        app.state(),
-        "account".into(),
-        None,
-        "session-1".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(DiscardDraftRequest {
+            account_id: "account".into(),
+            draft_id: None,
+            session_id: "session-1".into()
+        })
     )
     .await
     .is_err());

@@ -2,6 +2,7 @@ use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
     RetrievalFilters, RetrievalRepository, Storage,
 };
+use latentmail_lib::storage::{LabelMembershipChange, LexicalQuery, MessageKey, RecencyQuery};
 
 fn account(id: &str) -> Account {
     Account {
@@ -27,7 +28,21 @@ fn label(account_id: &str, id: &str, name: &str) -> Label {
     }
 }
 
-fn message(account_id: &str, id: &str, body: &str, sent_at: i64) -> Message {
+struct SeedMessage<'a> {
+    account_id: &'a str,
+    id: &'a str,
+    body: &'a str,
+    sent_at: i64,
+}
+
+fn message(
+    SeedMessage {
+        account_id,
+        id,
+        body,
+        sent_at,
+    }: SeedMessage<'_>,
+) -> Message {
     Message {
         account_id: account_id.into(),
         id: id.into(),
@@ -70,7 +85,12 @@ fn filtered_fixture() -> (rusqlite::Connection, i64, i64) {
     LabelRepository::upsert(&connection, &label("account", "INBOX", "Inbox")).unwrap();
     LabelRepository::upsert(&connection, &label("account", "SENT", "Sent")).unwrap();
 
-    let mut early = message("account", "early", "quarterly ssd report", 1_000);
+    let mut early = message(SeedMessage {
+        account_id: "account",
+        id: "early",
+        body: "quarterly ssd report",
+        sent_at: 1_000,
+    });
     early.sender = "Alice Adams <alice@example.com>".into();
     early.recipients = "me@example.com".into();
     early.has_attachments = true;
@@ -78,7 +98,12 @@ fn filtered_fixture() -> (rusqlite::Connection, i64, i64) {
     early.is_starred = true;
     let early_seq = write(&connection, &early);
 
-    let mut late = message("account", "late", "quarterly ssd report", 2_000);
+    let mut late = message(SeedMessage {
+        account_id: "account",
+        id: "late",
+        body: "quarterly ssd report",
+        sent_at: 2_000,
+    });
     late.sender = "Bob Brown <bob@example.com>".into();
     late.recipients = "team@example.com".into();
     late.has_attachments = false;
@@ -86,9 +111,30 @@ fn filtered_fixture() -> (rusqlite::Connection, i64, i64) {
     late.is_starred = false;
     let late_seq = write(&connection, &late);
 
-    MessageRepository::set_label_membership(&connection, "account", "early", "INBOX", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "late", "SENT", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "early",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "late",
+        },
+        LabelMembershipChange {
+            label_id: "SENT",
+            present: true,
+        },
+    )
+    .unwrap();
 
     (connection, early_seq, late_seq)
 }
@@ -98,7 +144,16 @@ fn relevance(
     question: &str,
     filters: &RetrievalFilters,
 ) -> Vec<i64> {
-    RetrievalRepository::lexical_relevance(connection, "account", question, 50, filters).unwrap()
+    RetrievalRepository::lexical_relevance(
+        connection,
+        &LexicalQuery {
+            account_id: "account",
+            question: question,
+            limit: 50,
+            filters: filters,
+        },
+    )
+    .unwrap()
 }
 
 fn chronological(
@@ -106,8 +161,16 @@ fn chronological(
     question: &str,
     filters: &RetrievalFilters,
 ) -> Vec<i64> {
-    RetrievalRepository::lexical_chronological(connection, "account", question, 50, filters)
-        .unwrap()
+    RetrievalRepository::lexical_chronological(
+        connection,
+        &LexicalQuery {
+            account_id: "account",
+            question: question,
+            limit: 50,
+            filters: filters,
+        },
+    )
+    .unwrap()
 }
 
 fn recency(
@@ -115,7 +178,16 @@ fn recency(
     filters: &RetrievalFilters,
     ascending: bool,
 ) -> Vec<i64> {
-    RetrievalRepository::recency(connection, "account", 50, filters, ascending).unwrap()
+    RetrievalRepository::recency(
+        connection,
+        &RecencyQuery {
+            account_id: "account",
+            limit: 50,
+            filters: filters,
+            ascending: ascending,
+        },
+    )
+    .unwrap()
 }
 
 #[test]
@@ -132,7 +204,16 @@ fn the_recency_path_orders_by_date_in_both_directions_and_honours_its_limit() {
         vec![early_seq, late_seq]
     );
     assert_eq!(
-        RetrievalRepository::recency(&connection, "account", 1, &filters, false).unwrap(),
+        RetrievalRepository::recency(
+            &connection,
+            &RecencyQuery {
+                account_id: "account",
+                limit: 1,
+                filters: &filters,
+                ascending: false
+            }
+        )
+        .unwrap(),
         vec![late_seq]
     );
 }
@@ -140,7 +221,12 @@ fn the_recency_path_orders_by_date_in_both_directions_and_honours_its_limit() {
 #[test]
 fn the_recency_path_returns_mail_that_no_keyword_can_reach() {
     let (connection, _early_seq, _late_seq) = filtered_fixture();
-    let mut junk = message("account", "junk", "sdfdf", 3_000);
+    let mut junk = message(SeedMessage {
+        account_id: "account",
+        id: "junk",
+        body: "sdfdf",
+        sent_at: 3_000,
+    });
     junk.subject = "asdsdasd".into();
     junk.has_attachments = true;
     let junk_seq = write(&connection, &junk);
@@ -301,17 +387,22 @@ fn the_relevance_path_ranks_a_rare_term_above_messages_matching_only_common_term
     for index in 0..12 {
         write(
             &connection,
-            &message(
-                "account",
-                &format!("common-{index}"),
-                "quarterly report",
-                1_000 + index,
-            ),
+            &message(SeedMessage {
+                account_id: "account",
+                id: &format!("common-{index}"),
+                body: "quarterly report",
+                sent_at: 1_000 + index,
+            }),
         );
     }
     let rare_seq = write(
         &connection,
-        &message("account", "rare", "ssd diagnostics", 5_000),
+        &message(SeedMessage {
+            account_id: "account",
+            id: "rare",
+            body: "ssd diagnostics",
+            sent_at: 5_000,
+        }),
     );
 
     let ranked = relevance(
@@ -330,7 +421,12 @@ fn the_relevance_path_is_scoped_to_one_account() {
     AccountRepository::upsert(&connection, &account("other")).unwrap();
     let other_seq = write(
         &connection,
-        &message("other", "other", "quarterly ssd report", 1_500),
+        &message(SeedMessage {
+            account_id: "other",
+            id: "other",
+            body: "quarterly ssd report",
+            sent_at: 1_500,
+        }),
     );
 
     let mut matched = relevance(&connection, "ssd report", &RetrievalFilters::default());
@@ -340,10 +436,12 @@ fn the_relevance_path_is_scoped_to_one_account() {
     assert_eq!(
         RetrievalRepository::lexical_relevance(
             &connection,
-            "other",
-            "ssd report",
-            50,
-            &RetrievalFilters::default()
+            &LexicalQuery {
+                account_id: "other",
+                question: "ssd report",
+                limit: 50,
+                filters: &RetrievalFilters::default()
+            }
         )
         .unwrap(),
         vec![other_seq]
@@ -356,19 +454,31 @@ fn the_chronological_path_returns_the_oldest_matches_as_the_corpus_grows_past_an
     AccountRepository::upsert(&connection, &account("account")).unwrap();
     let oldest_seq = write(
         &connection,
-        &message("account", "oldest", "ssd diagnostics", 10),
+        &message(SeedMessage {
+            account_id: "account",
+            id: "oldest",
+            body: "ssd diagnostics",
+            sent_at: 10,
+        }),
     );
     let second_seq = write(
         &connection,
-        &message("account", "second", "ssd diagnostics", 20),
+        &message(SeedMessage {
+            account_id: "account",
+            id: "second",
+            body: "ssd diagnostics",
+            sent_at: 20,
+        }),
     );
 
     let before = RetrievalRepository::lexical_chronological(
         &connection,
-        "account",
-        "ssd diagnostics",
-        2,
-        &RetrievalFilters::default(),
+        &LexicalQuery {
+            account_id: "account",
+            question: "ssd diagnostics",
+            limit: 2,
+            filters: &RetrievalFilters::default(),
+        },
     )
     .unwrap();
     assert_eq!(before, vec![oldest_seq, second_seq]);
@@ -376,21 +486,23 @@ fn the_chronological_path_returns_the_oldest_matches_as_the_corpus_grows_past_an
     for index in 0..200 {
         write(
             &connection,
-            &message(
-                "account",
-                &format!("later-{index}"),
-                "ssd diagnostics",
-                1_000 + index,
-            ),
+            &message(SeedMessage {
+                account_id: "account",
+                id: &format!("later-{index}"),
+                body: "ssd diagnostics",
+                sent_at: 1_000 + index,
+            }),
         );
     }
 
     let after = RetrievalRepository::lexical_chronological(
         &connection,
-        "account",
-        "ssd diagnostics",
-        2,
-        &RetrievalFilters::default(),
+        &LexicalQuery {
+            account_id: "account",
+            question: "ssd diagnostics",
+            limit: 2,
+            filters: &RetrievalFilters::default(),
+        },
     )
     .unwrap();
 

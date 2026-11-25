@@ -58,7 +58,7 @@ describe('ReadingPane', () => {
         threadId="thread-1"
         conversation={conversation}
         accountId="account-1"
-        onFetchBody={onFetchBody}
+        body={{ onFetchBody }}
       />,
     );
     await waitFor(() => expect(readBody).toHaveBeenCalledOnce());
@@ -106,7 +106,18 @@ describe('ReadingPane', () => {
   });
 
   it('substitutes the bulk selection panel when a multi-selection is active', () => {
-    renderWithQueryClient(<ReadingPane threadId={null} selectedCount={3} />);
+    renderWithQueryClient(
+      <ReadingPane
+        threadId={null}
+        bulkSelection={{
+          count: 3,
+          selectedThreads: [],
+          loadedThreadCount: 0,
+          onClearSelection: () => undefined,
+          onSelectAll: () => undefined,
+        }}
+      />,
+    );
     expect(screen.getByTestId('bulk-selection-panel')).toBeInTheDocument();
     expect(screen.getByText('3 conversations selected')).toBeInTheDocument();
   });
@@ -122,7 +133,21 @@ describe('ReadingPane', () => {
       <ReadingPane
         threadId="thread-1"
         conversation={conversation}
-        onMessageTriage={onMessageTriage}
+        triage={{
+          systemLabelIds: [],
+          labelMenuEntries: [],
+          unread: false,
+          starred: false,
+          handlers: {
+            onToggleRead: () => undefined,
+            onToggleStar: () => undefined,
+            onApplyLabels: () => undefined,
+            onMoveTo: () => undefined,
+            onToggleSpam: () => undefined,
+            onDelete: () => undefined,
+          },
+          onMessageTriage: onMessageTriage,
+        }}
       />,
     );
     const ribbon = within(screen.getByRole('toolbar', { name: 'Message actions' }));

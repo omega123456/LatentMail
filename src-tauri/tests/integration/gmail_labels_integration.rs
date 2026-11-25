@@ -1,5 +1,5 @@
 use latentmail_lib::gmail::{labels::resolve_color, GmailClient, LabelColorPair};
-use latentmail_lib::storage::{LabelNameError, LabelRepository, Storage};
+use latentmail_lib::storage::{LabelKey, LabelNameCheck, LabelNameError, LabelRepository, Storage};
 use wiremock::{
     matchers::{body_json, method, path},
     Mock, MockServer, ResponseTemplate,
@@ -58,14 +58,26 @@ async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
     );
 
     let renamed = client
-        .update_label("Label_1", Some("Customers"), None)
+        .update_label(
+            "Label_1",
+            latentmail_lib::gmail::labels::LabelUpdate {
+                name: Some("Customers"),
+                color: None,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(renamed.name, "Customers");
 
     let red = resolve_color("red").unwrap();
     let recolored = client
-        .update_label("Label_1", None, Some(&red))
+        .update_label(
+            "Label_1",
+            latentmail_lib::gmail::labels::LabelUpdate {
+                name: None,
+                color: Some(&red),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(recolored.color.unwrap().background_color, "#fb4c2f");
@@ -137,11 +149,15 @@ fn off_palette_colours_are_rejected_pre_flight_without_touching_the_network() {
 fn every_palette_id_round_trips_to_a_distinct_pair() {
     use latentmail_lib::gmail::labels::LABEL_PALETTE;
     let mut seen = std::collections::HashSet::new();
-    for (id, background, text) in LABEL_PALETTE {
-        assert!(seen.insert((*background, *text)), "duplicate pair for {id}");
-        let pair = resolve_color(id).unwrap();
-        assert_eq!(pair.background_color, *background);
-        assert_eq!(pair.text_color, *text);
+    for entry in LABEL_PALETTE {
+        assert!(
+            seen.insert((entry.background, entry.text)),
+            "duplicate pair for {}",
+            entry.id
+        );
+        let pair = resolve_color(entry.id).unwrap();
+        assert_eq!(pair.background_color, entry.background);
+        assert_eq!(pair.text_color, entry.text);
     }
 }
 
@@ -186,35 +202,91 @@ fn each_label_name_rule_reports_a_distinguishable_error() {
     user_label(&connection, "Label_1", "Clients");
 
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "   ", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "   ",
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::Empty)
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", &"x".repeat(101), None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: &"x".repeat(101),
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::TooLong)
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "CATEGORY_Personal", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "CATEGORY_Personal",
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::ReservedPrefix)
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "INBOX", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "INBOX",
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::ReservedPrefix)
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "Bad\\Name", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "Bad\\Name",
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::ForbiddenCharacters)
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "clients", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "clients",
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::Duplicate)
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "CLIENTS", Some("Label_1")),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "CLIENTS",
+                exclude_id: Some("Label_1")
+            }
+        ),
         Ok("CLIENTS".to_owned())
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "  Vendors  ", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "  Vendors  ",
+                exclude_id: None
+            }
+        ),
         Ok("Vendors".to_owned())
     );
 }
@@ -226,12 +298,28 @@ fn rename_set_color_and_delete_round_trip_locally() {
     account(&connection);
     user_label(&connection, "Label_1", "Clients");
 
-    LabelRepository::rename(&connection, "account", "Label_1", "Customers").unwrap();
+    LabelRepository::rename(
+        &connection,
+        LabelKey {
+            account_id: "account",
+            id: "Label_1",
+        },
+        "Customers",
+    )
+    .unwrap();
     let color = LabelColor {
         text: "#ffffff".into(),
         background: "#fb4c2f".into(),
     };
-    LabelRepository::set_color(&connection, "account", "Label_1", Some(&color)).unwrap();
+    LabelRepository::set_color(
+        &connection,
+        LabelKey {
+            account_id: "account",
+            id: "Label_1",
+        },
+        Some(&color),
+    )
+    .unwrap();
     let label = LabelRepository::get(&connection, "account", "Label_1")
         .unwrap()
         .unwrap();

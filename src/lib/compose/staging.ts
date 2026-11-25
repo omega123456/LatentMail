@@ -45,12 +45,17 @@ export function guessMimeType(path: string): string {
   );
 }
 
-export async function stageAttachmentPath(
-  accountId: string,
-  owner: string,
-  path: string,
-  contentId: string | null = null,
-): Promise<StagedAttachment & { assetUrl: string }> {
+export async function stageAttachmentPath({
+  accountId,
+  owner,
+  path,
+  contentId = null,
+}: {
+  accountId: string;
+  owner: string;
+  path: string;
+  contentId?: string | null;
+}): Promise<StagedAttachment & { assetUrl: string }> {
   const mimeType = guessMimeType(path);
   const staged = await invoke('stage_attachment_from_path', {
     accountId,

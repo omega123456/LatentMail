@@ -40,12 +40,17 @@ export function sanitizeFilename(filename: string): string {
 const MAX_EXPORT_STEM_LENGTH = 120;
 const PATH_UNSAFE_CHARACTERS = /[/\\:*?"<>|]+/g;
 
-export function messageExportFilename(
-  subject: string,
-  sentAt: Date,
-  sender: string,
-  extension: 'eml' | 'html',
-): string {
+export function messageExportFilename({
+  subject,
+  sentAt,
+  sender,
+  extension,
+}: {
+  subject: string;
+  sentAt: Date;
+  sender: string;
+  extension: 'eml' | 'html';
+}): string {
   const title = subject.trim() || `Message from ${sender}`;
   const stem = `${format(sentAt, DATE_FORMAT.isoDate)} ${title}`
     .replace(PATH_UNSAFE_CHARACTERS, ' ')

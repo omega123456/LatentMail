@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@/lib/ipc/commands';
 import type { ComposeDraftRequest } from '@/lib/types/ipc';
 import { selectQualifiesForDraft, useComposeStore, type ComposeSession } from '@/stores/compose';
@@ -56,33 +56,54 @@ export function toDraftRequest(session: ComposeSession): ComposeDraftRequest {
   };
 }
 
+export class DraftAutosaveScheduler {
+  private timerId: number | null = null;
+  private readonly delayMs: number;
+
+  constructor(delayMs = AUTOSAVE_DELAY_MS) {
+    this.delayMs = delayMs;
+  }
+
+  schedule(): void {
+    this.cancel();
+    this.timerId = window.setTimeout(() => {
+      this.timerId = null;
+      void this.saveNow();
+    }, this.delayMs);
+  }
+
+  cancel(): void {
+    if (this.timerId === null) return;
+    window.clearTimeout(this.timerId);
+    this.timerId = null;
+  }
+
+  async saveNow(): Promise<void> {
+    const store = useComposeStore.getState();
+    const current = store.session;
+    if (!current || !qualifiesForDraft(current)) return;
+    store.setDraftStatus('saving');
+    try {
+      const accepted = await invoke('save_compose_draft', { draft: toDraftRequest(current) });
+      if (accepted.draftId) store.setDraftId(accepted.draftId);
+      store.markSaved();
+    } catch {
+      store.setDraftStatus('failed', 'Couldn’t save draft.');
+    }
+  }
+}
+
 export function useComposeAutosave() {
   const session = useComposeStore((compose) => compose.session);
   const qualifies = useComposeStore(selectQualifiesForDraft);
-  const setStatus = useComposeStore((compose) => compose.setDraftStatus);
-  const setDraftId = useComposeStore((compose) => compose.setDraftId);
-  const markSaved = useComposeStore((compose) => compose.markSaved);
-  const timer = useRef<number | null>(null);
+  const [scheduler] = useState(() => new DraftAutosaveScheduler());
 
   useEffect(() => {
     if (!session?.dirty || !qualifies) return;
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      const current = useComposeStore.getState().session;
-      if (!current || !qualifiesForDraft(current)) return;
-      setStatus('saving');
-      void invoke('save_compose_draft', { draft: toDraftRequest(current) })
-        .then((accepted) => {
-          if (accepted.draftId) setDraftId(accepted.draftId);
-          markSaved();
-        })
-        .catch(() => setStatus('failed', 'Couldn’t save draft.'));
-    }, AUTOSAVE_DELAY_MS);
-    return () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-      timer.current = null;
-    };
+    scheduler.schedule();
+    return () => scheduler.cancel();
   }, [
+    scheduler,
     session?.id,
     session?.dirty,
     session?.subject,
@@ -90,23 +111,7 @@ export function useComposeAutosave() {
     session?.recipients,
     session?.attachments,
     qualifies,
-    setStatus,
-    setDraftId,
-    markSaved,
   ]);
 
-  return {
-    saveNow: async () => {
-      const current = useComposeStore.getState().session;
-      if (!current || !qualifiesForDraft(current)) return;
-      setStatus('saving');
-      try {
-        const accepted = await invoke('save_compose_draft', { draft: toDraftRequest(current) });
-        if (accepted.draftId) setDraftId(accepted.draftId);
-        markSaved();
-      } catch {
-        setStatus('failed', 'Couldn’t save draft.');
-      }
-    },
-  };
+  return { saveNow: () => scheduler.saveNow() };
 }

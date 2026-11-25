@@ -6,14 +6,14 @@ use tracing_subscriber::filter::LevelFilter;
 #[test]
 fn parse_round_trips_against_real_subscriber_output() {
     let directory = tempfile::tempdir().unwrap();
-    let (dispatch, guard, _handle) = subscriber(directory.path(), LevelFilter::INFO).unwrap();
+    let parts = subscriber(directory.path(), LevelFilter::INFO).unwrap();
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    tracing::dispatcher::with_default(&parts.dispatch, || {
         tracing::info!(target: "sync", "applied 14 history records");
         tracing::warn!(target: "gmail", "quota window at 9412/10000 units");
         tracing::error!(target: "sync", "history sync failed for alex@example.com");
     });
-    drop(guard);
+    drop(parts.guard);
 
     let contents = fs::read_to_string(
         fs::read_dir(directory.path())

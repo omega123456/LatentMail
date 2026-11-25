@@ -1,9 +1,8 @@
+use latentmail_lib::os::{lifecycle::PowerSignal, power};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-
-use latentmail_lib::os::{lifecycle::PowerSignal, power};
 
 #[test]
 fn test_power_registration_never_invokes_the_listener() {

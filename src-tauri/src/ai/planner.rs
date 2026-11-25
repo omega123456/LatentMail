@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::{
     ai::{
         prompts,
-        provider::Provider,
+        provider::{ChatCompletionRequest, Provider},
         retrieval::{HistoryMessage, RetrievalRequest, Role},
     },
     storage::RetrievalFilters,
@@ -124,7 +124,11 @@ pub async fn plan(
         {"role": "user", "content": user},
     ]);
     provider
-        .chat_completion(request.chat_model, messages, Some(response_format()))
+        .chat_completion(ChatCompletionRequest {
+            model: request.chat_model,
+            messages: messages,
+            response_format: Some(response_format()),
+        })
         .await
         .map_or_else(
             |_| RetrievalPlan::default(),

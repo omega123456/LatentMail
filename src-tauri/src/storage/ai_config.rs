@@ -11,6 +11,11 @@ pub struct AccountAiConfig {
     pub embedding_dimensions: Option<i64>,
 }
 
+pub struct EmbeddingModelSpec<'a> {
+    pub model: &'a str,
+    pub dimensions: i64,
+}
+
 pub struct AccountAiConfigRepository;
 
 impl AccountAiConfigRepository {
@@ -63,11 +68,10 @@ impl AccountAiConfigRepository {
     pub fn set_embedding_model(
         connection: &Connection,
         account_id: &str,
-        model: &str,
-        dimensions: i64,
+        spec: EmbeddingModelSpec<'_>,
     ) -> Result<()> {
         Self::ensure(connection, account_id)?;
-        connection.prepare_cached("UPDATE account_ai_config SET embedding_model=?1,embedding_dimensions=?2 WHERE account_id=?3")?.execute(params![model, dimensions, account_id])?;
+        connection.prepare_cached("UPDATE account_ai_config SET embedding_model=?1,embedding_dimensions=?2 WHERE account_id=?3")?.execute(params![spec.model, spec.dimensions, account_id])?;
         Ok(())
     }
     pub fn set_index_paused(connection: &Connection, account_id: &str, paused: bool) -> Result<()> {

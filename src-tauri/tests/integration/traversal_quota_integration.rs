@@ -1,3 +1,4 @@
+use latentmail_lib::gmail::AccountClientConfig;
 use latentmail_lib::gmail::{
     GmailClient, GmailRateLimiters, ACCOUNT_RATE_PER_SECOND, TRAVERSAL_SHARE,
 };
@@ -35,7 +36,15 @@ async fn saturating_traversal_quota_does_not_delay_a_non_traversal_request() {
         .await;
 
     let limiters = GmailRateLimiters::default();
-    let client = GmailClient::for_account("account", "token", server.uri(), &limiters).await;
+    let client = GmailClient::for_account(
+        AccountClientConfig {
+            account_id: "account",
+            access_token: "token".into(),
+            base_url: server.uri(),
+        },
+        &limiters,
+    )
+    .await;
     let traversal_client = client.traversal_scoped();
 
     drain_traversal_bucket(&traversal_client).await;
@@ -60,7 +69,15 @@ async fn a_traversal_request_beyond_its_cap_genuinely_waits_for_refill() {
         .await;
 
     let limiters = GmailRateLimiters::default();
-    let client = GmailClient::for_account("account", "token", server.uri(), &limiters).await;
+    let client = GmailClient::for_account(
+        AccountClientConfig {
+            account_id: "account",
+            access_token: "token".into(),
+            base_url: server.uri(),
+        },
+        &limiters,
+    )
+    .await;
     let traversal_client = client.traversal_scoped();
 
     drain_traversal_bucket(&traversal_client).await;

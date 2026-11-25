@@ -40,7 +40,14 @@ describe('compose entry actions', () => {
       attachments: [],
     });
 
-    await act(async () => openReply('reply-all', 'account', 'me@example.com', message));
+    await act(async () =>
+      openReply({
+        mode: 'reply-all',
+        accountId: 'account',
+        accountEmail: 'me@example.com',
+        message: message,
+      }),
+    );
 
     expect(useComposeStore.getState().session).toMatchObject({
       mode: 'reply-all',
@@ -53,9 +60,23 @@ describe('compose entry actions', () => {
   });
 
   it('does nothing for reply/forward/edit draft actions without a target', async () => {
-    await act(async () => openReply('reply', 'account', 'me@example.com', undefined));
+    await act(async () =>
+      openReply({
+        mode: 'reply',
+        accountId: 'account',
+        accountEmail: 'me@example.com',
+        message: undefined,
+      }),
+    );
     await act(async () => openForward('account', 'me@example.com', undefined));
-    await act(async () => openEditDraft('account', 'me@example.com', 'Subject', undefined));
+    await act(async () =>
+      openEditDraft({
+        accountId: 'account',
+        accountEmail: 'me@example.com',
+        subject: 'Subject',
+        message: undefined,
+      }),
+    );
     expect(useComposeStore.getState().session).toBeNull();
   });
 
@@ -205,10 +226,15 @@ describe('compose entry actions', () => {
       ],
     });
     await act(async () =>
-      openEditDraft('account', 'me@example.com', 'ignored', {
-        ...message,
-        draftId: 'draft-1',
-      } as typeof message & { draftId: string }),
+      openEditDraft({
+        accountId: 'account',
+        accountEmail: 'me@example.com',
+        subject: 'ignored',
+        message: {
+          ...message,
+          draftId: 'draft-1',
+        } as typeof message & { draftId: string },
+      }),
     );
     expect(useComposeStore.getState().session).toMatchObject({
       id: 'hydrated',
@@ -226,7 +252,14 @@ describe('compose entry actions', () => {
     });
 
     act(() => useComposeStore.getState().close());
-    await act(async () => openEditDraft('account', 'me@example.com', 'Loaded', message));
+    await act(async () =>
+      openEditDraft({
+        accountId: 'account',
+        accountEmail: 'me@example.com',
+        subject: 'Loaded',
+        message: message,
+      }),
+    );
     expect(useComposeStore.getState().session).toMatchObject({
       mode: 'draft',
       subject: 'Loaded',

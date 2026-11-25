@@ -1,16 +1,33 @@
 import { create } from 'zustand';
 import { useAssistantStore } from './assistant';
-import { useComposeStore } from './compose';
 import { useMultiSelectStore } from './multi-select';
-import { useSearchStore } from './search';
 
-type SelectionState = {
-  activeAccountId: string | null;
-  activeMailboxId: string | null;
+type ThreadSelection = {
   activeThreadId: string | null;
   keyboardCursor: number | null;
   imagesAllowedFor: string[];
   flashThreadId: string | null;
+};
+
+type AccountSelection = ThreadSelection & {
+  activeAccountId: string | null;
+  activeMailboxId: string | null;
+};
+
+export const CLEARED_SELECTION: ThreadSelection = {
+  activeThreadId: null,
+  keyboardCursor: null,
+  imagesAllowedFor: [],
+  flashThreadId: null,
+};
+
+export const CLEARED_ACCOUNT_SELECTION: AccountSelection = {
+  activeAccountId: null,
+  activeMailboxId: null,
+  ...CLEARED_SELECTION,
+};
+
+type SelectionState = AccountSelection & {
   allowImagesFor: (messageId: string) => void;
   setActiveAccountId: (activeAccountId: string | null) => void;
   setActiveMailboxId: (activeMailboxId: string | null) => void;
@@ -18,22 +35,20 @@ type SelectionState = {
   setKeyboardCursor: (keyboardCursor: number | null) => void;
   setFlashThreadId: (threadId: string | null) => void;
   clearSelection: () => void;
-  clearStateForRemovedAccount: (accountId: string) => void;
+  clearAccount: () => void;
 };
 
+function appendAllowedImageMessage(imagesAllowedFor: string[], messageId: string): string[] {
+  if (imagesAllowedFor.includes(messageId)) return imagesAllowedFor;
+  return [...imagesAllowedFor, messageId];
+}
+
 export const useSelectionStore = create<SelectionState>((set, get) => ({
-  activeAccountId: null,
-  activeMailboxId: null,
-  activeThreadId: null,
-  keyboardCursor: null,
-  imagesAllowedFor: [],
-  flashThreadId: null,
+  ...CLEARED_ACCOUNT_SELECTION,
   allowImagesFor: (messageId) =>
-    set((state) =>
-      state.imagesAllowedFor.includes(messageId)
-        ? state
-        : { imagesAllowedFor: [...state.imagesAllowedFor, messageId] },
-    ),
+    set((state) => ({
+      imagesAllowedFor: appendAllowedImageMessage(state.imagesAllowedFor, messageId),
+    })),
   setActiveAccountId: (activeAccountId) => {
     useMultiSelectStore.getState().clear();
     if (activeAccountId !== null) useAssistantStore.getState().selectAccount(activeAccountId);
@@ -41,44 +56,19 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
   },
   setActiveMailboxId: (activeMailboxId) => {
     useMultiSelectStore.getState().clear();
-    set({
-      activeMailboxId: activeMailboxId,
-      activeThreadId: null,
-      keyboardCursor: null,
-      imagesAllowedFor: [],
-      flashThreadId: null,
-    });
+    set({ activeMailboxId: activeMailboxId, ...CLEARED_SELECTION });
   },
   setActiveThreadId: (activeThreadId) => {
     if (activeThreadId !== null) useMultiSelectStore.getState().clear();
+    const keepFlash = get().flashThreadId === activeThreadId;
     set({
       activeThreadId: activeThreadId,
       imagesAllowedFor: [],
-      flashThreadId: get().flashThreadId === activeThreadId ? activeThreadId : null,
+      flashThreadId: keepFlash ? activeThreadId : null,
     });
   },
   setKeyboardCursor: (keyboardCursor) => set({ keyboardCursor }),
   setFlashThreadId: (flashThreadId) => set({ flashThreadId }),
-  clearSelection: () =>
-    set({ activeThreadId: null, keyboardCursor: null, imagesAllowedFor: [], flashThreadId: null }),
-  clearStateForRemovedAccount: (accountId) => {
-    useMultiSelectStore.getState().clear();
-    useSearchStore.getState().clear();
-    const composeSession = useComposeStore.getState().session;
-    if (composeSession?.accountId === accountId) useComposeStore.getState().close();
-    if (useAssistantStore.getState().accountId === accountId) {
-      useAssistantStore.setState({ accountId: null });
-      useAssistantStore.getState().newChat();
-    }
-    if (get().activeAccountId === accountId) {
-      set({
-        activeAccountId: null,
-        activeMailboxId: null,
-        activeThreadId: null,
-        keyboardCursor: null,
-        imagesAllowedFor: [],
-        flashThreadId: null,
-      });
-    }
-  },
+  clearSelection: () => set({ ...CLEARED_SELECTION }),
+  clearAccount: () => set({ ...CLEARED_ACCOUNT_SELECTION }),
 }));

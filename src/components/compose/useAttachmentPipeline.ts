@@ -38,12 +38,17 @@ function isRemovedInlineImage(
   return previousHtml.includes(assetUrl) && !currentHtml.includes(assetUrl);
 }
 
-function usePruneRemovedInlineImages(
-  session: ComposeSession | null,
-  accountId: string,
-  owner: string,
-  removeAttachment: (localId: string) => void,
-) {
+function usePruneRemovedInlineImages({
+  session,
+  accountId,
+  owner,
+  removeAttachment,
+}: {
+  session: ComposeSession | null;
+  accountId: string;
+  owner: string;
+  removeAttachment: (localId: string) => void;
+}) {
   const previousHtml = useRef(session?.html ?? '');
   useEffect(() => {
     const html = session?.html ?? '';
@@ -79,7 +84,7 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
         mimeType: guessMimeType(path),
         contentId: contentId,
       });
-      void stageAttachmentPath(accountId, owner, path, contentId)
+      void stageAttachmentPath({ accountId, owner, path, contentId })
         .then((staged) => {
           settleAttachment(localId, {
             id: staged.id,
@@ -126,7 +131,7 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     );
   }, [sessionId]);
 
-  usePruneRemovedInlineImages(session, accountId, owner, removeAttachment);
+  usePruneRemovedInlineImages({ session, accountId, owner, removeAttachment });
 
   return { onAttach, onInsertImage, onRemoveAttachment };
 }

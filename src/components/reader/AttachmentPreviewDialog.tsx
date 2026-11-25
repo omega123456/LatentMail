@@ -28,12 +28,17 @@ function isTextPreviewKind(kind: PreviewKind): boolean {
   return TEXT_KINDS.has(kind);
 }
 
-function usePreviewBytes(
-  accountId: string | null,
-  messageId: string,
-  attachmentId: string,
-  enabled: boolean,
-) {
+function usePreviewBytes({
+  accountId,
+  messageId,
+  attachmentId,
+  enabled,
+}: {
+  accountId: string | null;
+  messageId: string;
+  attachmentId: string;
+  enabled: boolean;
+}) {
   const key = enabled && accountId ? `${accountId}:${messageId}:${attachmentId}` : '';
   const [state, setState] = useState<{ key: string; bytes: ArrayBuffer | null; failed: boolean }>({
     key: '',
@@ -229,25 +234,25 @@ export function AttachmentPreviewDialog({
   const showError = useToastStore((toaster) => toaster.showError);
   const kind = resolvePreviewKind(attachment.mimeType, attachment.filename);
 
-  const imageQuery = useCachedAttachmentQuery(
-    accountId,
-    messageId,
-    attachment.id,
-    kind === 'image',
-  );
-  const previewBytes = usePreviewBytes(
-    accountId,
-    messageId,
-    attachment.id,
-    kind === 'pdf' || kind === 'docx',
-  );
+  const imageQuery = useCachedAttachmentQuery({
+    accountId: accountId,
+    messageId: messageId,
+    attachmentId: attachment.id,
+    enabled: kind === 'image',
+  });
+  const previewBytes = usePreviewBytes({
+    accountId: accountId,
+    messageId: messageId,
+    attachmentId: attachment.id,
+    enabled: kind === 'pdf' || kind === 'docx',
+  });
   const pdf = usePdfPreview(kind === 'pdf');
-  const textQuery = useAttachmentTextQuery(
-    accountId,
-    messageId,
-    attachment.id,
-    isTextPreviewKind(kind),
-  );
+  const textQuery = useAttachmentTextQuery({
+    accountId: accountId,
+    messageId: messageId,
+    attachmentId: attachment.id,
+    enabled: isTextPreviewKind(kind),
+  });
   const docx = useDocxHtml(kind === 'docx' ? (previewBytes.bytes ?? undefined) : undefined);
 
   const download = async () => {

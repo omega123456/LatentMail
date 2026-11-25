@@ -1,10 +1,12 @@
+use latentmail_lib::queue::{Lane, OperationKind, QueueEngine, QueueOperation};
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey};
+use latentmail_lib::sync::{LabelDelta, QueueRateConfig, SyncEngineDeps, ThreadMutation};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::gmail::GmailClient;
-use latentmail_lib::queue::{Lane, OperationKind, QueueEngine, QueueOperation};
 use latentmail_lib::storage::{
     Account, AccountRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository, HtmlPresence,
     Label, LabelRepository, Message, MessageRepository, Operation, OperationRepository, Storage,
@@ -76,12 +78,24 @@ fn seed_account(connection: &rusqlite::Connection, account_id: &str) {
             &seed_message(account_id, &message_id, &thread_id),
         )
         .unwrap();
-        MessageRepository::set_label_membership(connection, account_id, &message_id, "INBOX", true)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            connection,
+            MessageKey {
+                account_id: account_id,
+                message_id: &message_id,
+            },
+            LabelMembershipChange {
+                label_id: "INBOX",
+                present: true,
+            },
+        )
+        .unwrap();
         MessageRepository::replace_inline_parts(
             connection,
-            account_id,
-            &message_id,
+            MessageKey {
+                account_id: account_id,
+                message_id: &message_id,
+            },
             &[latentmail_lib::storage::InlinePart {
                 content_id: "cid".into(),
                 mime_type: "image/png".into(),
@@ -501,27 +515,35 @@ async fn removing_an_account_evicts_a_registry_backed_operations_closure_so_its_
     latentmail_lib::auth::save_refresh_token("removed", "token").unwrap();
 
     let registry = WorkRegistry::new();
-    let queue =
-        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {}));
-    let engine = SyncEngine::new(
-        storage.clone(),
-        Arc::clone(&queue),
-        registry,
-        noop_event_sink(),
+    let queue = create_queue_engine_with_events(
+        QueueRateConfig {
+            rate_per_second: 250,
+            burst: 250,
+        },
+        Arc::clone(&registry),
+        Arc::new(|_, _| {}),
     );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
 
     queue.pause();
 
     let mutate_engine = Arc::clone(&engine);
     let caller = tokio::spawn(async move {
         mutate_engine
-            .mutate(
-                "removed",
-                GmailClient::with_base_url("token", "http://127.0.0.1:1".to_owned()),
-                "thread-1".to_owned(),
-                HashSet::from(["STARRED".to_owned()]),
-                HashSet::new(),
-            )
+            .mutate(ThreadMutation {
+                account_id: "removed".to_owned(),
+                client: GmailClient::with_base_url("token", "http://127.0.0.1:1".to_owned()),
+                thread_id: "thread-1".to_owned(),
+                labels: LabelDelta {
+                    additions: HashSet::from(["STARRED".to_owned()]),
+                    removals: HashSet::new(),
+                },
+            })
             .await
     });
 
@@ -571,14 +593,20 @@ async fn removing_an_account_drains_the_semantic_index_through_an_embedding_barr
     latentmail_lib::auth::save_refresh_token("indexed", "token").unwrap();
 
     let registry = WorkRegistry::new();
-    let queue =
-        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {}));
-    let engine = SyncEngine::new(
-        storage.clone(),
-        Arc::clone(&queue),
-        registry,
-        noop_event_sink(),
+    let queue = create_queue_engine_with_events(
+        QueueRateConfig {
+            rate_per_second: 250,
+            burst: 250,
+        },
+        Arc::clone(&registry),
+        Arc::new(|_, _| {}),
     );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -599,11 +627,10 @@ async fn removing_an_account_drains_the_semantic_index_through_an_embedding_barr
     timeout(
         Duration::from_secs(2),
         latentmail_lib::auth::remove_account(
-            tauri::Manager::app_handle(&app).clone(),
-            tauri::Manager::state(&app),
-            tauri::Manager::state(&app),
-            tauri::Manager::state(&app),
-            "indexed".into(),
+            latentmail_lib::ipc::AppServices::new(tauri::Manager::app_handle(&app)),
+            latentmail_lib::ipc::CommandPayload(latentmail_lib::ipc::AccountIdRequest {
+                account_id: "indexed".into(),
+            }),
         ),
     )
     .await

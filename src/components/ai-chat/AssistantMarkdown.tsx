@@ -66,7 +66,10 @@ function renderWithCitations(text: string, key: string | number | undefined): Re
   );
 }
 
-const renderRule: MarkdownToJSX.Options['renderRule'] = (next, node, _renderChildren, state) => {
+type RenderRuleArgs = Parameters<NonNullable<MarkdownToJSX.Options['renderRule']>>;
+
+const renderRule: MarkdownToJSX.Options['renderRule'] = (...ruleArgs: RenderRuleArgs) => {
+  const [next, node, , state] = ruleArgs;
   if (node.type !== RuleType.text) return next();
   if (!CITATION_PATTERN.test(node.text)) return next();
   return renderWithCitations(node.text, state.key);

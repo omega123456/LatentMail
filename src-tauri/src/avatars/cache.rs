@@ -36,6 +36,12 @@ pub enum CacheAnswer {
     Stale,
 }
 
+pub struct CachedAvatar<'a> {
+    pub cache_key: &'a str,
+    pub domain: CacheDomain,
+    pub png_bytes: &'a [u8],
+}
+
 pub fn hash_key(raw: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
@@ -83,17 +89,12 @@ impl AvatarCache {
         }
     }
 
-    pub async fn store_hit(
-        &self,
-        cache_key: &str,
-        domain: CacheDomain,
-        png_bytes: &[u8],
-    ) -> Result<PathBuf, String> {
-        let relative = format!("{}/{}.png", domain.subdir(), cache_key);
+    pub async fn store_hit(&self, entry: CachedAvatar<'_>) -> Result<PathBuf, String> {
+        let relative = format!("{}/{}.png", entry.domain.subdir(), entry.cache_key);
         let absolute = self.root.join(&relative);
-        std::fs::write(&absolute, png_bytes).map_err(|error| error.to_string())?;
+        std::fs::write(&absolute, entry.png_bytes).map_err(|error| error.to_string())?;
         let record = AvatarCacheRecord {
-            cache_key: cache_key.to_owned(),
+            cache_key: entry.cache_key.to_owned(),
             outcome: AvatarCacheOutcome::Hit,
             image_path: Some(relative),
             looked_up_at: Utc::now().timestamp(),

@@ -1,3 +1,8 @@
+use latentmail_lib::ipc::{AppServices, CommandPayload};
+use latentmail_lib::sync::commands::{
+    CreateLabelRequest, DeleteLabelRequest, RecolorLabelRequest, RenameLabelRequest,
+};
+use latentmail_lib::sync::SyncEngineDeps;
 use latentmail_lib::{
     auth::{save_refresh_token, AuthService},
     storage::{Account, AccountRepository, Storage},
@@ -63,12 +68,12 @@ async fn harness(account_id: &str) -> Harness {
     )
     .unwrap();
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -90,24 +95,22 @@ async fn creating_and_renaming_a_label_surface_an_unreadable_database_before_cal
     std::fs::write(&harness.database, b"not a database").unwrap();
 
     assert!(create_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "label-validate".into(),
-        "Receipts".into(),
-        None,
+        AppServices::new(app.handle()),
+        CommandPayload(CreateLabelRequest {
+            account_id: "label-validate".into(),
+            name: "Receipts".into(),
+            color_id: None
+        })
     )
     .await
     .is_err());
     assert!(rename_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "label-validate".into(),
-        "Label_1".into(),
-        "Receipts".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(RenameLabelRequest {
+            account_id: "label-validate".into(),
+            label_id: "Label_1".into(),
+            name: "Receipts".into()
+        })
     )
     .await
     .is_err());
@@ -120,23 +123,21 @@ async fn recoloring_and_deleting_a_label_surface_an_unreadable_database_after_ca
     std::fs::write(&harness.database, b"not a database").unwrap();
 
     assert!(recolor_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "label-persist".into(),
-        "Label_1".into(),
-        "red".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(RecolorLabelRequest {
+            account_id: "label-persist".into(),
+            label_id: "Label_1".into(),
+            color_id: "red".into()
+        })
     )
     .await
     .is_err());
     assert!(delete_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "label-persist".into(),
-        "Label_1".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(DeleteLabelRequest {
+            account_id: "label-persist".into(),
+            label_id: "Label_1".into()
+        })
     )
     .await
     .is_err());
@@ -149,13 +150,12 @@ async fn recoloring_a_label_rejects_an_unrecognised_colour() {
 
     assert_eq!(
         recolor_label(
-            app.handle().clone(),
-            app.state(),
-            app.state(),
-            app.state(),
-            "label-colour".into(),
-            "Label_1".into(),
-            "chartreuse".into(),
+            AppServices::new(app.handle()),
+            CommandPayload(RecolorLabelRequest {
+                account_id: "label-colour".into(),
+                label_id: "Label_1".into(),
+                color_id: "chartreuse".into()
+            })
         )
         .await
         .unwrap_err(),

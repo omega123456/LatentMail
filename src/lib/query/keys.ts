@@ -17,23 +17,37 @@ export const queryKeys = {
     ['searchTotal', accountId, query, JSON.stringify(scope)] as const,
   searchTotalsForAccount: (accountId: string) => ['searchTotal', accountId] as const,
   parsedSearchQuery: (query: string) => ['parsedSearchQuery', query] as const,
-  conversation: (
-    accountId: string,
-    threadId: string,
-    policyKey: string,
-    entryScope: ConversationEntryScope,
-  ) => ['conversation', accountId, threadId, policyKey, JSON.stringify(entryScope)] as const,
+  conversation: (input: {
+    accountId: string;
+    threadId: string;
+    policyKey: string;
+    entryScope: ConversationEntryScope;
+  }) =>
+    [
+      'conversation',
+      input.accountId,
+      input.threadId,
+      input.policyKey,
+      JSON.stringify(input.entryScope),
+    ] as const,
   conversationThread: (accountId: string, threadId: string) =>
     ['conversation', accountId, threadId] as const,
   conversationsForAccount: (accountId: string) => ['conversation', accountId] as const,
   messageBodiesForMessage: (accountId: string, messageId: string) =>
     ['messageBody', accountId, messageId] as const,
-  messageBody: (
-    accountId: string,
-    messageId: string,
-    policyKey: string,
-    entryScope: ConversationEntryScope,
-  ) => ['messageBody', accountId, messageId, policyKey, JSON.stringify(entryScope)] as const,
+  messageBody: (input: {
+    accountId: string;
+    messageId: string;
+    policyKey: string;
+    entryScope: ConversationEntryScope;
+  }) =>
+    [
+      'messageBody',
+      input.accountId,
+      input.messageId,
+      input.policyKey,
+      JSON.stringify(input.entryScope),
+    ] as const,
   syncStatus: (accountId: string) => ['syncStatus', accountId] as const,
   traversalStatus: (accountId: string) => ['traversalStatus', accountId] as const,
   senderAvatar: (domain: string) => ['senderAvatar', domain] as const,

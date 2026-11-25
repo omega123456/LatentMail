@@ -3,7 +3,7 @@ use std::sync::Arc;
 use latentmail_lib::{
     queue::{Executor, QueueEventSink, QueueOperation},
     storage::{Account, HtmlPresence, Message, Storage},
-    sync::{noop_event_sink, SyncEngine, WorkRegistry},
+    sync::{noop_event_sink, SyncEngine, SyncEngineDeps, WorkRegistry},
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -60,7 +60,12 @@ pub fn controllable_executor() -> (
 pub fn sync_engine(storage: &Storage) -> Arc<SyncEngine> {
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    SyncEngine::new(storage.clone(), queue, registry, noop_event_sink())
+    SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    })
 }
 
 pub fn account(id: &str, email: &str, display_name: &str) -> Account {
@@ -76,7 +81,7 @@ pub fn account(id: &str, email: &str, display_name: &str) -> Account {
     }
 }
 
-pub fn message(account_id: &str, id: &str, thread_id: &str, html_presence: HtmlPresence) -> Message {
+pub fn message(account_id: &str, id: &str, thread_id: &str) -> Message {
     Message {
         account_id: account_id.to_owned(),
         id: id.to_owned(),
@@ -94,6 +99,6 @@ pub fn message(account_id: &str, id: &str, thread_id: &str, html_presence: HtmlP
         is_starred: false,
         history_id: 1,
         truncated_body: None,
-        html_presence: html_presence,
+        html_presence: HtmlPresence::Present,
     }
 }

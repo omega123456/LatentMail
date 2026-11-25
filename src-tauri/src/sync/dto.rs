@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::sanitize::SanitizedHtml;
 use crate::storage::{
-    Attachment, HtmlPresence, Label, Message, Thread, ThreadIdentity, TraversalCursor,
-    TraversalKind as StorageTraversalKind,
+    Attachment, HtmlPresence, Label, Message, RecipientRoles, Thread, ThreadIdentity,
+    ThreadListRow, TraversalCursor, TraversalKind as StorageTraversalKind,
 };
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -206,16 +206,25 @@ impl From<Thread> for ThreadDto {
     }
 }
 
+pub struct ThreadRowDetails {
+    pub snippet: String,
+    pub label_indicators: Vec<String>,
+    pub system_label_ids: Vec<String>,
+}
+
 impl ThreadDto {
-    pub fn with_row_details(
-        mut self,
-        snippet: String,
-        label_indicators: Vec<String>,
-        system_label_ids: Vec<String>,
-    ) -> Self {
-        self.snippet = snippet;
-        self.label_indicators = label_indicators;
-        self.system_label_ids = system_label_ids;
+    pub fn from_row(row: ThreadListRow) -> Self {
+        Self::from(row.thread).with_row_details(ThreadRowDetails {
+            snippet: row.snippet,
+            label_indicators: row.label_indicators,
+            system_label_ids: row.system_label_ids,
+        })
+    }
+
+    pub fn with_row_details(mut self, details: ThreadRowDetails) -> Self {
+        self.snippet = details.snippet;
+        self.label_indicators = details.label_indicators;
+        self.system_label_ids = details.system_label_ids;
         self
     }
 }
@@ -339,17 +348,24 @@ pub struct ImagePolicy {
     pub load_for: Vec<String>,
 }
 
+pub struct ImagePolicyTarget<'a> {
+    pub label_ids: &'a [String],
+    pub message_id: &'a str,
+    pub sender: &'a str,
+}
+
 impl ImagePolicy {
-    pub fn allows(&self, label_ids: &[String], message_id: &str, sender: &str) -> bool {
-        if label_ids
+    pub fn allows(&self, target: ImagePolicyTarget<'_>) -> bool {
+        if target
+            .label_ids
             .iter()
             .any(|label| crate::gmail::system_labels::is_trash_or_spam(label))
         {
             return false;
         }
         self.always_load
-            || self.load_for.iter().any(|id| id == message_id)
-            || crate::storage::addresses::first_identity(sender).is_some_and(|identity| {
+            || self.load_for.iter().any(|id| id == target.message_id)
+            || crate::storage::addresses::first_identity(target.sender).is_some_and(|identity| {
                 let address = identity.address.to_ascii_lowercase();
                 self.allowed_senders
                     .iter()
@@ -378,16 +394,26 @@ impl From<HtmlPresence> for HtmlPresenceDto {
     }
 }
 
-pub fn message_dto(
-    message: Message,
-    recipient_roles: (String, String, String),
-    label_ids: Vec<String>,
-    sanitized: Option<SanitizedHtml>,
-    remote_images_allowed: bool,
-    draft_id: Option<String>,
-    attachments: Vec<Attachment>,
-) -> MessageDto {
-    let (html_body, remote_images_blocked, truncated, inline_images_pending) = match sanitized {
+pub struct MessageDtoInput {
+    pub message: Message,
+    pub recipient_roles: RecipientRoles,
+    pub label_ids: Vec<String>,
+    pub sanitized: Option<SanitizedHtml>,
+    pub remote_images_allowed: bool,
+    pub draft_id: Option<String>,
+    pub attachments: Vec<Attachment>,
+}
+
+pub struct MessageBodyInput<'a> {
+    pub account_id: &'a str,
+    pub message: &'a Message,
+    pub inline_content_ids: &'a [String],
+    pub allow_remote: bool,
+}
+
+pub fn message_dto(input: MessageDtoInput) -> MessageDto {
+    let (html_body, remote_images_blocked, truncated, inline_images_pending) = match input.sanitized
+    {
         Some(value) => (
             Some(value.html),
             value.remote_images_blocked,
@@ -397,48 +423,52 @@ pub fn message_dto(
         None => (None, false, false, false),
     };
     MessageDto {
-        id: message.id,
-        sender: message.sender,
-        recipients: crate::storage::addresses::split_addresses(&message.recipients),
-        to_recipients: crate::storage::addresses::split_addresses(&recipient_roles.0),
-        cc_recipients: crate::storage::addresses::split_addresses(&recipient_roles.1),
-        bcc_recipients: crate::storage::addresses::split_addresses(&recipient_roles.2),
-        subject: message.subject,
-        sent_at: to_millis(message.sent_at),
-        snippet: message.snippet,
+        id: input.message.id,
+        sender: input.message.sender,
+        recipients: crate::storage::addresses::split_addresses(&input.message.recipients),
+        to_recipients: crate::storage::addresses::split_addresses(&input.recipient_roles.to),
+        cc_recipients: crate::storage::addresses::split_addresses(&input.recipient_roles.cc),
+        bcc_recipients: crate::storage::addresses::split_addresses(&input.recipient_roles.bcc),
+        subject: input.message.subject,
+        sent_at: to_millis(input.message.sent_at),
+        snippet: input.message.snippet,
         html_body: html_body,
-        html_presence: message.html_presence.into(),
-        plain_body: message.plain_body,
-        has_attachments: message.has_attachments,
-        is_unread: message.is_unread,
-        is_starred: message.is_starred,
-        label_ids: label_ids,
+        html_presence: input.message.html_presence.into(),
+        plain_body: input.message.plain_body,
+        has_attachments: input.message.has_attachments,
+        is_unread: input.message.is_unread,
+        is_starred: input.message.is_starred,
+        label_ids: input.label_ids,
         remote_images_blocked: remote_images_blocked,
-        remote_images_allowed: remote_images_allowed,
+        remote_images_allowed: input.remote_images_allowed,
         inline_images_pending: inline_images_pending,
-        draft_id: draft_id,
+        draft_id: input.draft_id,
         truncated: truncated,
-        attachments: attachments.into_iter().map(AttachmentDto::from).collect(),
+        attachments: input
+            .attachments
+            .into_iter()
+            .map(AttachmentDto::from)
+            .collect(),
     }
 }
 
-pub fn message_body_dto(
-    message: &Message,
-    inline_content_ids: &[String],
-    allow_remote: bool,
-    account_id: &str,
-) -> MessageBodyDto {
-    let sanitized = message.html_body.as_deref().map(|html| {
-        let sources = inline_content_ids
+pub fn message_body_dto(input: MessageBodyInput<'_>) -> MessageBodyDto {
+    let sanitized = input.message.html_body.as_deref().map(|html| {
+        let sources = input
+            .inline_content_ids
             .iter()
             .map(|content_id| {
                 (
                     content_id.clone(),
-                    crate::inline_images::proxy_url(account_id, &message.id, content_id),
+                    crate::inline_images::proxy_url(
+                        input.account_id,
+                        &input.message.id,
+                        content_id,
+                    ),
                 )
             })
             .collect();
-        crate::sanitize::sanitize(html, &sources, allow_remote)
+        crate::sanitize::sanitize(html, &sources, input.allow_remote)
     });
     let (html_body, remote_images_blocked, truncated, inline_images_pending) = match sanitized {
         Some(value) => (
@@ -451,11 +481,11 @@ pub fn message_body_dto(
     };
     MessageBodyDto {
         html_body: html_body,
-        plain_body: message.plain_body.clone(),
-        html_presence: message.html_presence.into(),
+        plain_body: input.message.plain_body.clone(),
+        html_presence: input.message.html_presence.into(),
         truncated: truncated,
         remote_images_blocked: remote_images_blocked,
-        remote_images_allowed: allow_remote,
+        remote_images_allowed: input.allow_remote,
         inline_images_pending: inline_images_pending,
     }
 }

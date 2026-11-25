@@ -1,3 +1,4 @@
+use latentmail_lib::attachments::{AttachmentDescriptor, AttachmentRef, RefetchRequest};
 use latentmail_lib::{attachments::cache::AttachmentCache, gmail::GmailClient};
 use wiremock::{
     matchers::{method, path},
@@ -31,11 +32,33 @@ async fn ensure_fetches_once_then_reuses_the_disk_cache_on_a_second_call() {
     let client = GmailClient::with_base_url("token", server.uri());
 
     let first = cache
-        .ensure(&client, "account", "m1", "a1", "hello.txt", "text/plain")
+        .ensure(
+            &client,
+            AttachmentDescriptor {
+                target: AttachmentRef {
+                    account_id: "account",
+                    message_id: "m1",
+                    attachment_id: "a1",
+                },
+                filename: "hello.txt",
+                mime_type: "text/plain",
+            },
+        )
         .await
         .unwrap();
     let second = cache
-        .ensure(&client, "account", "m1", "a1", "hello.txt", "text/plain")
+        .ensure(
+            &client,
+            AttachmentDescriptor {
+                target: AttachmentRef {
+                    account_id: "account",
+                    message_id: "m1",
+                    attachment_id: "a1",
+                },
+                filename: "hello.txt",
+                mime_type: "text/plain",
+            },
+        )
         .await
         .unwrap();
 
@@ -62,11 +85,15 @@ async fn attachment_bytes_larger_than_ten_megabytes_are_fetched_successfully() {
     let cached = cache
         .ensure(
             &client,
-            "account",
-            "m1",
-            "big",
-            "big.bin",
-            "application/octet-stream",
+            AttachmentDescriptor {
+                target: AttachmentRef {
+                    account_id: "account",
+                    message_id: "m1",
+                    attachment_id: "big",
+                },
+                filename: "big.bin",
+                mime_type: "application/octet-stream",
+            },
         )
         .await
         .expect("an attachment past the old 10MB ceiling must still be fetchable");
@@ -109,14 +136,30 @@ async fn refetch_downloads_under_the_stored_identifier_after_gmail_rotated_the_a
     let directory = tempfile::tempdir().unwrap();
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
     let client = GmailClient::with_base_url("token", server.uri());
-    let cached = latentmail_lib::attachments::refetch(&cache, &client, "account", "m1", &record())
-        .await
-        .unwrap();
+    let cached = latentmail_lib::attachments::refetch(
+        &cache,
+        &client,
+        RefetchRequest {
+            account_id: "account",
+            message_id: "m1",
+            record: &record(),
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(std::fs::read(&cached.cache_path).unwrap(), b"hello");
     assert_eq!(
         cache
-            .lookup("account", "m1", "stale", "invoice.pdf", "application/pdf")
+            .lookup(AttachmentDescriptor {
+                target: AttachmentRef {
+                    account_id: "account",
+                    message_id: "m1",
+                    attachment_id: "stale"
+                },
+                filename: "invoice.pdf",
+                mime_type: "application/pdf"
+            })
             .map(|entry| entry.cache_path),
         Some(cached.cache_path),
         "the bytes must land under the identifier the reader already holds"
@@ -142,9 +185,17 @@ async fn refetch_reports_an_attachment_that_the_message_no_longer_carries() {
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
     let client = GmailClient::with_base_url("token", server.uri());
 
-    let error = latentmail_lib::attachments::refetch(&cache, &client, "account", "m1", &record())
-        .await
-        .unwrap_err();
+    let error = latentmail_lib::attachments::refetch(
+        &cache,
+        &client,
+        RefetchRequest {
+            account_id: "account",
+            message_id: "m1",
+            record: &record(),
+        },
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(error, "Attachment is no longer part of this message");
 }
@@ -162,11 +213,17 @@ async fn refetch_surfaces_the_error_when_the_message_is_gone() {
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
     let client = GmailClient::with_base_url("token", server.uri());
 
-    assert!(
-        latentmail_lib::attachments::refetch(&cache, &client, "account", "m1", &record())
-            .await
-            .is_err()
-    );
+    assert!(latentmail_lib::attachments::refetch(
+        &cache,
+        &client,
+        RefetchRequest {
+            account_id: "account",
+            message_id: "m1",
+            record: &record()
+        }
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -202,11 +259,17 @@ async fn refetch_surfaces_the_error_when_the_rotated_attachment_is_gone() {
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
     let client = GmailClient::with_base_url("token", server.uri());
 
-    assert!(
-        latentmail_lib::attachments::refetch(&cache, &client, "account", "m1", &record())
-            .await
-            .is_err()
-    );
+    assert!(latentmail_lib::attachments::refetch(
+        &cache,
+        &client,
+        RefetchRequest {
+            account_id: "account",
+            message_id: "m1",
+            record: &record()
+        }
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -237,9 +300,17 @@ async fn refetch_writes_inline_part_bytes_without_a_second_request() {
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
     let client = GmailClient::with_base_url("token", server.uri());
 
-    let cached = latentmail_lib::attachments::refetch(&cache, &client, "account", "m1", &record())
-        .await
-        .unwrap();
+    let cached = latentmail_lib::attachments::refetch(
+        &cache,
+        &client,
+        RefetchRequest {
+            account_id: "account",
+            message_id: "m1",
+            record: &record(),
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(std::fs::read(&cached.cache_path).unwrap(), b"hello");
 }

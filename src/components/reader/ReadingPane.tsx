@@ -33,6 +33,8 @@ import {
   mapThreadToRow,
 } from '@/lib/query/mappers';
 import type { Conversation } from '@/lib/types/conversation';
+import type { MailLabel, MailThread } from '@/lib/types/ipc';
+import type { Participant } from '@/lib/format/participants';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useLayoutStore } from '@/stores/layout';
 import { useMessageSourceStore } from '@/stores/message-source';
@@ -58,6 +60,50 @@ type TriageHandlers = Pick<
   'onToggleRead' | 'onToggleStar' | 'onApplyLabels' | 'onMoveTo' | 'onToggleSpam' | 'onDelete'
 >;
 export type { ComposeAction };
+
+export type ReadingPaneBulkSelection = {
+  count: number;
+  selectedThreads: Conversation[];
+  loadedThreadCount: number;
+  moveToCurrentLabelIds?: MoveDestinationId[];
+  onClearSelection: () => void;
+  onSelectAll: () => void;
+};
+
+export type ReadingPaneTriageContext = {
+  systemLabelIds: string[];
+  labelMenuEntries: MessageRibbonProps['labels'];
+  unread: boolean;
+  starred: boolean;
+  handlers: TriageHandlers;
+  onMessageTriage?: (messageId: string, intent: MessageTriageIntent) => void;
+};
+
+export type ReadingPaneBodyContext = {
+  onFetchBody?: (messageId: string) => void;
+  loadingMessageId?: string;
+  failedMessageId?: string;
+  onLoadImages?: (messageId: string) => void;
+  onTrustSender?: (address: string) => void;
+};
+
+export type ReadingPaneComposeContext = {
+  onCompose?: (action: ComposeAction, messageId: string) => void;
+  onComposeTo?: (participant: Participant) => void;
+};
+
+export type ReadingPaneProps = {
+  threadId: string | null;
+  conversation?: ReaderConversation;
+  loading?: boolean;
+  error?: boolean;
+  accountId?: string | null;
+  gmailThreadUrl?: string | null;
+  bulkSelection?: ReadingPaneBulkSelection;
+  triage?: ReadingPaneTriageContext;
+  body?: ReadingPaneBodyContext;
+  compose?: ReadingPaneComposeContext;
+};
 
 export const readerFixtures: Record<string, ReaderConversation> = {
   'thread-1': {
@@ -199,56 +245,86 @@ function resolveConversation(
   return threadId ? readerFixtures[threadId] : undefined;
 }
 
-type ReadingPaneProps = {
-  threadId: string | null;
-  conversation?: ReaderConversation;
-  loading?: boolean;
-  error?: boolean;
-  systemLabelIds?: string[];
-  moveToCurrentLabelIds?: string[];
-  labelMenuEntries?: MessageRibbonProps['labels'];
-  selectedCount?: number;
-  selectedThreads?: Conversation[];
-  loadedThreadCount?: number;
-  onClearSelection?: () => void;
-  onSelectAll?: () => void;
-  unread?: boolean;
-  starred?: boolean;
-  onCompose?: (action: ComposeAction, messageId: string) => void;
-  onComposeTo?: (participant: import('@/lib/format/participants').Participant) => void;
-  triageHandlers?: TriageHandlers;
-  onFetchBody?: (messageId: string) => void;
-  loadingMessageId?: string;
-  failedMessageId?: string;
-  onMessageTriage?: (messageId: string, intent: MessageTriageIntent) => void;
-  onLoadImages?: (messageId: string) => void;
-  onTrustSender?: (address: string) => void;
-  gmailThreadUrl?: string | null;
-  accountId?: string | null;
+const noTriageHandlers: TriageHandlers = {
+  onToggleRead: () => undefined,
+  onToggleStar: () => undefined,
+  onApplyLabels: () => undefined,
+  onMoveTo: () => undefined,
+  onToggleSpam: () => undefined,
+  onDelete: () => undefined,
 };
 
-function bulkSelectionFlags(props: ReadingPaneProps) {
-  return {
-    systemLabelIds: props.systemLabelIds ?? [],
-    moveToCurrentLabelIds: props.moveToCurrentLabelIds,
-    unread: props.unread ?? false,
-    starred: props.starred ?? false,
-    labels: props.labelMenuEntries ?? [],
-  };
-}
+const DEFAULT_TRIAGE_CONTEXT: ReadingPaneTriageContext = {
+  systemLabelIds: [],
+  labelMenuEntries: [],
+  unread: false,
+  starred: false,
+  handlers: noTriageHandlers,
+};
 
-function renderBulkSelection(props: ReadingPaneProps) {
+function renderBulkSelection(
+  bulkSelection: ReadingPaneBulkSelection,
+  triage: ReadingPaneTriageContext = DEFAULT_TRIAGE_CONTEXT,
+) {
   return (
     <BulkSelectionPanel
-      count={props.selectedCount ?? 0}
-      selectedThreads={props.selectedThreads ?? []}
-      loadedThreadCount={props.loadedThreadCount ?? 0}
-      onClearSelection={props.onClearSelection ?? noop}
-      onSelectAll={props.onSelectAll ?? noop}
-      {...bulkSelectionFlags(props)}
-      {...(props.triageHandlers ?? noTriageHandlers)}
+      count={bulkSelection.count}
+      selectedThreads={bulkSelection.selectedThreads}
+      loadedThreadCount={bulkSelection.loadedThreadCount}
+      onClearSelection={bulkSelection.onClearSelection}
+      onSelectAll={bulkSelection.onSelectAll}
+      systemLabelIds={triage.systemLabelIds}
+      moveToCurrentLabelIds={bulkSelection.moveToCurrentLabelIds}
+      unread={triage.unread}
+      starred={triage.starred}
+      labels={triage.labelMenuEntries}
+      {...triage.handlers}
     />
   );
+}
+
+function ConversationMessageList({
+  conversation,
+  props,
+  messageRibbonBase,
+  labelMenuEntries,
+}: {
+  conversation: ReaderConversation;
+  props: ReadingPaneProps;
+  messageRibbonBase: MessageRibbonProps;
+  labelMenuEntries: MessageRibbonProps['labels'];
+}) {
+  const body = props.body;
+  const accountId = props.accountId ?? null;
+  const gmailThreadUrl = props.gmailThreadUrl ?? null;
+  return conversation.messages.map((message, index) => {
+    const isLatest = index === conversation.messages.length - 1;
+    return (
+      <MessageCard
+        key={message.id}
+        message={message}
+        expanded={isLatest}
+        newest={isLatest}
+        badges={messageBadges(message, labelMenuEntries)}
+        ribbon={buildMessageRibbon({
+          base: messageRibbonBase,
+          message: message,
+          accountId: accountId,
+          subject: conversation.subject,
+          onMessageTriage: props.triage?.onMessageTriage,
+          onCompose: props.compose?.onCompose,
+        })}
+        onFetchBody={body?.onFetchBody}
+        onComposeTo={props.compose?.onComposeTo}
+        onLoadImages={body?.onLoadImages}
+        onTrustSender={body?.onTrustSender}
+        loadingBody={body?.loadingMessageId === message.id}
+        bodyError={body?.failedMessageId === message.id}
+        gmailThreadUrl={gmailThreadUrl}
+        accountId={accountId}
+      />
+    );
+  });
 }
 
 function ConversationView({
@@ -258,11 +334,11 @@ function ConversationView({
   conversation: ReaderConversation;
   props: ReadingPaneProps;
 }) {
-  const labelMenuEntries = props.labelMenuEntries ?? [];
-  const threadHandlers = props.triageHandlers ?? noTriageHandlers;
+  const labelMenuEntries = props.triage?.labelMenuEntries ?? [];
+  const threadHandlers = props.triage?.handlers ?? noTriageHandlers;
   const lastMessage = conversation.messages.at(-1);
   const composeThread = (action: ComposeAction) => {
-    if (lastMessage) props.onCompose?.(action, lastMessage.id);
+    if (lastMessage) props.compose?.onCompose?.(action, lastMessage.id);
   };
   const messageRibbonBase = defaultMessageRibbonBase(labelMenuEntries, threadHandlers);
   return (
@@ -278,7 +354,10 @@ function ConversationView({
           </h1>
           <div className="mb-container-padding">
             <ActionRibbon
-              systemLabelIds={resolveThreadSystemLabelIds(props.systemLabelIds, conversation)}
+              systemLabelIds={resolveThreadSystemLabelIds(
+                props.triage?.systemLabelIds,
+                conversation,
+              )}
               unread={conversation.messages.some((message) => message.unread)}
               starred={conversation.messages.some((message) => message.starred)}
               labels={labelMenuEntries}
@@ -289,31 +368,12 @@ function ConversationView({
               onEditDraft={lastMessage?.isDraft ? () => composeThread('edit-draft') : undefined}
             />
           </div>
-          {conversation.messages.map((message, index) => (
-            <MessageCard
-              key={message.id}
-              message={message}
-              expanded={index === conversation.messages.length - 1}
-              newest={index === conversation.messages.length - 1}
-              badges={messageBadges(message, labelMenuEntries)}
-              ribbon={buildMessageRibbon({
-                base: messageRibbonBase,
-                message: message,
-                accountId: props.accountId ?? null,
-                subject: conversation.subject,
-                onMessageTriage: props.onMessageTriage,
-                onCompose: props.onCompose,
-              })}
-              onFetchBody={props.onFetchBody}
-              onComposeTo={props.onComposeTo}
-              onLoadImages={props.onLoadImages}
-              onTrustSender={props.onTrustSender}
-              loadingBody={props.loadingMessageId === message.id}
-              bodyError={props.failedMessageId === message.id}
-              gmailThreadUrl={props.gmailThreadUrl ?? null}
-              accountId={props.accountId ?? null}
-            />
-          ))}
+          <ConversationMessageList
+            conversation={conversation}
+            props={props}
+            messageRibbonBase={messageRibbonBase}
+            labelMenuEntries={labelMenuEntries}
+          />
         </div>
       </section>
     </ReaderContextMenu>
@@ -321,7 +381,9 @@ function ConversationView({
 }
 
 export function ReadingPane(props: ReadingPaneProps) {
-  if ((props.selectedCount ?? 0) > 0) return renderBulkSelection(props);
+  if (props.bulkSelection && props.bulkSelection.count > 0) {
+    return renderBulkSelection(props.bulkSelection, props.triage);
+  }
   const conversation = resolveConversation(props.conversation, props.threadId);
   const placeholder = resolveReadingPanePlaceholder({
     threadId: props.threadId,
@@ -333,26 +395,19 @@ export function ReadingPane(props: ReadingPaneProps) {
   return <ConversationView conversation={conversation} props={props} />;
 }
 
-function noop() {
-  return undefined;
-}
-
-const noTriageHandlers: TriageHandlers = {
-  onToggleRead: () => undefined,
-  onToggleStar: () => undefined,
-  onApplyLabels: () => undefined,
-  onMoveTo: () => undefined,
-  onToggleSpam: () => undefined,
-  onDelete: () => undefined,
-};
-
-function triageHandlersFor(
-  threadIds: string[],
-  unread: boolean,
-  starred: boolean,
-  isSpam: boolean,
-  mutate: (threadIds: string[], intent: ThreadTriageIntent) => void,
-) {
+function triageHandlersFor({
+  threadIds,
+  unread,
+  starred,
+  isSpam,
+  mutate,
+}: {
+  threadIds: string[];
+  unread: boolean;
+  starred: boolean;
+  isSpam: boolean;
+  mutate: (threadIds: string[], intent: ThreadTriageIntent) => void;
+}): TriageHandlers {
   return {
     onToggleRead: () => mutate(threadIds, readToggleIntent(unread)),
     onToggleStar: () => mutate(threadIds, starToggleIntent(starred)),
@@ -375,7 +430,7 @@ function resolveActiveIds(
 }
 
 function buildBulkLabelMenuEntries(
-  labels: import('@/lib/types/ipc').MailLabel[],
+  labels: MailLabel[],
   selectedThreads: { labelIndicators?: string[] }[],
 ): MessageRibbonProps['labels'] {
   return labels
@@ -401,7 +456,7 @@ function resolveMoveToCurrentLabelIds(
 
 function deriveReaderTriageSummary(input: {
   multiSelectActive: boolean;
-  selectedThreads: import('@/lib/types/ipc').MailThread[];
+  selectedThreads: MailThread[];
   conversation: ReaderConversation | undefined;
 }) {
   if (input.multiSelectActive) {
@@ -485,46 +540,53 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       conversation={conversation}
       loading={isConversationLoading}
       error={conversationQuery.isError}
-      onFetchBody={(messageId) => fetchBody.mutate(messageId)}
-      loadingMessageId={fetchBody.isPending ? fetchBody.variables : undefined}
-      failedMessageId={fetchBody.isError ? fetchBody.variables : undefined}
-      onMessageTriage={(messageId, intent) =>
-        messageTriage.mutate(threadId ?? '', [messageId], intent)
-      }
-      onCompose={(action, messageId) => {
-        if (!accountId) return;
-        void openComposeAction({
-          action: action,
-          accountId: accountId,
-          accountEmail: accountEmail,
-          subject: conversation?.subject ?? '',
-          message: conversation?.messages.find((entry) => entry.id === messageId),
-        });
-      }}
-      onComposeTo={(participant) => {
-        if (accountId) openNewMessage(accountId, accountEmail, participant);
-      }}
-      onLoadImages={allowImagesFor}
-      onTrustSender={trustImageSender}
-      gmailThreadUrl={gmailThreadUrl}
       accountId={accountId}
-      systemLabelIds={summary.systemLabelIds}
-      moveToCurrentLabelIds={moveToCurrentLabelIds}
-      labelMenuEntries={labelMenuEntries}
-      selectedCount={selectedIds.size}
-      selectedThreads={selectedRows}
-      loadedThreadCount={loadedThreads.length}
-      onClearSelection={clearSelection}
-      onSelectAll={() => selectAll(loadedThreads.map((thread) => thread.id))}
-      unread={summary.unread}
-      starred={summary.starred}
-      triageHandlers={triageHandlersFor(
-        activeIds,
-        summary.unread,
-        summary.starred,
-        isSpam,
-        triage.mutate,
-      )}
+      gmailThreadUrl={gmailThreadUrl}
+      bulkSelection={{
+        count: selectedIds.size,
+        selectedThreads: selectedRows,
+        loadedThreadCount: loadedThreads.length,
+        moveToCurrentLabelIds: moveToCurrentLabelIds,
+        onClearSelection: clearSelection,
+        onSelectAll: () => selectAll(loadedThreads.map((thread) => thread.id)),
+      }}
+      triage={{
+        systemLabelIds: summary.systemLabelIds,
+        labelMenuEntries: labelMenuEntries,
+        unread: summary.unread,
+        starred: summary.starred,
+        handlers: triageHandlersFor({
+          threadIds: activeIds,
+          unread: summary.unread,
+          starred: summary.starred,
+          isSpam: isSpam,
+          mutate: triage.mutate,
+        }),
+        onMessageTriage: (messageId, intent) =>
+          messageTriage.mutate(threadId ?? '', [messageId], intent),
+      }}
+      body={{
+        onFetchBody: (messageId) => fetchBody.mutate(messageId),
+        loadingMessageId: fetchBody.isPending ? fetchBody.variables : undefined,
+        failedMessageId: fetchBody.isError ? fetchBody.variables : undefined,
+        onLoadImages: allowImagesFor,
+        onTrustSender: trustImageSender,
+      }}
+      compose={{
+        onCompose: (action, messageId) => {
+          if (!accountId) return;
+          void openComposeAction({
+            action: action,
+            accountId: accountId,
+            accountEmail: accountEmail,
+            subject: conversation?.subject ?? '',
+            message: conversation?.messages.find((entry) => entry.id === messageId),
+          });
+        },
+        onComposeTo: (participant) => {
+          if (accountId) openNewMessage(accountId, accountEmail, participant);
+        },
+      }}
     />
   );
 }

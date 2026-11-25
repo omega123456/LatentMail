@@ -1,3 +1,9 @@
+use latentmail_lib::ipc::{AccountMessageRequest, AppServices, CommandPayload};
+use latentmail_lib::message_export::commands::SaveMessageRequest;
+use latentmail_lib::message_export::ExportAttachments;
+use latentmail_lib::sanitize::{sanitize_for_export, MAX_SANITIZED_HTML_BYTES};
+use latentmail_lib::storage::{MessageBodyUpdate, MessageKey, RecipientRolesUpdate};
+use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncEngineDeps, WorkRegistry};
 use std::sync::Arc;
 
 use latentmail_lib::auth::AuthService;
@@ -7,12 +13,10 @@ use latentmail_lib::message_export::commands::{
 use latentmail_lib::message_export::{
     authentication_results, collapse_encoded_bodies, export_document, RecipientRoles,
 };
-use latentmail_lib::sanitize::{sanitize_for_export, MAX_SANITIZED_HTML_BYTES};
 use latentmail_lib::storage::{
     Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart,
     Message, MessageRepository, Storage,
 };
-use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
 use tauri::Manager;
 use wiremock::{
     matchers::{method, path, query_param},
@@ -125,8 +129,10 @@ fn export_document_carries_its_own_policy_and_escaped_headers() {
             to: "me@example.com",
             cc: "team@example.com",
         },
-        &attachments,
-        &[],
+        ExportAttachments {
+            attachments: &attachments,
+            inline_parts: &[],
+        },
     )
     .unwrap();
 
@@ -160,7 +166,15 @@ fn export_document_embeds_inline_images_and_drops_remote_ones() {
         },
     ];
 
-    let document = export_document(&source, &no_roles(), &[], &parts).unwrap();
+    let document = export_document(
+        &source,
+        &no_roles(),
+        ExportAttachments {
+            attachments: &[],
+            inline_parts: &parts,
+        },
+    )
+    .unwrap();
 
     assert!(document.contains("src=\"data:image/png;base64,cG5n\""));
     assert!(!document.contains("eGxz"));
@@ -175,11 +189,27 @@ fn export_document_falls_back_to_the_plain_body_and_refuses_an_empty_one() {
     let mut source = message();
     source.plain_body = Some("Line one\n<b>not bold</b>".into());
 
-    let document = export_document(&source, &no_roles(), &[], &[]).unwrap();
+    let document = export_document(
+        &source,
+        &no_roles(),
+        ExportAttachments {
+            attachments: &[],
+            inline_parts: &[],
+        },
+    )
+    .unwrap();
 
     assert!(document.contains("<pre"));
     assert!(document.contains("&lt;b&gt;not"));
-    assert!(export_document(&message(), &no_roles(), &[], &[]).is_none());
+    assert!(export_document(
+        &message(),
+        &no_roles(),
+        ExportAttachments {
+            attachments: &[],
+            inline_parts: &[]
+        }
+    )
+    .is_none());
 }
 
 #[test]
@@ -245,8 +275,12 @@ async fn harness(raw_response: ResponseTemplate) -> Harness {
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine: Arc<SyncEngine> =
-        SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let engine: Arc<SyncEngine> = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -270,22 +304,25 @@ async fn read_message_source_combines_stored_headers_with_the_raw_text() {
     let harness = harness(raw_ok()).await;
     MessageRepository::set_recipient_roles(
         &harness.storage.connection().unwrap(),
-        "account",
-        "m1",
-        "",
-        "team@example.com",
-        "",
-        None,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        RecipientRolesUpdate {
+            to: "",
+            cc: "team@example.com",
+            bcc: "",
+            references: None,
+        },
     )
     .unwrap();
 
     let source = read_message_source(
-        harness.app.handle().clone(),
-        harness.app.state(),
-        harness.app.state(),
-        harness.app.state(),
-        "account".into(),
-        "m1".into(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+        }),
     )
     .await
     .unwrap();
@@ -311,22 +348,20 @@ async fn read_message_source_explains_an_oversize_message_and_an_unknown_one() {
     .await;
 
     let error = read_message_source(
-        harness.app.handle().clone(),
-        harness.app.state(),
-        harness.app.state(),
-        harness.app.state(),
-        "account".into(),
-        "m1".into(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+        }),
     )
     .await
     .unwrap_err();
     let missing = read_message_source(
-        harness.app.handle().clone(),
-        harness.app.state(),
-        harness.app.state(),
-        harness.app.state(),
-        "account".into(),
-        "unknown".into(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "unknown".into(),
+        }),
     )
     .await
     .unwrap_err();
@@ -341,12 +376,12 @@ async fn save_message_source_writes_the_raw_bytes_unchanged() {
     let destination = harness._directory.path().join("Invoice.eml");
 
     save_message_source_to_path(
-        harness.app.handle().clone(),
-        harness.app.state(),
-        harness.app.state(),
-        "account".into(),
-        "m1".into(),
-        destination.to_string_lossy().into_owned(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(SaveMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+            destination: destination.to_string_lossy().into_owned(),
+        }),
     )
     .await
     .unwrap();
@@ -359,17 +394,17 @@ async fn save_message_source_reports_a_gmail_failure() {
     let harness = harness(ResponseTemplate::new(404)).await;
 
     let error = save_message_source_to_path(
-        harness.app.handle().clone(),
-        harness.app.state(),
-        harness.app.state(),
-        "account".into(),
-        "m1".into(),
-        harness
-            ._directory
-            .path()
-            .join("Invoice.eml")
-            .to_string_lossy()
-            .into_owned(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(SaveMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+            destination: harness
+                ._directory
+                .path()
+                .join("Invoice.eml")
+                .to_string_lossy()
+                .into_owned(),
+        }),
     )
     .await
     .unwrap_err();
@@ -383,17 +418,23 @@ async fn save_message_html_writes_the_stored_body_with_attachments_and_inline_im
     let connection = harness.storage.connection().unwrap();
     MessageRepository::set_body(
         &connection,
-        "account",
-        "m1",
-        Some("<p>Amount due</p><img src=\"cid:logo\">"),
-        None,
-        HtmlPresence::Present,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        MessageBodyUpdate {
+            html_body: Some("<p>Amount due</p><img src=\"cid:logo\">"),
+            plain_body: None,
+            presence: HtmlPresence::Present,
+        },
     )
     .unwrap();
     MessageRepository::replace_inline_parts(
         &connection,
-        "account",
-        "m1",
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
         &[InlinePart {
             content_id: "logo".into(),
             mime_type: "image/png".into(),
@@ -403,8 +444,10 @@ async fn save_message_html_writes_the_stored_body_with_attachments_and_inline_im
     .unwrap();
     AttachmentRepository::replace_for_message(
         &connection,
-        "account",
-        "m1",
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
         &[Attachment {
             attachment_id: "a1".into(),
             filename: "NW-2026-10.pdf".into(),
@@ -418,10 +461,12 @@ async fn save_message_html_writes_the_stored_body_with_attachments_and_inline_im
     let destination = harness._directory.path().join("Invoice.html");
 
     save_message_html_to_path(
-        harness.app.state(),
-        "account".into(),
-        "m1".into(),
-        destination.to_string_lossy().into_owned(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(SaveMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+            destination: destination.to_string_lossy().into_owned(),
+        }),
     )
     .await
     .unwrap();
@@ -437,15 +482,17 @@ async fn save_message_html_asks_for_the_body_to_load_first() {
     let harness = harness(raw_ok()).await;
 
     let error = save_message_html_to_path(
-        harness.app.state(),
-        "account".into(),
-        "m1".into(),
-        harness
-            ._directory
-            .path()
-            .join("Invoice.html")
-            .to_string_lossy()
-            .into_owned(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(SaveMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+            destination: harness
+                ._directory
+                .path()
+                .join("Invoice.html")
+                .to_string_lossy()
+                .into_owned(),
+        }),
     )
     .await
     .unwrap_err();
@@ -466,12 +513,12 @@ async fn save_message_source_reports_a_destination_that_cannot_be_written() {
         .join("Invoice.eml");
 
     let error = save_message_source_to_path(
-        harness.app.handle().clone(),
-        harness.app.state(),
-        harness.app.state(),
-        "account".into(),
-        "m1".into(),
-        destination.to_string_lossy().into_owned(),
+        AppServices::new(harness.app.handle()),
+        CommandPayload(SaveMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+            destination: destination.to_string_lossy().into_owned(),
+        }),
     )
     .await
     .unwrap_err();

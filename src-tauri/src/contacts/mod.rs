@@ -21,18 +21,33 @@ pub struct Contact {
     pub last_seen_at: i64,
 }
 
-pub fn observe(
-    connection: &Connection,
-    account_id: &str,
-    mailbox: &str,
-    seen_at: i64,
-) -> Result<()> {
-    let Some(Mailbox { name, address }) = learnable_mailbox(mailbox) else {
+pub struct ContactObservation<'a> {
+    pub account_id: &'a str,
+    pub mailbox: &'a str,
+    pub seen_at: i64,
+}
+
+struct AggregatedContact {
+    display_name: Option<String>,
+    display_seen_at: i64,
+    frequency: i64,
+    last_seen_at: i64,
+}
+
+pub fn observe(connection: &Connection, observation: ContactObservation<'_>) -> Result<()> {
+    let Some(Mailbox { name, address }) = learnable_mailbox(observation.mailbox) else {
         return Ok(());
     };
     connection.execute(
         UPSERT_CONTACT,
-        params![account_id, address, name, 1, seen_at, seen_at],
+        params![
+            observation.account_id,
+            address,
+            name,
+            1,
+            observation.seen_at,
+            observation.seen_at
+        ],
     )?;
     Ok(())
 }
@@ -42,7 +57,7 @@ pub fn observe_many(
     account_id: &str,
     observations: &[(String, i64)],
 ) -> Result<()> {
-    let mut contacts: HashMap<String, (Option<String>, i64, i64, i64)> = HashMap::new();
+    let mut contacts: HashMap<String, AggregatedContact> = HashMap::new();
     for (mailbox, seen_at) in observations {
         let Some(Mailbox {
             name: display_name,
@@ -53,30 +68,42 @@ pub fn observe_many(
         };
         let contact = contacts
             .entry(address)
-            .or_insert_with(|| (None, i64::MIN, 0, *seen_at));
-        contact.2 += 1;
-        contact.3 = contact.3.max(*seen_at);
-        if display_name.is_some() && *seen_at >= contact.1 {
-            contact.0 = display_name;
-            contact.1 = *seen_at;
+            .or_insert_with(|| AggregatedContact {
+                display_name: None,
+                display_seen_at: i64::MIN,
+                frequency: 0,
+                last_seen_at: *seen_at,
+            });
+        contact.frequency += 1;
+        contact.last_seen_at = contact.last_seen_at.max(*seen_at);
+        if display_name.is_some() && *seen_at >= contact.display_seen_at {
+            contact.display_name = display_name;
+            contact.display_seen_at = *seen_at;
         }
     }
     let mut statement = connection.prepare(UPSERT_CONTACT)?;
-    for (address, (display_name, display_seen_at, frequency, last_seen_at)) in contacts {
+    for (address, contact) in contacts {
         statement.execute(params![
             account_id,
             address,
-            display_name,
-            frequency,
-            last_seen_at,
-            display_seen_at
+            contact.display_name,
+            contact.frequency,
+            contact.last_seen_at,
+            contact.display_seen_at
         ])?;
     }
     Ok(())
 }
 
 pub fn observe_now(connection: &Connection, account_id: &str, mailbox: &str) -> Result<()> {
-    observe(connection, account_id, mailbox, Utc::now().timestamp())
+    observe(
+        connection,
+        ContactObservation {
+            account_id: account_id,
+            mailbox: mailbox,
+            seen_at: Utc::now().timestamp(),
+        },
+    )
 }
 
 pub fn lookup(connection: &Connection, account_id: &str, prefix: &str) -> Result<Vec<Contact>> {

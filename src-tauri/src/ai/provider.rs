@@ -106,6 +106,11 @@ pub struct ThinkFilter {
     inside: bool,
 }
 
+struct TagSpan {
+    start: usize,
+    length: usize,
+}
+
 impl ThinkFilter {
     fn active_tags(&self) -> [&'static str; 3] {
         if self.inside {
@@ -120,11 +125,11 @@ impl ThinkFilter {
         loop {
             let tags = self.active_tags();
             match first_tag(&self.pending, &tags) {
-                Some((at, len)) => {
+                Some(span) => {
                     if !self.inside {
-                        visible.push_str(&self.pending[..at]);
+                        visible.push_str(&self.pending[..span.start]);
                     }
-                    self.pending.replace_range(..at + len, "");
+                    self.pending.replace_range(..span.start + span.length, "");
                     self.inside = !self.inside;
                 }
                 None => {
@@ -154,10 +159,15 @@ pub fn strip_think_blocks(text: &str) -> String {
     stripped.trim().to_owned()
 }
 
-fn first_tag(text: &str, tags: &[&str]) -> Option<(usize, usize)> {
+fn first_tag(text: &str, tags: &[&str]) -> Option<TagSpan> {
     tags.iter()
-        .filter_map(|tag| text.find(tag).map(|at| (at, tag.len())))
-        .min_by_key(|(at, _)| *at)
+        .filter_map(|tag| {
+            text.find(tag).map(|start| TagSpan {
+                start: start,
+                length: tag.len(),
+            })
+        })
+        .min_by_key(|span| span.start)
 }
 
 fn partial_tag_len(text: &str, tags: &[&str]) -> usize {
@@ -310,6 +320,25 @@ pub struct Provider {
     reasoning_tier: Arc<AtomicUsize>,
 }
 
+pub struct ChatCompletionRequest<'a> {
+    pub model: &'a str,
+    pub messages: Value,
+    pub response_format: Option<Value>,
+}
+
+pub struct ChatStreamRequest<'a> {
+    pub model: &'a str,
+    pub messages: Value,
+    pub cancel: &'a AtomicBool,
+}
+
+struct SendRequest<'a> {
+    model: &'a str,
+    messages: &'a Value,
+    stream: bool,
+    response_format: Option<Value>,
+}
+
 impl Provider {
     pub fn new(base_url: &str, api_key: Option<String>) -> Result<Self, String> {
         let root = api_root(base_url)?;
@@ -363,16 +392,16 @@ impl Provider {
     }
     pub async fn chat_completion(
         &self,
-        model: &str,
-        messages: Value,
-        response_format: Option<Value>,
+        request: ChatCompletionRequest<'_>,
     ) -> Result<String, ProviderError> {
         let response: ChatResponse = self
             .send(
-                model,
-                &messages,
-                false,
-                response_format,
+                SendRequest {
+                    model: request.model,
+                    messages: &request.messages,
+                    stream: false,
+                    response_format: request.response_format,
+                },
                 |body| async move { self.client.chat().create_byot(body).await },
             )
             .await?;
@@ -387,22 +416,26 @@ impl Provider {
     }
     pub async fn chat_completion_stream(
         &self,
-        model: &str,
-        messages: Value,
-        cancel: &AtomicBool,
+        request: ChatStreamRequest<'_>,
         on_delta: &mut (dyn FnMut(&str) + Send),
     ) -> Result<(), ProviderError> {
         let mut stream: StreamResponse<StreamChunk> = self
-            .send(model, &messages, true, None, |body| async move {
-                self.client.chat().create_stream_byot(body).await
-            })
+            .send(
+                SendRequest {
+                    model: request.model,
+                    messages: &request.messages,
+                    stream: true,
+                    response_format: None,
+                },
+                |body| async move { self.client.chat().create_stream_byot(body).await },
+            )
             .await?;
         let mut think = ThinkFilter::default();
         let mut delivered = false;
         let mut reasoned = false;
         let mut truncated = false;
         while let Some(item) = stream.next().await {
-            if cancel.load(Ordering::SeqCst) {
+            if request.cancel.load(Ordering::SeqCst) {
                 return Ok(());
             }
             let chunk = item.map_err(provider_error)?;
@@ -428,7 +461,7 @@ impl Provider {
                 on_delta(&visible);
             }
         }
-        if cancel.load(Ordering::SeqCst) {
+        if request.cancel.load(Ordering::SeqCst) {
             return Ok(());
         }
         let tail = think.flush();
@@ -440,29 +473,14 @@ impl Provider {
         }
         Err(empty_answer(reasoned, truncated))
     }
-    async fn send<T, F, Fut>(
-        &self,
-        model: &str,
-        messages: &Value,
-        stream: bool,
-        response_format: Option<Value>,
-        call: F,
-    ) -> Result<T, ProviderError>
+    async fn send<T, F, Fut>(&self, request: SendRequest<'_>, call: F) -> Result<T, ProviderError>
     where
         F: Fn(Value) -> Fut,
         Fut: std::future::Future<Output = Result<T, OpenAIError>>,
     {
         loop {
             let tier = self.reasoning_tier.load(Ordering::SeqCst);
-            match call(chat_body(
-                model,
-                messages,
-                stream,
-                response_format.clone(),
-                tier,
-            ))
-            .await
-            {
+            match call(chat_body(&request, tier)).await {
                 Ok(value) => return Ok(value),
                 Err(error) => {
                     let should_step_down =
@@ -478,21 +496,15 @@ impl Provider {
     }
 }
 
-fn chat_body(
-    model: &str,
-    messages: &Value,
-    stream: bool,
-    response_format: Option<Value>,
-    tier: usize,
-) -> Value {
+fn chat_body(request: &SendRequest<'_>, tier: usize) -> Value {
     let mut body = Map::new();
-    body.insert("model".to_owned(), Value::String(model.to_owned()));
-    body.insert("messages".to_owned(), messages.clone());
-    body.insert("stream".to_owned(), Value::Bool(stream));
+    body.insert("model".to_owned(), Value::String(request.model.to_owned()));
+    body.insert("messages".to_owned(), request.messages.clone());
+    body.insert("stream".to_owned(), Value::Bool(request.stream));
     body.insert("temperature".to_owned(), json!(TEMPERATURE));
     body.insert("seed".to_owned(), json!(SEED));
     body.insert("max_tokens".to_owned(), json!(MAX_TOKENS));
-    if let Some(format) = response_format {
+    if let Some(format) = request.response_format.clone() {
         body.insert("response_format".to_owned(), format);
     }
     body.extend(reasoning_off_fields(tier));

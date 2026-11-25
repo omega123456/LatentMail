@@ -53,13 +53,19 @@ function layoutPages(sizes: Size[]): PageLayout {
   return { tops: tops, content: { width: paddedLength(widest), height: cursor } };
 }
 
-function pageVisibility(
-  sizes: Size[],
-  layout: PageLayout,
-  zoom: number,
-  scrollTop: number,
-  viewportHeight: number,
-) {
+function pageVisibility({
+  sizes,
+  layout,
+  zoom,
+  scrollTop,
+  viewportHeight,
+}: {
+  sizes: Size[];
+  layout: PageLayout;
+  zoom: number;
+  scrollTop: number;
+  viewportHeight: number;
+}) {
   const offset = centringOffset(viewportHeight, layout.content.height * zoom);
   const top = (scrollTop - offset) / zoom;
   const height = viewportHeight / zoom;
@@ -134,12 +140,17 @@ function selectionExtendsStart(range: Range, before: Range | null): boolean {
   );
 }
 
-function positionSelectionEnd(
-  container: HTMLElement,
-  end: HTMLDivElement,
-  range: Range,
-  before: Range | null,
-) {
+function positionSelectionEnd({
+  container,
+  end,
+  range,
+  before,
+}: {
+  container: HTMLElement;
+  end: HTMLDivElement;
+  range: Range;
+  before: Range | null;
+}) {
   end.toggleAttribute('data-selecting', true);
   const extendsStart = selectionExtendsStart(range, before);
   const boundary = extendsStart ? range.startContainer : range.endContainer;
@@ -179,7 +190,7 @@ function followSelection(container: HTMLElement): () => void {
       const before = previous;
       previous = range?.cloneRange() ?? null;
       if (!range?.intersectsNode(container)) return reset();
-      positionSelectionEnd(container, end, range, before);
+      positionSelectionEnd({ container, end, range, before });
     },
     { signal },
   );
@@ -225,15 +236,27 @@ function PdfTextLayer({ page, zoom }: { page: PDFPageProxy; zoom: number }) {
 
 type LoadedPdf = { pages: PDFPageProxy[]; sizes: Size[] };
 
-function computePageVisibility(
-  pdf: LoadedPdf | null,
-  layout: PageLayout | null,
-  viewport: Size | null,
-  zoom: number,
-  scrollTop: number,
-) {
+function computePageVisibility({
+  pdf,
+  layout,
+  viewport,
+  zoom,
+  scrollTop,
+}: {
+  pdf: LoadedPdf | null;
+  layout: PageLayout | null;
+  viewport: Size | null;
+  zoom: number;
+  scrollTop: number;
+}) {
   if (!pdf || !layout || !viewport) return null;
-  return pageVisibility(pdf.sizes, layout, zoom, scrollTop, viewport.height);
+  return pageVisibility({
+    sizes: pdf.sizes,
+    layout: layout,
+    zoom: zoom,
+    scrollTop: scrollTop,
+    viewportHeight: viewport.height,
+  });
 }
 
 function PdfPageStack({
@@ -345,7 +368,7 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
       </div>
     );
 
-  const visibility = computePageVisibility(pdf, layout, viewport, zoom, scrollTop);
+  const visibility = computePageVisibility({ pdf, layout, viewport, zoom, scrollTop });
   const currentPage = (visibility?.current ?? 0) + 1;
 
   return (

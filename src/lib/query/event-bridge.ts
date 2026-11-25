@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { toDate } from 'date-fns';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { emitFrontendReady } from '@/lib/ipc/events';
 import { listenUntilDisposed } from '@/lib/ipc/listen-managed';
 import { createDebouncedFlush, createDebouncedTrigger } from '@/lib/debounced-flush';
@@ -16,59 +16,110 @@ export const QUEUE_SNAPSHOT_DEBOUNCE_MS = 250;
 export const MAILBOX_INVALIDATION_DEBOUNCE_MS = 250;
 export const TRAVERSAL_INVALIDATION_DEBOUNCE_MS = 1000;
 
-export function EventBridge() {
-  const queryClient = useQueryClient();
-  useEffect(() => {
-    void emitFrontendReady();
-    const disposers: Array<() => void> = [];
-    const queueSnapshot = createDebouncedTrigger(QUEUE_SNAPSHOT_DEBOUNCE_MS, () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.queueOperations });
+type BridgeDebouncers = {
+  queueSnapshot: ReturnType<typeof createDebouncedTrigger>;
+  mailboxInvalidation: ReturnType<typeof createDebouncedFlush<string>>;
+  traversalInvalidation: ReturnType<typeof createDebouncedFlush<string>>;
+};
+
+type BridgeSubscription = () => () => void;
+
+function invalidateMailboxQueries(queryClient: QueryClient, accountId: string) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId) });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.searchTotalsForAccount(accountId) });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+}
+
+function invalidateTraversalQueries(queryClient: QueryClient, accountId: string) {
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.threadsForAccount(accountId),
+    refetchType: 'none',
+  });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+}
+
+function on<Event extends keyof IpcEventMap>(
+  event: Event,
+  handler: (payload: IpcEventMap[Event]) => void,
+): BridgeSubscription {
+  return () =>
+    listenUntilDisposed(event, (payload) => {
+      if (event !== 'queue://summary') appLog.info(`event ${event} ${JSON.stringify(payload)}`);
+      handler(payload);
     });
-    const mailboxInvalidation = createDebouncedFlush<string>(
+}
+
+function createBridgeDebouncers(queryClient: QueryClient): BridgeDebouncers {
+  return {
+    queueSnapshot: createDebouncedTrigger(QUEUE_SNAPSHOT_DEBOUNCE_MS, () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.queueOperations });
+    }),
+    mailboxInvalidation: createDebouncedFlush<string>(
       MAILBOX_INVALIDATION_DEBOUNCE_MS,
       (accountIds) => {
-        accountIds.forEach((pendingAccountId) => {
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.threadsForAccount(pendingAccountId),
-          });
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.searchForAccount(pendingAccountId),
-          });
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.searchTotalsForAccount(pendingAccountId),
-          });
-          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(pendingAccountId) });
-        });
+        accountIds.forEach((accountId) => invalidateMailboxQueries(queryClient, accountId));
       },
-    );
-    const traversalInvalidation = createDebouncedFlush<string>(
+    ),
+    traversalInvalidation: createDebouncedFlush<string>(
       TRAVERSAL_INVALIDATION_DEBOUNCE_MS,
       (accountIds) => {
-        accountIds.forEach((accountId) => {
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.threadsForAccount(accountId),
-            refetchType: 'none',
-          });
-          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
-        });
+        accountIds.forEach((accountId) => invalidateTraversalQueries(queryClient, accountId));
       },
-    );
-    const subscribe = <Event extends keyof IpcEventMap>(
-      event: Event,
-      handler: (payload: IpcEventMap[Event]) => void,
-    ) => {
-      const logged = (payload: IpcEventMap[Event]) => {
-        if (event !== 'queue://summary') appLog.info(`event ${event} ${JSON.stringify(payload)}`);
-        handler(payload);
-      };
-      disposers.push(listenUntilDisposed(event, logged));
-    };
+    ),
+  };
+}
 
-    subscribe('queue://summary', (summary) => {
+function mergeAiIndexStatus(
+  statuses: AiIndexStatus[] | undefined,
+  event: IpcEventMap['ai://index'],
+): AiIndexStatus[] {
+  const current = statuses ?? [];
+  const next: AiIndexStatus = {
+    accountId: event.accountId,
+    indexed: event.indexed,
+    total: event.total,
+    indexedMessages: event.indexedMessages,
+    totalEligibleMessages: event.totalEligibleMessages,
+    indexedPassages: event.indexedPassages,
+    state: event.state,
+    paused: event.paused,
+    error: event.error,
+  };
+  const found = current.some((status) => status.accountId === event.accountId);
+  if (!found) return [...current, next];
+  return current.map((status) =>
+    status.accountId === event.accountId ? { ...status, ...next } : status,
+  );
+}
+
+function handleComposeFailed(event: IpcEventMap['compose://failed']) {
+  const compose = useComposeStore.getState();
+  const matchesSession =
+    compose.session?.id === event.sessionId || compose.session?.draftId === event.sessionId;
+  if (matchesSession) {
+    compose.setDraftStatus(
+      'failed',
+      event.kind === 'send' ? 'Couldn’t send.' : 'Couldn’t save draft.',
+    );
+    return;
+  }
+  appLog.error(`compose ${event.kind} failed: ${event.error}`);
+  useToastStore
+    .getState()
+    .showError(event.kind === 'send' ? 'Couldn’t send your message.' : 'Couldn’t save draft.');
+}
+
+function createEventSubscriptions(
+  queryClient: QueryClient,
+  debouncers: BridgeDebouncers,
+): BridgeSubscription[] {
+  return [
+    on('queue://summary', (summary) => {
       useSyncStore.getState().setQueue(summary);
-      queueSnapshot.trigger();
-    });
-    subscribe('ai://config', (event) => {
+      debouncers.queueSnapshot.trigger();
+    }),
+    on('ai://config', (event) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.aiConfigs });
       void queryClient.invalidateQueries({ queryKey: queryKeys.aiIndexStatuses });
       if (event.removed) {
@@ -78,39 +129,17 @@ export function EventBridge() {
             statuses?.filter((status) => status.accountId !== event.accountId),
         );
       }
-    });
-    subscribe('ai://index', (event) => {
-      queryClient.setQueryData(
-        queryKeys.aiIndexStatuses,
-        (statuses: AiIndexStatus[] | undefined) => {
-          const current = statuses ?? [];
-          const next = {
-            accountId: event.accountId,
-            indexed: event.indexed,
-            total: event.total,
-            indexedMessages: event.indexedMessages,
-            totalEligibleMessages: event.totalEligibleMessages,
-            indexedPassages: event.indexedPassages,
-            state: event.state,
-            paused: event.paused,
-            error: event.error,
-          };
-          const found = current.some((status) => status.accountId === event.accountId);
-          return found
-            ? current.map((status) =>
-                status.accountId === event.accountId ? { ...status, ...next } : status,
-              )
-            : [...current, next];
-        },
+    }),
+    on('ai://index', (event) => {
+      queryClient.setQueryData(queryKeys.aiIndexStatuses, (statuses: AiIndexStatus[] | undefined) =>
+        mergeAiIndexStatus(statuses, event),
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.aiIndexStatuses });
-    });
-
-    subscribe('sync://progress', (progress) => {
+    }),
+    on('sync://progress', (progress) => {
       useSyncStore.getState().setSyncState(progress.state);
-    });
-
-    subscribe('sync://traversal', (progress) => {
+    }),
+    on('sync://traversal', (progress) => {
       queryClient.setQueryData(queryKeys.traversalStatus(progress.accountId), {
         accountId: progress.accountId,
         state: progress.state,
@@ -120,25 +149,21 @@ export function EventBridge() {
         lastAdvancedAt: progress.lastAdvancedAt,
         isResumed: progress.isResumed,
       });
-      traversalInvalidation.add(progress.accountId);
-    });
-
-    subscribe('sync://complete', (event) => {
+      debouncers.traversalInvalidation.add(progress.accountId);
+    }),
+    on('sync://complete', (event) => {
       useSyncStore.setState({
         syncState: 'idle',
         lastSynced: toDate(event.completedAt),
         error: undefined,
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(event.accountId) });
-      if (!event.changed) return;
-      mailboxInvalidation.add(event.accountId);
-    });
-
-    subscribe('mail://new', (event) => {
-      mailboxInvalidation.add(event.accountId);
-    });
-
-    subscribe('mail://changed', (event) => {
+      if (event.changed) debouncers.mailboxInvalidation.add(event.accountId);
+    }),
+    on('mail://new', (event) => {
+      debouncers.mailboxInvalidation.add(event.accountId);
+    }),
+    on('mail://changed', (event) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.threadsForAccount(event.accountId),
       });
@@ -150,22 +175,19 @@ export function EventBridge() {
         queryKey: queryKeys.searchTotalsForAccount(event.accountId),
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
-    });
-
-    subscribe('message://body-fetched', (event) => {
+    }),
+    on('message://body-fetched', (event) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.messageBodiesForMessage(event.accountId, event.messageId),
       });
-    });
-
-    subscribe('os://intent', (intent) => {
+    }),
+    on('os://intent', (intent) => {
       void handleOsIntent(intent);
-    });
-
-    subscribe('send://uncertain', () => {
+    }),
+    on('send://uncertain', () => {
       useToastStore.getState().showError('Send status unknown — check Sent and Drafts.');
-    });
-    subscribe('draft://saved', (event) => {
+    }),
+    on('draft://saved', (event) => {
       const session = useComposeStore.getState().session;
       if (session?.id === event.sessionId) {
         useComposeStore.getState().setDraftId(event.draftId);
@@ -174,59 +196,52 @@ export function EventBridge() {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.threadsForAccount(event.accountId),
       });
-    });
-    subscribe('send://complete', (event) => {
+    }),
+    on('send://complete', (event) => {
       useToastStore.getState().showSuccess('Message sent.');
       void queryClient.invalidateQueries({
         queryKey: queryKeys.threadsForAccount(event.accountId),
       });
-    });
-
-    subscribe('compose://failed', (event) => {
-      const compose = useComposeStore.getState();
-      if (compose.session?.id === event.sessionId || compose.session?.draftId === event.sessionId) {
-        compose.setDraftStatus(
-          'failed',
-          event.kind === 'send' ? 'Couldn’t send.' : 'Couldn’t save draft.',
-        );
-        return;
-      }
-      appLog.error(`compose ${event.kind} failed: ${event.error}`);
-      useToastStore
-        .getState()
-        .showError(event.kind === 'send' ? 'Couldn’t send your message.' : 'Couldn’t save draft.');
-    });
-
-    subscribe('queue://item', (item) => {
-      queueSnapshot.trigger();
-      if (item.status !== 'done' && item.status !== 'failed') return;
-      if (!item.id.startsWith('mutation:')) return;
-      mailboxInvalidation.add(item.accountId);
-    });
-
-    subscribe('avatar://resolved', (event) => {
-      void queryClient.invalidateQueries({
-        queryKey:
-          event.pipeline === 'sender'
-            ? queryKeys.senderAvatar(event.key)
-            : queryKeys.accountAvatar(event.key),
-      });
-    });
-
-    subscribe('account://state', () => {
+    }),
+    on('compose://failed', handleComposeFailed),
+    on('queue://item', (item) => {
+      debouncers.queueSnapshot.trigger();
+      const finished = item.status === 'done' || item.status === 'failed';
+      const finishedMutation = finished && item.id.startsWith('mutation:');
+      if (!finishedMutation) return;
+      debouncers.mailboxInvalidation.add(item.accountId);
+    }),
+    on('avatar://resolved', (event) => {
+      const avatarKey =
+        event.pipeline === 'sender'
+          ? queryKeys.senderAvatar(event.key)
+          : queryKeys.accountAvatar(event.key);
+      void queryClient.invalidateQueries({ queryKey: avatarKey });
+    }),
+    on('account://state', () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
-    });
-
-    subscribe('account://removed', () => {
+    }),
+    on('account://removed', () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
-    });
+    }),
+  ];
+}
 
-    return () => {
-      traversalInvalidation.cancel();
-      mailboxInvalidation.cancel();
-      queueSnapshot.cancel();
-      disposers.forEach((dispose) => dispose());
-    };
-  }, [queryClient]);
+export function subscribeQueryBridge(queryClient: QueryClient): () => void {
+  void emitFrontendReady();
+  const debouncers = createBridgeDebouncers(queryClient);
+  const subscriptions = createEventSubscriptions(queryClient, debouncers);
+  const disposers = subscriptions.map((subscribe) => subscribe());
+  return () => {
+    debouncers.traversalInvalidation.cancel();
+    debouncers.mailboxInvalidation.cancel();
+    debouncers.queueSnapshot.cancel();
+    disposers.forEach((dispose) => dispose());
+  };
+}
+
+export function EventBridge() {
+  const queryClient = useQueryClient();
+  useEffect(() => subscribeQueryBridge(queryClient), [queryClient]);
   return null;
 }

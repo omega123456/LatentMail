@@ -1,6 +1,6 @@
+use latentmail_lib::queue::{Executor, Lane, OperationKind, QueueEngine, QueueOperation};
 use std::sync::Arc;
 
-use latentmail_lib::queue::{Executor, Lane, OperationKind, QueueEngine, QueueOperation};
 use tokio::sync::mpsc;
 
 fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {

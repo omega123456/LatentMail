@@ -2,24 +2,37 @@ pub mod cache;
 pub mod commands;
 pub mod thumbnail;
 
-pub use cache::{AttachmentCache, CachedAttachment, CACHE_CEILING_BYTES};
+pub use cache::{
+    AttachmentCache, AttachmentDescriptor, AttachmentRef, CachedAttachment, CACHE_CEILING_BYTES,
+};
 
 use crate::gmail::AttachmentPart;
 
-pub fn seed_cache(
-    cache: &AttachmentCache,
-    account_id: &str,
-    message_id: &str,
-    parts: &[AttachmentPart],
-) {
+#[derive(Clone, Copy, Debug)]
+pub struct MessageTarget<'a> {
+    pub account_id: &'a str,
+    pub message_id: &'a str,
+}
+
+pub struct RefetchRequest<'a> {
+    pub account_id: &'a str,
+    pub message_id: &'a str,
+    pub record: &'a crate::storage::Attachment,
+}
+
+pub fn seed_cache(cache: &AttachmentCache, target: MessageTarget<'_>, parts: &[AttachmentPart]) {
     for part in parts {
         if let Some(bytes) = &part.inline_bytes {
             let _ = cache.write_bytes(
-                account_id,
-                message_id,
-                &part.attachment_id,
-                &part.filename,
-                &part.mime_type,
+                AttachmentDescriptor {
+                    target: AttachmentRef {
+                        account_id: target.account_id,
+                        message_id: target.message_id,
+                        attachment_id: &part.attachment_id,
+                    },
+                    filename: &part.filename,
+                    mime_type: &part.mime_type,
+                },
                 bytes,
             );
         }
@@ -29,39 +42,41 @@ pub fn seed_cache(
 pub async fn refetch(
     cache: &AttachmentCache,
     client: &crate::gmail::GmailClient,
-    account_id: &str,
-    message_id: &str,
-    record: &crate::storage::Attachment,
+    request: RefetchRequest<'_>,
 ) -> Result<CachedAttachment, String> {
     let refreshed = client
-        .message(message_id)
+        .message(request.message_id)
         .await
         .map_err(|error| error.to_string())?;
     let part = refreshed
         .attachment_parts
         .iter()
-        .find(|part| part.filename == record.filename)
+        .find(|part| part.filename == request.record.filename)
         .ok_or_else(|| "Attachment is no longer part of this message".to_owned())?;
     let bytes = match &part.inline_bytes {
         Some(bytes) => bytes.clone(),
         None => client
-            .attachment(message_id, &part.attachment_id)
+            .attachment(request.message_id, &part.attachment_id)
             .await
             .map_err(|error| error.to_string())?,
     };
     let cache = cache.clone();
-    let account_id = account_id.to_owned();
-    let message_id = message_id.to_owned();
-    let attachment_id = record.attachment_id.clone();
-    let filename = record.filename.clone();
-    let mime_type = record.mime_type.clone();
+    let account_id = request.account_id.to_owned();
+    let message_id = request.message_id.to_owned();
+    let attachment_id = request.record.attachment_id.clone();
+    let filename = request.record.filename.clone();
+    let mime_type = request.record.mime_type.clone();
     tokio::task::spawn_blocking(move || {
         cache.write_bytes(
-            &account_id,
-            &message_id,
-            &attachment_id,
-            &filename,
-            &mime_type,
+            AttachmentDescriptor {
+                target: AttachmentRef {
+                    account_id: &account_id,
+                    message_id: &message_id,
+                    attachment_id: &attachment_id,
+                },
+                filename: &filename,
+                mime_type: &mime_type,
+            },
             &bytes,
         )
     })

@@ -1,4 +1,4 @@
-use latentmail_lib::gmail::{GmailClient, GmailError};
+use latentmail_lib::gmail::{GmailClient, GmailError, LabelModification};
 use wiremock::{
     matchers::{body_json, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
@@ -62,14 +62,26 @@ async fn client_round_trips_every_slice_endpoint_and_paginates() {
     );
     assert_eq!(
         client
-            .modify_message("a", &["STARRED".into()], &[])
+            .modify_message(
+                "a",
+                LabelModification {
+                    add_label_ids: &["STARRED".into()],
+                    remove_label_ids: &[]
+                }
+            )
             .await
             .unwrap()
             .history_id,
         10
     );
     client
-        .batch_modify(&["a".into()], &[], &["UNREAD".into()])
+        .batch_modify(
+            &["a".into()],
+            LabelModification {
+                add_label_ids: &[],
+                remove_label_ids: &["UNREAD".into()],
+            },
+        )
         .await
         .unwrap();
     assert_eq!(

@@ -100,12 +100,17 @@ export function captureBinding(
   return [`${modifier}${event.shiftKey ? '+Shift' : ''}+${key}`];
 }
 
-export function findConflictingCommand(
-  bindings: CommandBindings,
-  command: CommandName,
-  candidate: string,
-  isMac: boolean = isMacPlatform(),
-): CommandName | null {
+export function findConflictingCommand({
+  bindings,
+  command,
+  candidate,
+  isMac = isMacPlatform(),
+}: {
+  bindings: CommandBindings;
+  command: CommandName;
+  candidate: string;
+  isMac?: boolean;
+}): CommandName | null {
   if (!isBindingReachable(candidate, isMac)) return null;
   const entries = Object.entries(bindings) as [CommandName, string[]][];
   const conflict = entries.find(

@@ -1,5 +1,5 @@
 use latentmail_lib::avatars::bimi::{candidate_domains, parse_logo_url, resolve_logo};
-use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheDomain};
+use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheDomain, CachedAvatar};
 use latentmail_lib::avatars::image::OUTPUT_SIZE;
 use latentmail_lib::avatars::resolver::{fake_txt_lookup_count, set_fake_download, set_fake_txt};
 use latentmail_lib::storage::Storage;
@@ -140,7 +140,11 @@ async fn a_candidate_already_cache_positive_is_reused_by_a_sibling_subdomain_wit
     let (cache, _dir) = test_cache();
     let parent_key = hash_key("aviva.co.uk");
     cache
-        .store_hit(&parent_key, CacheDomain::Sender, b"pre-cached-parent-logo")
+        .store_hit(CachedAvatar {
+            cache_key: &parent_key,
+            domain: CacheDomain::Sender,
+            png_bytes: b"pre-cached-parent-logo",
+        })
         .await
         .unwrap();
 

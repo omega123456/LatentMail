@@ -20,7 +20,14 @@ export function ShortcutCapture({
   const [captured, setCaptured] = useState<string[] | null>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
   const isMac = isMacPlatform();
-  const conflict = captured ? findConflictingCommand(bindings, command, captured[0], isMac) : null;
+  const conflict = captured
+    ? findConflictingCommand({
+        bindings: bindings,
+        command: command,
+        candidate: captured[0],
+        isMac: isMac,
+      })
+    : null;
 
   useEffect(() => {
     fieldRef.current?.focus();

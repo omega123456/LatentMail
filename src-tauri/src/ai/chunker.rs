@@ -5,6 +5,15 @@ const CHUNK_OVERLAP: usize = 50;
 const MAX_WORD_CHARS: usize = 80;
 const LONG_WORD_PLACEHOLDER: &str = "[URL]";
 
+pub struct ChunkMessage<'a> {
+    pub sender: &'a str,
+    pub recipients: &'a str,
+    pub subject: &'a str,
+    pub truncated_body: Option<&'a str>,
+    pub plain_body: Option<&'a str>,
+    pub html_body: Option<&'a str>,
+}
+
 fn normalize_word(word: &str) -> String {
     if word.chars().count() > MAX_WORD_CHARS {
         return LONG_WORD_PLACEHOLDER.to_owned();
@@ -12,42 +21,36 @@ fn normalize_word(word: &str) -> String {
     word.to_owned()
 }
 
-fn format_chunk(
-    start: usize,
-    sender: &str,
-    recipients: &str,
-    subject: &str,
-    text: String,
-) -> String {
+fn format_chunk(start: usize, message: &ChunkMessage<'_>, text: String) -> String {
     if start == 0 {
-        return format!("From: {sender}\nTo: {recipients}\nSubject: {subject}\n\n{text}");
+        return format!(
+            "From: {}\nTo: {}\nSubject: {}\n\n{text}",
+            message.sender, message.recipients, message.subject
+        );
     }
     text
 }
 
-pub fn chunks(
-    sender: &str,
-    recipients: &str,
-    subject: &str,
-    truncated_body: Option<&str>,
-    plain_body: Option<&str>,
-    html_body: Option<&str>,
-) -> Vec<String> {
-    let body = truncated_body
+pub fn chunks(message: &ChunkMessage<'_>) -> Vec<String> {
+    let body = message
+        .truncated_body
         .map(str::to_owned)
-        .unwrap_or_else(|| truncate_body(plain_body, html_body).unwrap_or_default());
+        .unwrap_or_else(|| {
+            truncate_body(message.plain_body, message.html_body).unwrap_or_default()
+        });
     let words: Vec<String> = body.split_whitespace().map(normalize_word).collect();
     let mut output = Vec::new();
     if words.is_empty() {
         return vec![format!(
-            "From: {sender}\nTo: {recipients}\nSubject: {subject}\n\n"
+            "From: {}\nTo: {}\nSubject: {}\n\n",
+            message.sender, message.recipients, message.subject
         )];
     }
     let mut start = 0;
     while start < words.len() {
         let end = (start + CHUNK_SIZE).min(words.len());
         let text = words[start..end].join(" ");
-        output.push(format_chunk(start, sender, recipients, subject, text));
+        output.push(format_chunk(start, message, text));
         if end == words.len() {
             break;
         }

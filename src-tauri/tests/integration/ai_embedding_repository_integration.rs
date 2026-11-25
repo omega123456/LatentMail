@@ -2,6 +2,7 @@ use latentmail_lib::storage::{
     Account, AccountRepository, EmbeddingRepository, HtmlPresence, Label, LabelRepository, Message,
     MessageEmbedding, MessageRepository, Storage,
 };
+use latentmail_lib::storage::{LabelMembershipChange, MessageBodyUpdate, MessageKey, NearestQuery};
 
 fn message(account_id: &str, id: &str, history_id: i64) -> Message {
     Message {
@@ -85,7 +86,15 @@ fn account_vector_tables_accept_different_dimensions() {
         }],
     )
     .unwrap();
-    let nearest = EmbeddingRepository::nearest(&connection, "one", &[1.0, 0.0], 2).unwrap();
+    let nearest = EmbeddingRepository::nearest(
+        &connection,
+        "one",
+        NearestQuery {
+            vector: &[1.0, 0.0],
+            limit: 2,
+        },
+    )
+    .unwrap();
     assert_ne!(
         EmbeddingRepository::table_name(1),
         EmbeddingRepository::table_name(2)
@@ -93,11 +102,11 @@ fn account_vector_tables_accept_different_dimensions() {
     assert_eq!(
         nearest
             .iter()
-            .map(|(message_seq, _)| *message_seq)
+            .map(|passage| passage.message_seq)
             .collect::<Vec<_>>(),
         vec![1, 1]
     );
-    assert!(nearest[0].1 <= nearest[1].1);
+    assert!(nearest[0].distance <= nearest[1].distance);
     assert_eq!(metadata_count(&connection, "one"), 2);
     assert_eq!(metadata_count(&connection, "two"), 1);
     assert_eq!(
@@ -160,9 +169,31 @@ fn triggers_remove_vectors_for_text_exclusion_and_message_deletion() {
     MessageRepository::write_full_state(&connection, &changed).unwrap();
     assert_eq!(metadata_count(&connection, "one"), 0);
     EmbeddingRepository::write(&connection, "one", std::slice::from_ref(&entry)).unwrap();
-    MessageRepository::set_label_membership(&connection, "one", "message", "TRASH", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "one",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: true,
+        },
+    )
+    .unwrap();
     assert_eq!(metadata_count(&connection, "one"), 0);
-    MessageRepository::set_label_membership(&connection, "one", "message", "TRASH", false).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "one",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: false,
+        },
+    )
+    .unwrap();
     assert_eq!(
         EmbeddingRepository::backlog(&connection, "one", 64)
             .unwrap()
@@ -211,11 +242,15 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
     .unwrap();
     MessageRepository::set_body(
         &connection,
-        "one",
-        "message",
-        None,
-        Some("hydrated body"),
-        HtmlPresence::Absent,
+        MessageKey {
+            account_id: "one",
+            message_id: "message",
+        },
+        MessageBodyUpdate {
+            html_body: None,
+            plain_body: Some("hydrated body"),
+            presence: HtmlPresence::Absent,
+        },
     )
     .unwrap();
     assert_eq!(metadata_count(&connection, "one"), 1);
@@ -223,9 +258,16 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
         .unwrap()
         .is_empty());
     assert_eq!(
-        EmbeddingRepository::nearest(&connection, "one", &[1.0, 0.0], 1)
-            .unwrap()
-            .len(),
+        EmbeddingRepository::nearest(
+            &connection,
+            "one",
+            NearestQuery {
+                vector: &[1.0, 0.0],
+                limit: 1
+            }
+        )
+        .unwrap()
+        .len(),
         1
     );
     stored.subject = "Changed".into();
@@ -260,11 +302,15 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
     .unwrap();
     MessageRepository::set_body(
         &connection,
-        "one",
-        "plain",
-        None,
-        Some("changed body"),
-        HtmlPresence::Absent,
+        MessageKey {
+            account_id: "one",
+            message_id: "plain",
+        },
+        MessageBodyUpdate {
+            html_body: None,
+            plain_body: Some("changed body"),
+            presence: HtmlPresence::Absent,
+        },
     )
     .unwrap();
     assert_eq!(metadata_count(&connection, "one"), 0);
@@ -306,9 +352,16 @@ fn rolled_back_model_lifecycle_keeps_the_prior_vector_objects_consistent() {
     }
     assert_eq!(metadata_count(&connection, "one"), 1);
     assert_eq!(
-        EmbeddingRepository::nearest(&connection, "one", &[1.0, 0.0], 1)
-            .unwrap()
-            .len(),
+        EmbeddingRepository::nearest(
+            &connection,
+            "one",
+            NearestQuery {
+                vector: &[1.0, 0.0],
+                limit: 1
+            }
+        )
+        .unwrap()
+        .len(),
         1
     );
 }

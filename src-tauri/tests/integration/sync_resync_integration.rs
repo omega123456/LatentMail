@@ -2,7 +2,7 @@ use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage, ThreadRepository,
 };
-use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncState, WorkRegistry};
+use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncEngineDeps, SyncState, WorkRegistry};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -55,7 +55,12 @@ fn engine_with_stale_checkpoint() -> (std::sync::Arc<SyncEngine>, Storage, tempf
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
     (engine, storage, directory)
 }
 

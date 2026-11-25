@@ -1,3 +1,4 @@
+use latentmail_lib::sync::SyncEngineDeps;
 use latentmail_lib::{
     gmail::GmailClient,
     storage::{
@@ -78,12 +79,12 @@ async fn reconciliation_deletes_only_absent_messages_and_fetches_new_ones() {
     }
     drop(connection);
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await

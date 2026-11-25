@@ -105,7 +105,15 @@ fn read_token(chars: &[char], index: &mut usize) -> Option<RawToken> {
     let prefix: String = chars[start..*index].iter().collect();
     let starts_quote = *index < chars.len() && chars[*index] == '"';
     if starts_quote {
-        return Some(read_quoted_token(chars, index, start, prefix, negated));
+        return Some(read_quoted_token(
+            chars,
+            index,
+            QuotedTokenStart {
+                start: start,
+                prefix: prefix,
+                negated: negated,
+            },
+        ));
     }
     if let Some(colon_position) = prefix.find(':') {
         return Some(RawToken {
@@ -124,13 +132,13 @@ fn read_token(chars: &[char], index: &mut usize) -> Option<RawToken> {
     })
 }
 
-fn read_quoted_token(
-    chars: &[char],
-    index: &mut usize,
+struct QuotedTokenStart {
     start: usize,
     prefix: String,
     negated: bool,
-) -> RawToken {
+}
+
+fn read_quoted_token(chars: &[char], index: &mut usize, opening: QuotedTokenStart) -> RawToken {
     *index += 1;
     let value_start = *index;
     while *index < chars.len() && chars[*index] != '"' {
@@ -140,23 +148,23 @@ fn read_quoted_token(
     if *index < chars.len() {
         *index += 1;
     }
-    if let Some(key) = prefix.strip_suffix(':') {
+    if let Some(key) = opening.prefix.strip_suffix(':') {
         return RawToken {
-            negated: negated,
+            negated: opening.negated,
             key: Some(key.to_lowercase()),
             value: value,
         };
     }
-    if prefix.is_empty() {
+    if opening.prefix.is_empty() {
         return RawToken {
-            negated: negated,
+            negated: opening.negated,
             key: None,
             value: value,
         };
     }
-    let raw: String = chars[start..*index].iter().collect();
+    let raw: String = chars[opening.start..*index].iter().collect();
     RawToken {
-        negated: negated,
+        negated: opening.negated,
         key: None,
         value: raw,
     }
@@ -174,6 +182,12 @@ struct TextTerms {
     fts_negative: Vec<String>,
 }
 
+struct FieldBinding {
+    column: &'static str,
+    value: String,
+    negated: bool,
+}
+
 impl TextTerms {
     fn push_literal(&mut self, raw: String, negated: bool) {
         let clause = fts_quote(&raw);
@@ -186,28 +200,22 @@ impl TextTerms {
         self.fts_positive.push(clause);
     }
 
-    fn bind_field(
-        &mut self,
-        field: &mut Option<String>,
-        column: &str,
-        value: String,
-        negated: bool,
-    ) {
-        if value.trim().is_empty() {
+    fn bind_field(&mut self, field: &mut Option<String>, binding: FieldBinding) {
+        if binding.value.trim().is_empty() {
             return;
         }
-        let clause = format!("{column}:{}", fts_quote(&value));
-        if negated {
-            self.excludes.push(value);
+        let clause = format!("{}:{}", binding.column, fts_quote(&binding.value));
+        if binding.negated {
+            self.excludes.push(binding.value);
             self.fts_negative.push(clause);
             return;
         }
         if field.is_none() {
-            *field = Some(value);
+            *field = Some(binding.value);
             self.fts_positive.push(clause);
             return;
         }
-        self.includes.push(value);
+        self.includes.push(binding.value);
         self.fts_positive.push(clause);
     }
 }
@@ -326,21 +334,36 @@ impl QueryAccumulator {
 }
 
 fn handle_from(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
-    accumulator
-        .terms
-        .bind_field(&mut accumulator.from, "sender", value, negated);
+    accumulator.terms.bind_field(
+        &mut accumulator.from,
+        FieldBinding {
+            column: "sender",
+            value: value,
+            negated: negated,
+        },
+    );
 }
 
 fn handle_to(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
-    accumulator
-        .terms
-        .bind_field(&mut accumulator.to, "recipients", value, negated);
+    accumulator.terms.bind_field(
+        &mut accumulator.to,
+        FieldBinding {
+            column: "recipients",
+            value: value,
+            negated: negated,
+        },
+    );
 }
 
 fn handle_subject(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
-    accumulator
-        .terms
-        .bind_field(&mut accumulator.subject, "subject", value, negated);
+    accumulator.terms.bind_field(
+        &mut accumulator.subject,
+        FieldBinding {
+            column: "subject",
+            value: value,
+            negated: negated,
+        },
+    );
 }
 
 fn handle_label(accumulator: &mut QueryAccumulator, value: String, negated: bool) {

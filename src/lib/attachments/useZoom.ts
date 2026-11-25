@@ -18,15 +18,20 @@ type GestureEventLike = Event & { scale: number; clientX: number; clientY: numbe
 
 export type ZoomPreset = FitMode | number;
 
-function resolveZoomLevel(
-  view: { mode: ZoomMode; zoom: number },
-  content: Size | null,
-  viewport: Size | null,
-  fitCap: number,
-): number {
+function resolveZoomLevel({
+  view,
+  content,
+  viewport,
+  fitCap,
+}: {
+  view: { mode: ZoomMode; zoom: number };
+  content: Size | null;
+  viewport: Size | null;
+  fitCap: number;
+}): number {
   if (view.mode === 'custom') return view.zoom;
   if (!content || !viewport) return 1;
-  return fitZoom(view.mode, content, viewport, fitCap);
+  return fitZoom({ mode: view.mode, content: content, viewport: viewport, cap: fitCap });
 }
 
 export function useZoom({
@@ -45,7 +50,7 @@ export function useZoom({
     zoom: 1,
   });
   const [viewport, setViewport] = useState<Size | null>(null);
-  const zoom = resolveZoomLevel(view, content, viewport, fitCap);
+  const zoom = resolveZoomLevel({ view, content, viewport, fitCap });
   const latest = useRef<{ zoom: number; content: Size | null; viewport: Size | null }>({
     zoom: 1,
     content: null,
@@ -119,7 +124,12 @@ export function useZoom({
         return;
       }
       const { content: size, viewport: area, zoom: current } = latest.current;
-      applyZoom(preset, size && area ? fitZoom(preset, size, area, fitCap) : current);
+      applyZoom(
+        preset,
+        size && area
+          ? fitZoom({ mode: preset, content: size, viewport: area, cap: fitCap })
+          : current,
+      );
     },
     [applyZoom, fitCap],
   );

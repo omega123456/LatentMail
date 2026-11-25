@@ -1,3 +1,9 @@
+use latentmail_lib::ai::commands::{
+    SelectAiChatModelPayload, SelectAiEmbeddingModelPayload, SetAiBaseUrlPayload,
+    SetAiEnabledPayload,
+};
+use latentmail_lib::ipc::{AppServices, CommandPayload};
+use latentmail_lib::sync::SyncEngineDeps;
 use latentmail_lib::{
     ai::{commands, AiService},
     storage::{Account, AccountRepository, Storage},
@@ -34,12 +40,12 @@ fn harness() -> Harness {
     let storage = Storage::open(&database).unwrap();
     AccountRepository::upsert(&storage.connection().unwrap(), &account()).unwrap();
     let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine(250, 250, registry.clone()),
-        registry,
-        noop_event_sink(),
-    );
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -56,29 +62,35 @@ fn harness() -> Harness {
 async fn provider_commands_require_a_saved_api_root() {
     let harness = harness();
     let app = &harness.app;
-    commands::set_ai_enabled(app.handle().clone(), app.state(), "account".into(), true)
-        .await
-        .unwrap();
+    commands::set_ai_enabled(
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiEnabledPayload {
+            account_id: "account".into(),
+            enabled: true,
+        }),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
-        commands::test_ai_connection(app.state(), "account".into())
+        commands::test_ai_connection(AppServices::new(app.handle()), "account".into())
             .await
             .unwrap_err(),
         "Save an API root first"
     );
     assert_eq!(
-        commands::list_ai_models(app.state(), "account".into())
+        commands::list_ai_models(AppServices::new(app.handle()), "account".into())
             .await
             .unwrap_err(),
         "Save an API root first"
     );
     assert_eq!(
         commands::select_ai_embedding_model(
-            app.handle().clone(),
-            app.state(),
-            app.state(),
-            "account".into(),
-            "embedding".into(),
+            AppServices::new(app.handle()),
+            CommandPayload(SelectAiEmbeddingModelPayload {
+                account_id: "account".into(),
+                model: "embedding".into()
+            })
         )
         .await
         .unwrap_err(),
@@ -97,20 +109,25 @@ async fn provider_commands_surface_a_failing_model_catalogue() {
     let harness = harness();
     let app = &harness.app;
     commands::set_ai_base_url(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        format!("{}/v1", server.uri()),
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiBaseUrlPayload {
+            account_id: "account".into(),
+            base_url: format!("{}/v1", server.uri()),
+        }),
     )
     .await
     .unwrap();
 
-    assert!(commands::test_ai_connection(app.state(), "account".into())
-        .await
-        .is_err());
-    assert!(commands::list_ai_models(app.state(), "account".into())
-        .await
-        .is_err());
+    assert!(
+        commands::test_ai_connection(AppServices::new(app.handle()), "account".into())
+            .await
+            .is_err()
+    );
+    assert!(
+        commands::list_ai_models(AppServices::new(app.handle()), "account".into())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -124,20 +141,21 @@ async fn selecting_an_embedding_model_surfaces_a_failing_provider() {
     let harness = harness();
     let app = &harness.app;
     commands::set_ai_base_url(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        format!("{}/v1", server.uri()),
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiBaseUrlPayload {
+            account_id: "account".into(),
+            base_url: format!("{}/v1", server.uri()),
+        }),
     )
     .await
     .unwrap();
 
     assert!(commands::select_ai_embedding_model(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "embedding".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(SelectAiEmbeddingModelPayload {
+            account_id: "account".into(),
+            model: "embedding".into()
+        })
     )
     .await
     .is_err());
@@ -154,21 +172,22 @@ async fn selecting_an_embedding_model_rejects_a_missing_vector_from_the_provider
     let harness = harness();
     let app = &harness.app;
     commands::set_ai_base_url(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        format!("{}/v1", server.uri()),
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiBaseUrlPayload {
+            account_id: "account".into(),
+            base_url: format!("{}/v1", server.uri()),
+        }),
     )
     .await
     .unwrap();
 
     assert_eq!(
         commands::select_ai_embedding_model(
-            app.handle().clone(),
-            app.state(),
-            app.state(),
-            "account".into(),
-            "embedding".into(),
+            AppServices::new(app.handle()),
+            CommandPayload(SelectAiEmbeddingModelPayload {
+                account_id: "account".into(),
+                model: "embedding".into()
+            })
         )
         .await
         .unwrap_err(),
@@ -182,48 +201,54 @@ async fn ai_commands_surface_an_unreadable_database_instead_of_panicking() {
     let app = &harness.app;
     std::fs::write(&harness.database, b"this is not a database").unwrap();
 
-    assert!(commands::read_ai_configs(app.state()).await.is_err());
-    assert!(
-        commands::set_ai_enabled(app.handle().clone(), app.state(), "account".into(), true)
-            .await
-            .is_err()
-    );
+    assert!(commands::read_ai_configs(AppServices::new(app.handle()))
+        .await
+        .is_err());
+    assert!(commands::set_ai_enabled(
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiEnabledPayload {
+            account_id: "account".into(),
+            enabled: true
+        })
+    )
+    .await
+    .is_err());
     assert!(commands::set_ai_base_url(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        "http://127.0.0.1:1/v1".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(SetAiBaseUrlPayload {
+            account_id: "account".into(),
+            base_url: "http://127.0.0.1:1/v1".into()
+        })
     )
     .await
     .is_err());
     assert!(commands::select_ai_chat_model(
-        app.handle().clone(),
-        app.state(),
-        "account".into(),
-        Some("chat".into()),
-    )
-    .await
-    .is_err());
-    assert!(commands::read_ai_index_status(app.state()).await.is_err());
-    assert!(commands::start_ai_index(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(SelectAiChatModelPayload {
+            account_id: "account".into(),
+            model: Some("chat".into())
+        })
     )
     .await
     .is_err());
     assert!(
-        commands::cancel_ai_index(app.handle().clone(), app.state(), "account".into())
+        commands::read_ai_index_status(AppServices::new(app.handle()))
             .await
             .is_err()
     );
-    assert!(commands::rebuild_ai_index(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-    )
-    .await
-    .is_err());
+    assert!(
+        commands::start_ai_index(AppServices::new(app.handle()), "account".into())
+            .await
+            .is_err()
+    );
+    assert!(
+        commands::cancel_ai_index(AppServices::new(app.handle()), "account".into())
+            .await
+            .is_err()
+    );
+    assert!(
+        commands::rebuild_ai_index(AppServices::new(app.handle()), "account".into())
+            .await
+            .is_err()
+    );
 }

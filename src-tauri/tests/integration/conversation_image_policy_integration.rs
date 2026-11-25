@@ -1,10 +1,13 @@
+use crate::support::{account, app};
+use latentmail_lib::ipc::{AppServices, CommandPayload};
 use latentmail_lib::storage::{
     AccountRepository, ConversationEntryScope, HtmlPresence, LabelRepository, Message,
     MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey};
 use latentmail_lib::sync::commands::load_message_body;
+use latentmail_lib::sync::commands::LoadMessageBodyRequest;
 use latentmail_lib::sync::ImagePolicy;
-use crate::support::{account, app};
 use tauri::Manager;
 
 const REMOTE_IMAGE: &str = r#"<img src="https://tracker.example/pixel.png">"#;
@@ -63,8 +66,18 @@ fn seeded_storage(directory: &std::path::Path) -> Storage {
         )
         .unwrap();
         LabelRepository::ensure_placeholder(&connection, "account", label_id).unwrap();
-        MessageRepository::set_label_membership(&connection, "account", id, label_id, true)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: id,
+            },
+            LabelMembershipChange {
+                label_id: label_id,
+                present: true,
+            },
+        )
+        .unwrap();
     }
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     drop(connection);
@@ -80,12 +93,14 @@ async fn conversation_under(
     let mut messages = Vec::new();
     for message_id in ["m1", "m2", "m3"] {
         let message = load_message_body(
-            application.state(),
-            "account".into(),
-            message_id.into(),
-            policy.clone(),
-            Some(ConversationEntryScope::Mailbox {
-                mailbox_id: "SPAM".into(),
+            AppServices::new(application.handle()),
+            CommandPayload(LoadMessageBodyRequest {
+                account_id: "account".into(),
+                message_id: message_id.into(),
+                image_policy: policy.clone(),
+                entry_scope: Some(ConversationEntryScope::Mailbox {
+                    mailbox_id: "SPAM".into(),
+                }),
             }),
         )
         .await

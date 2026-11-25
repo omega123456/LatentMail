@@ -1,4 +1,4 @@
-use latentmail_lib::auth::{self, token_has_scope, UserInfo};
+use latentmail_lib::auth::{self, token_has_scope, ProfileUpdate, SaveAccountRequest, UserInfo};
 use latentmail_lib::avatars::profile::acquire_photo;
 use latentmail_lib::avatars::resolver::set_fake_download;
 use oauth2::{
@@ -81,7 +81,11 @@ async fn apply_profile_updates_an_existing_account_and_leaves_unset_fields_untou
         latentmail_lib::storage::Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let service = auth::AuthService::new(storage);
     let saved = service
-        .save_account("me@example.com".into(), "refresh".into(), None)
+        .save_account(SaveAccountRequest {
+            email: "me@example.com".into(),
+            refresh_token: "refresh".into(),
+            target: None,
+        })
         .await
         .unwrap();
     assert_eq!(saved.display_name, "me");
@@ -90,8 +94,10 @@ async fn apply_profile_updates_an_existing_account_and_leaves_unset_fields_untou
     let updated = service
         .apply_profile(
             &saved.id,
-            Some("Real Name".into()),
-            Some("https://example.com/a.png".into()),
+            ProfileUpdate {
+                display_name: Some("Real Name".into()),
+                avatar_url: Some("https://example.com/a.png".into()),
+            },
         )
         .await
         .unwrap()
@@ -103,7 +109,13 @@ async fn apply_profile_updates_an_existing_account_and_leaves_unset_fields_untou
     );
 
     let unchanged = service
-        .apply_profile(&saved.id, None, None)
+        .apply_profile(
+            &saved.id,
+            ProfileUpdate {
+                display_name: None,
+                avatar_url: None,
+            },
+        )
         .await
         .unwrap()
         .unwrap();
@@ -122,7 +134,13 @@ async fn apply_profile_on_an_unknown_account_returns_none_without_erroring() {
     let service = auth::AuthService::new(storage);
 
     let result = service
-        .apply_profile("unknown-account", Some("Name".into()), None)
+        .apply_profile(
+            "unknown-account",
+            ProfileUpdate {
+                display_name: Some("Name".into()),
+                avatar_url: None,
+            },
+        )
         .await
         .unwrap();
     assert!(result.is_none());

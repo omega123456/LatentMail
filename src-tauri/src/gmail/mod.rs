@@ -199,15 +199,23 @@ pub enum QuotaClass {
     Traversal,
 }
 
+struct BucketState {
+    tokens: f64,
+    refreshed_at: Instant,
+}
+
 struct Bucket {
-    state: Mutex<(f64, Instant)>,
+    state: Mutex<BucketState>,
     rate: f64,
     capacity: f64,
 }
 impl Bucket {
     fn new(rate: f64, capacity: f64) -> Self {
         Self {
-            state: Mutex::new((capacity, Instant::now())),
+            state: Mutex::new(BucketState {
+                tokens: capacity,
+                refreshed_at: Instant::now(),
+            }),
             rate: rate,
             capacity: capacity,
         }
@@ -225,13 +233,14 @@ impl Bucket {
     async fn try_take_or_wait(&self, cost: f64) -> Option<Duration> {
         let mut state = self.state.lock().await;
         let now = Instant::now();
-        state.0 = (state.0 + (now - state.1).as_secs_f64() * self.rate).min(self.capacity);
-        state.1 = now;
-        if state.0 >= cost {
-            state.0 -= cost;
+        state.tokens = (state.tokens + (now - state.refreshed_at).as_secs_f64() * self.rate)
+            .min(self.capacity);
+        state.refreshed_at = now;
+        if state.tokens >= cost {
+            state.tokens -= cost;
             return None;
         }
-        Some(Duration::from_secs_f64((cost - state.0) / self.rate))
+        Some(Duration::from_secs_f64((cost - state.tokens) / self.rate))
     }
 }
 
@@ -287,6 +296,67 @@ impl GmailRateLimiters {
     }
 }
 
+pub struct AccountClientConfig<'a> {
+    pub account_id: &'a str,
+    pub access_token: String,
+    pub base_url: String,
+}
+
+pub struct MessageListQuery<'a> {
+    pub label_ids: &'a [String],
+    pub query_filter: Option<&'a str>,
+    pub page_token: Option<&'a str>,
+    pub options: ListOptions,
+}
+
+pub struct DraftContent<'a> {
+    pub raw: &'a [u8],
+    pub thread_id: Option<&'a str>,
+}
+
+pub struct LabelModification<'a> {
+    pub add_label_ids: &'a [String],
+    pub remove_label_ids: &'a [String],
+}
+
+struct GetRequest<'a> {
+    path: &'a str,
+    query: &'a [(String, String)],
+    cost: u32,
+    history: bool,
+}
+
+pub(super) struct SendRequest<'a, B: ?Sized> {
+    pub(super) method: reqwest::Method,
+    pub(super) path: &'a str,
+    pub(super) body: &'a B,
+    pub(super) cost: u32,
+    pub(super) history: bool,
+}
+
+struct ApiRequest<'a, B: ?Sized> {
+    method: reqwest::Method,
+    path: &'a str,
+    query: Vec<(&'a str, &'a str)>,
+    body: Option<&'a B>,
+    history: bool,
+}
+
+struct DraftUploadRequest<'a> {
+    method: reqwest::Method,
+    path: &'a str,
+    raw: &'a [u8],
+    thread_id: Option<&'a str>,
+    cost: u32,
+}
+
+struct HttpFailure<'a> {
+    method: &'a reqwest::Method,
+    path: &'a str,
+    status: StatusCode,
+    body: &'a str,
+}
+
 #[derive(Clone)]
 pub struct GmailClient {
     http: Client,
@@ -306,13 +376,11 @@ impl GmailClient {
         }
     }
     pub async fn for_account(
-        account_id: &str,
-        access_token: impl Into<String>,
-        base_url: impl Into<String>,
+        config: AccountClientConfig<'_>,
         limiters: &GmailRateLimiters,
     ) -> Self {
-        let mut client = Self::with_base_url(access_token, base_url);
-        client.buckets = limiters.for_account(account_id).await;
+        let mut client = Self::with_base_url(config.access_token, config.base_url);
+        client.buckets = limiters.for_account(config.account_id).await;
         client
     }
 
@@ -329,7 +397,12 @@ impl GmailClient {
     }
     pub async fn profile(&self) -> Result<Profile, GmailError> {
         let raw: RawProfile = self
-            .get("/users/me/profile", &[], PROFILE_COST, false)
+            .get(GetRequest {
+                path: "/users/me/profile",
+                query: &[],
+                cost: PROFILE_COST,
+                history: false,
+            })
             .await?;
         Ok(Profile {
             email_address: raw.email_address,
@@ -340,56 +413,69 @@ impl GmailClient {
     }
     pub async fn labels(&self) -> Result<Vec<GmailLabel>, GmailError> {
         let raw: RawLabels = self
-            .get("/users/me/labels", &[], LABELS_LIST_COST, false)
+            .get(GetRequest {
+                path: "/users/me/labels",
+                query: &[],
+                cost: LABELS_LIST_COST,
+                history: false,
+            })
             .await?;
-        Ok(raw
-            .labels
-            .into_iter()
-            .map(labels::map_label)
-            .collect())
+        Ok(raw.labels.into_iter().map(labels::map_label).collect())
     }
     pub async fn list_messages_page(
         &self,
         label_ids: &[String],
         page_token: Option<&str>,
     ) -> Result<Page<MessageRef>, GmailError> {
-        self.list_messages_page_matching(label_ids, None, page_token, ListOptions::default())
-            .await
+        self.list_messages_page_matching(MessageListQuery {
+            label_ids: label_ids,
+            query_filter: None,
+            page_token: page_token,
+            options: ListOptions::default(),
+        })
+        .await
     }
     pub async fn list_all_messages(
         &self,
         label_ids: &[String],
     ) -> Result<Vec<MessageRef>, GmailError> {
-        self.list_all_messages_matching(label_ids, None, ListOptions::default())
-            .await
+        self.list_all_messages_matching(MessageListQuery {
+            label_ids: label_ids,
+            query_filter: None,
+            page_token: None,
+            options: ListOptions::default(),
+        })
+        .await
     }
 
     pub async fn list_messages_page_matching(
         &self,
-        label_ids: &[String],
-        query_filter: Option<&str>,
-        page_token: Option<&str>,
-        options: ListOptions,
+        request: MessageListQuery<'_>,
     ) -> Result<Page<MessageRef>, GmailError> {
         let mut query = vec![("fields".to_owned(), LIST_FIELDS.to_owned())];
-        for label in label_ids {
+        for label in request.label_ids {
             query.push(("labelIds".to_owned(), label.clone()));
         }
-        if let Some(filter) = query_filter {
+        if let Some(filter) = request.query_filter {
             query.push(("q".to_owned(), filter.to_owned()));
         }
-        if let Some(token) = page_token {
+        if let Some(token) = request.page_token {
             query.push(("pageToken".to_owned(), token.into()));
         }
-        if options.include_spam_and_trash {
+        if request.options.include_spam_and_trash {
             query.push(("includeSpamTrash".to_owned(), "true".to_owned()));
         }
         query.push((
             "maxResults".to_owned(),
-            options.page_size.min(MAX_PAGE_SIZE).to_string(),
+            request.options.page_size.min(MAX_PAGE_SIZE).to_string(),
         ));
         let raw: RawMessageList = self
-            .get("/users/me/messages", &query, MESSAGES_LIST_COST, false)
+            .get(GetRequest {
+                path: "/users/me/messages",
+                query: &query,
+                cost: MESSAGES_LIST_COST,
+                history: false,
+            })
             .await?;
         Ok(Page {
             items: raw
@@ -406,15 +492,18 @@ impl GmailClient {
     }
     pub async fn list_all_messages_matching(
         &self,
-        label_ids: &[String],
-        query_filter: Option<&str>,
-        options: ListOptions,
+        request: MessageListQuery<'_>,
     ) -> Result<Vec<MessageRef>, GmailError> {
         let mut all = Vec::new();
-        let mut token = None;
+        let mut token = request.page_token.map(str::to_owned);
         loop {
             let page = self
-                .list_messages_page_matching(label_ids, query_filter, token.as_deref(), options)
+                .list_messages_page_matching(MessageListQuery {
+                    label_ids: request.label_ids,
+                    query_filter: request.query_filter,
+                    page_token: token.as_deref(),
+                    options: request.options,
+                })
                 .await?;
             all.extend(page.items);
             if page.next_page_token.is_none() {
@@ -425,26 +514,26 @@ impl GmailClient {
     }
     pub async fn message(&self, id: &str) -> Result<GmailMessage, GmailError> {
         let result: Result<RawMessage, GmailError> = self
-            .get(
-                &format!("/users/me/messages/{id}"),
-                &[("fields".to_owned(), MESSAGE_FIELDS.into())],
-                MESSAGES_GET_COST,
-                false,
-            )
+            .get(GetRequest {
+                path: &format!("/users/me/messages/{id}"),
+                query: &[("fields".to_owned(), MESSAGE_FIELDS.into())],
+                cost: MESSAGES_GET_COST,
+                history: false,
+            })
             .await;
         match result {
             Ok(raw) => Ok(map_message(raw)),
             Err(GmailError::ResponseTooLarge) => {
                 let raw: RawMessage = self
-                    .get(
-                        &format!("/users/me/messages/{id}"),
-                        &[
+                    .get(GetRequest {
+                        path: &format!("/users/me/messages/{id}"),
+                        query: &[
                             ("format".to_owned(), "metadata".to_owned()),
                             ("fields".to_owned(), MESSAGE_METADATA_FIELDS.to_owned()),
                         ],
-                        MESSAGES_GET_COST,
-                        false,
-                    )
+                        cost: MESSAGES_GET_COST,
+                        history: false,
+                    })
                     .await?;
                 let mut message = map_message(raw);
                 message.oversize = true;
@@ -464,38 +553,37 @@ impl GmailClient {
         raw: &[u8],
         thread_id: Option<&str>,
     ) -> Result<String, GmailError> {
-        self.upload_draft(
-            reqwest::Method::POST,
-            "/users/me/drafts",
-            raw,
-            thread_id,
-            DRAFTS_CREATE_COST,
-        )
+        self.upload_draft(DraftUploadRequest {
+            method: reqwest::Method::POST,
+            path: "/users/me/drafts",
+            raw: raw,
+            thread_id: thread_id,
+            cost: DRAFTS_CREATE_COST,
+        })
         .await
     }
     pub async fn update_draft(
         &self,
         draft_id: &str,
-        raw: &[u8],
-        thread_id: Option<&str>,
+        content: DraftContent<'_>,
     ) -> Result<String, GmailError> {
-        self.upload_draft(
-            reqwest::Method::PUT,
-            &format!("/users/me/drafts/{draft_id}"),
-            raw,
-            thread_id,
-            DRAFTS_UPDATE_COST,
-        )
+        self.upload_draft(DraftUploadRequest {
+            method: reqwest::Method::PUT,
+            path: &format!("/users/me/drafts/{draft_id}"),
+            raw: content.raw,
+            thread_id: content.thread_id,
+            cost: DRAFTS_UPDATE_COST,
+        })
         .await
     }
     pub async fn draft(&self, draft_id: &str) -> Result<GmailDraft, GmailError> {
         let raw: RawDraft = self
-            .get(
-                &format!("/users/me/drafts/{draft_id}"),
-                &[("format".into(), "full".into())],
-                DRAFTS_GET_COST,
-                false,
-            )
+            .get(GetRequest {
+                path: &format!("/users/me/drafts/{draft_id}"),
+                query: &[("format".into(), "full".into())],
+                cost: DRAFTS_GET_COST,
+                history: false,
+            })
             .await?;
         Ok(GmailDraft {
             id: raw.id,
@@ -504,13 +592,13 @@ impl GmailClient {
     }
     pub async fn send_draft(&self, draft_id: &str) -> Result<String, GmailError> {
         let raw: RawId = self
-            .send(
-                reqwest::Method::POST,
-                "/users/me/drafts/send",
-                &SendDraftRequest { id: draft_id },
-                MESSAGES_SEND_COST,
-                false,
-            )
+            .send(SendRequest {
+                method: reqwest::Method::POST,
+                path: "/users/me/drafts/send",
+                body: &SendDraftRequest { id: draft_id },
+                cost: MESSAGES_SEND_COST,
+                history: false,
+            })
             .await?;
         Ok(raw.id)
     }
@@ -520,13 +608,16 @@ impl GmailClient {
         attachment_id: &str,
     ) -> Result<Vec<u8>, GmailError> {
         self.acquire(ATTACHMENTS_GET_COST).await;
+        let path = format!("/users/me/messages/{message_id}/attachments/{attachment_id}");
         let raw: RawAttachment = self
             .request_capped(
-                reqwest::Method::GET,
-                &format!("/users/me/messages/{message_id}/attachments/{attachment_id}"),
-                std::iter::empty(),
-                Option::<&()>::None,
-                false,
+                ApiRequest {
+                    method: reqwest::Method::GET,
+                    path: &path,
+                    query: Vec::new(),
+                    body: Option::<&()>::None,
+                    history: false,
+                },
                 MAX_ATTACHMENT_RESPONSE_BYTES,
             )
             .await?;
@@ -534,13 +625,16 @@ impl GmailClient {
     }
     pub async fn raw_message(&self, id: &str) -> Result<Vec<u8>, GmailError> {
         self.acquire(MESSAGES_GET_COST).await;
+        let path = format!("/users/me/messages/{id}");
         let source: RawSource = self
             .request_capped(
-                reqwest::Method::GET,
-                &format!("/users/me/messages/{id}"),
-                [("format", "raw")],
-                Option::<&()>::None,
-                false,
+                ApiRequest {
+                    method: reqwest::Method::GET,
+                    path: &path,
+                    query: vec![("format", "raw")],
+                    body: Option::<&()>::None,
+                    history: false,
+                },
                 MAX_RAW_MESSAGE_RESPONSE_BYTES,
             )
             .await?;
@@ -549,41 +643,39 @@ impl GmailClient {
     pub async fn modify_message(
         &self,
         id: &str,
-        add_label_ids: &[String],
-        remove_label_ids: &[String],
+        labels: LabelModification<'_>,
     ) -> Result<GmailMessage, GmailError> {
         let raw: RawMessage = self
-            .send(
-                reqwest::Method::POST,
-                &format!("/users/me/messages/{id}/modify"),
-                &ModifyRequest {
-                    add_label_ids,
-                    remove_label_ids,
+            .send(SendRequest {
+                method: reqwest::Method::POST,
+                path: &format!("/users/me/messages/{id}/modify"),
+                body: &ModifyRequest {
+                    add_label_ids: labels.add_label_ids,
+                    remove_label_ids: labels.remove_label_ids,
                 },
-                MESSAGES_MODIFY_COST,
-                false,
-            )
+                cost: MESSAGES_MODIFY_COST,
+                history: false,
+            })
             .await?;
         Ok(map_message(raw))
     }
     pub async fn batch_modify(
         &self,
         ids: &[String],
-        add_label_ids: &[String],
-        remove_label_ids: &[String],
+        labels: LabelModification<'_>,
     ) -> Result<(), GmailError> {
         let _: serde_json::Value = self
-            .send(
-                reqwest::Method::POST,
-                "/users/me/messages/batchModify",
-                &BatchModifyRequest {
-                    ids,
-                    add_label_ids,
-                    remove_label_ids,
+            .send(SendRequest {
+                method: reqwest::Method::POST,
+                path: "/users/me/messages/batchModify",
+                body: &BatchModifyRequest {
+                    ids: ids,
+                    add_label_ids: labels.add_label_ids,
+                    remove_label_ids: labels.remove_label_ids,
                 },
-                MESSAGES_BATCH_MODIFY_COST,
-                false,
-            )
+                cost: MESSAGES_BATCH_MODIFY_COST,
+                history: false,
+            })
             .await?;
         Ok(())
     }
@@ -600,7 +692,12 @@ impl GmailClient {
                 query.push(("pageToken".to_owned(), token.clone()));
             }
             let raw: RawDraftList = self
-                .get("/users/me/drafts", &query, DRAFTS_LIST_COST, false)
+                .get(GetRequest {
+                    path: "/users/me/drafts",
+                    query: &query,
+                    cost: DRAFTS_LIST_COST,
+                    history: false,
+                })
                 .await?;
             for draft in raw.drafts.unwrap_or_default() {
                 mapping.insert(draft.message.id, draft.id);
@@ -621,7 +718,12 @@ impl GmailClient {
             query.push(("pageToken".to_owned(), token.to_owned()));
         }
         let raw: RawHistory = self
-            .get("/users/me/history", &query, HISTORY_LIST_COST, true)
+            .get(GetRequest {
+                path: "/users/me/history",
+                query: &query,
+                cost: HISTORY_LIST_COST,
+                history: true,
+            })
             .await?;
         Ok(HistoryPage {
             history_id: number(&raw.history_id),
@@ -634,75 +736,56 @@ impl GmailClient {
             next_page_token: raw.next_page_token,
         })
     }
-    async fn get<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        query: &[(String, String)],
-        cost: u32,
-        history: bool,
-    ) -> Result<T, GmailError> {
-        self.acquire(cost).await;
-        self.request(
-            reqwest::Method::GET,
-            path,
-            query
+    async fn get<T: DeserializeOwned>(&self, spec: GetRequest<'_>) -> Result<T, GmailError> {
+        self.acquire(spec.cost).await;
+        self.request(ApiRequest {
+            method: reqwest::Method::GET,
+            path: spec.path,
+            query: spec
+                .query
                 .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-            Option::<&()>::None,
-            history,
-        )
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect(),
+            body: Option::<&()>::None,
+            history: spec.history,
+        })
         .await
     }
     async fn send<T: DeserializeOwned, B: Serialize + ?Sized>(
         &self,
-        method: reqwest::Method,
-        path: &str,
-        body: &B,
-        cost: u32,
-        history: bool,
+        spec: SendRequest<'_, B>,
     ) -> Result<T, GmailError> {
-        self.acquire(cost).await;
-        self.request(method, path, std::iter::empty(), Some(body), history)
-            .await
+        self.acquire(spec.cost).await;
+        self.request(ApiRequest {
+            method: spec.method,
+            path: spec.path,
+            query: Vec::new(),
+            body: Some(spec.body),
+            history: spec.history,
+        })
+        .await
     }
-    async fn request<
-        'a,
-        T: DeserializeOwned,
-        B: Serialize + ?Sized,
-        I: IntoIterator<Item = (&'a str, &'a str)>,
-    >(
+    async fn request<T: DeserializeOwned, B: Serialize + ?Sized>(
         &self,
-        method: reqwest::Method,
-        path: &str,
-        query: I,
-        body: Option<&B>,
-        history: bool,
+        spec: ApiRequest<'_, B>,
     ) -> Result<T, GmailError> {
-        self.request_capped(method, path, query, body, history, MAX_GMAIL_RESPONSE_BYTES)
-            .await
+        self.request_capped(spec, MAX_GMAIL_RESPONSE_BYTES).await
     }
-    async fn request_capped<
-        'a,
-        T: DeserializeOwned,
-        B: Serialize + ?Sized,
-        I: IntoIterator<Item = (&'a str, &'a str)>,
-    >(
+    async fn request_capped<T: DeserializeOwned, B: Serialize + ?Sized>(
         &self,
-        method: reqwest::Method,
-        path: &str,
-        query: I,
-        body: Option<&B>,
-        history: bool,
+        spec: ApiRequest<'_, B>,
         max_bytes: usize,
     ) -> Result<T, GmailError> {
-        let query = query.into_iter().collect::<Vec<_>>();
         for attempt in 0..MAX_REQUEST_ATTEMPTS {
             let mut request = self
                 .http
-                .request(method.clone(), format!("{}{}", self.base_url, path))
+                .request(
+                    spec.method.clone(),
+                    format!("{}{}", self.base_url, spec.path),
+                )
                 .bearer_auth(&self.access_token)
-                .query(&query);
-            if let Some(body) = body {
+                .query(&spec.query);
+            if let Some(body) = spec.body {
                 request = request.json(body);
             }
             match request.send().await {
@@ -719,7 +802,7 @@ impl GmailClient {
                 }
                 Ok(response) => {
                     let status = response.status();
-                    if history && status == StatusCode::NOT_FOUND {
+                    if spec.history && status == StatusCode::NOT_FOUND {
                         return Err(GmailError::HistoryExpired);
                     }
                     let can_retry = crate::is_retryable_status(status.as_u16())
@@ -730,7 +813,12 @@ impl GmailClient {
                     }
 
                     let body = response.text().await.unwrap_or_default();
-                    log_http_failure(&method, path, status, &body);
+                    log_http_failure(HttpFailure {
+                        method: &spec.method,
+                        path: spec.path,
+                        status: status,
+                        body: &body,
+                    });
                     return Err(GmailError::Http(status.as_u16()));
                 }
                 Err(error)
@@ -744,21 +832,17 @@ impl GmailClient {
         }
         unreachable!("retry loop returns")
     }
-    async fn upload_draft(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        raw: &[u8],
-        thread_id: Option<&str>,
-        cost: u32,
-    ) -> Result<String, GmailError> {
-        self.acquire(cost).await;
+    async fn upload_draft(&self, spec: DraftUploadRequest<'_>) -> Result<String, GmailError> {
+        self.acquire(spec.cost).await;
 
         let boundary = crate::compose::drafts::generate_id("latentmail-part");
         let metadata = serde_json::to_vec(&DraftUpload {
-            message: DraftUploadMessage { thread_id },
+            message: DraftUploadMessage {
+                thread_id: spec.thread_id,
+            },
         })?;
-        let mut body = Vec::with_capacity(raw.len() + metadata.len() + MULTIPART_FRAMING_BYTES);
+        let mut body =
+            Vec::with_capacity(spec.raw.len() + metadata.len() + MULTIPART_FRAMING_BYTES);
         body.extend_from_slice(
             format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n")
                 .as_bytes(),
@@ -767,11 +851,14 @@ impl GmailClient {
         body.extend_from_slice(
             format!("\r\n--{boundary}\r\nContent-Type: message/rfc822\r\n\r\n").as_bytes(),
         );
-        body.extend_from_slice(raw);
+        body.extend_from_slice(spec.raw);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         let request = self
             .http
-            .request(method, format!("{}{}", upload_base(&self.base_url), path))
+            .request(
+                spec.method,
+                format!("{}{}", upload_base(&self.base_url), spec.path),
+            )
             .bearer_auth(&self.access_token)
             .query(&[("uploadType", "multipart")])
             .header(
@@ -784,7 +871,8 @@ impl GmailClient {
             let status = response.status();
             tracing::error!(
                 target: "gmail",
-                "draft upload {path} failed: {status} {}",
+                "draft upload {} failed: {status} {}",
+                spec.path,
                 response.text().await.unwrap_or_default()
             );
             return Err(GmailError::Http(status.as_u16()));
@@ -801,12 +889,26 @@ fn response_json_bytes(raw: &[u8]) -> &[u8] {
     raw
 }
 
-fn log_http_failure(method: &reqwest::Method, path: &str, status: StatusCode, body: &str) {
-    if status == StatusCode::NOT_FOUND {
-        tracing::debug!(target: "gmail", "{method} {path}: {status} {body}");
+fn log_http_failure(failure: HttpFailure<'_>) {
+    if failure.status == StatusCode::NOT_FOUND {
+        tracing::debug!(
+            target: "gmail",
+            "{} {}: {} {}",
+            failure.method,
+            failure.path,
+            failure.status,
+            failure.body
+        );
         return;
     }
-    tracing::error!(target: "gmail", "{method} {path} failed: {status} {body}");
+    tracing::error!(
+        target: "gmail",
+        "{} {} failed: {} {}",
+        failure.method,
+        failure.path,
+        failure.status,
+        failure.body
+    );
 }
 
 fn upload_base(base: &str) -> String {

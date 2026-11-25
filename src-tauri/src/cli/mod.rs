@@ -62,17 +62,33 @@ pub async fn apply(command: Command, queue: &Arc<QueueEngine>) -> Response {
     }
 }
 
-pub fn run_client(args: &[String]) -> Option<(String, i32)> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientOutcome {
+    pub message: String,
+    pub exit_code: i32,
+}
+
+pub fn run_client(args: &[String]) -> Option<ClientOutcome> {
     let command = parse(args)?;
     if command == Command::List {
-        return Some((usage(), 0));
+        return Some(ClientOutcome {
+            message: usage(),
+            exit_code: 0,
+        });
     }
     Some(match send(&socket_path(), command) {
-        Ok(response) => (response.message, i32::from(!response.ok)),
-        Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-            ("Error: no response from LatentMail (timeout).".into(), 1)
-        }
-        Err(_) => ("LatentMail is not running.".into(), 1),
+        Ok(response) => ClientOutcome {
+            message: response.message,
+            exit_code: i32::from(!response.ok),
+        },
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => ClientOutcome {
+            message: "Error: no response from LatentMail (timeout).".into(),
+            exit_code: 1,
+        },
+        Err(_) => ClientOutcome {
+            message: "LatentMail is not running.".into(),
+            exit_code: 1,
+        },
     })
 }
 

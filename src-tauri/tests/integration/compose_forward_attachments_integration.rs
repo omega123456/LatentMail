@@ -1,3 +1,6 @@
+use latentmail_lib::ipc::{AppServices, CommandPayload};
+use latentmail_lib::storage::MessageKey;
+use latentmail_lib::sync::commands::ReplyContextRequest;
 use latentmail_lib::{
     storage::{
         Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, Message,
@@ -51,8 +54,10 @@ async fn forward_reply_context_returns_persisted_attachment_metadata_without_con
     MessageRepository::write_full_state(&connection, &original_message()).unwrap();
     AttachmentRepository::replace_for_message(
         &connection,
-        "account",
-        "original",
+        MessageKey {
+            account_id: "account",
+            message_id: "original",
+        },
         &[Attachment {
             attachment_id: "att-1".into(),
             filename: "report.pdf".into(),
@@ -70,12 +75,14 @@ async fn forward_reply_context_returns_persisted_attachment_metadata_without_con
     app.manage(storage);
 
     let context = reply_context(
-        app.state(),
-        "account".into(),
-        "original".into(),
-        "me@example.com".into(),
-        false,
-        true,
+        AppServices::new(app.handle()),
+        CommandPayload(ReplyContextRequest {
+            account_id: "account".into(),
+            message_id: "original".into(),
+            account_email: "me@example.com".into(),
+            reply_all: false,
+            forward: true,
+        }),
     )
     .await
     .unwrap();

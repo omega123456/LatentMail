@@ -43,7 +43,14 @@ impl Keychain {
 }
 
 #[cfg(feature = "test-utils")]
-type FakeSecrets = HashMap<(&'static str, String), String>;
+#[derive(Hash, Eq, PartialEq)]
+struct KeychainKey {
+    service: &'static str,
+    account_id: String,
+}
+
+#[cfg(feature = "test-utils")]
+type FakeSecrets = HashMap<KeychainKey, String>;
 
 #[cfg(feature = "test-utils")]
 fn fake_secrets() -> Result<std::sync::MutexGuard<'static, FakeSecrets>, String> {
@@ -56,8 +63,11 @@ fn fake_secrets() -> Result<std::sync::MutexGuard<'static, FakeSecrets>, String>
 
 #[cfg(feature = "test-utils")]
 impl Keychain {
-    fn key(&self, account_id: &str) -> (&'static str, String) {
-        (self.service, account_id.to_owned())
+    fn key(&self, account_id: &str) -> KeychainKey {
+        KeychainKey {
+            service: self.service,
+            account_id: account_id.to_owned(),
+        }
     }
 
     pub fn save(&self, account_id: &str, secret: &str) -> Result<(), String> {

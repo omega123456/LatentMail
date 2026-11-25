@@ -23,12 +23,12 @@ export async function saveMessageAs(
 ) {
   const destination = await invoke('plugin:dialog|save', {
     options: {
-      defaultPath: messageExportFilename(
-        target.subject,
-        target.sentAt,
-        target.sender,
-        exportFormat,
-      ),
+      defaultPath: messageExportFilename({
+        subject: target.subject,
+        sentAt: target.sentAt,
+        sender: target.sender,
+        extension: exportFormat,
+      }),
       filters: [EXPORT_FILTERS[exportFormat]],
     },
   });

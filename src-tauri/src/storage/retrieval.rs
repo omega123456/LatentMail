@@ -47,6 +47,27 @@ pub struct PassageSource {
     pub is_unread: bool,
 }
 
+pub struct LexicalQuery<'a> {
+    pub account_id: &'a str,
+    pub question: &'a str,
+    pub limit: i64,
+    pub filters: &'a RetrievalFilters,
+}
+
+pub struct RecencyQuery<'a> {
+    pub account_id: &'a str,
+    pub limit: i64,
+    pub filters: &'a RetrievalFilters,
+    pub ascending: bool,
+}
+
+pub struct CandidateQuery<'a> {
+    pub account_id: &'a str,
+    pub vector: &'a [f32],
+    pub limit: i64,
+    pub filters: &'a RetrievalFilters,
+}
+
 pub struct RetrievalRepository;
 
 const CANDIDATE_SQL: &str = "SELECT e.message_seq,e.chunk_index,v.distance,m.sent_at FROM {table} v CROSS JOIN message_embeddings e ON e.seq=v.rowid CROSS JOIN messages m ON m.seq=e.message_seq WHERE v.embedding MATCH ?1 AND k=?2 AND e.account_id=?3";
@@ -136,36 +157,16 @@ impl RetrievalRepository {
 
     pub fn lexical_relevance(
         connection: &Connection,
-        account_id: &str,
-        question: &str,
-        limit: i64,
-        filters: &RetrievalFilters,
+        query: &LexicalQuery<'_>,
     ) -> Result<Vec<i64>> {
-        Self::lexical(
-            connection,
-            Self::LEXICAL_RELEVANCE_SQL,
-            account_id,
-            question,
-            limit,
-            filters,
-        )
+        Self::lexical(connection, Self::LEXICAL_RELEVANCE_SQL, query)
     }
 
     pub fn lexical_chronological(
         connection: &Connection,
-        account_id: &str,
-        question: &str,
-        limit: i64,
-        filters: &RetrievalFilters,
+        query: &LexicalQuery<'_>,
     ) -> Result<Vec<i64>> {
-        Self::lexical(
-            connection,
-            Self::LEXICAL_CHRONOLOGICAL_SQL,
-            account_id,
-            question,
-            limit,
-            filters,
-        )
+        Self::lexical(connection, Self::LEXICAL_CHRONOLOGICAL_SQL, query)
     }
 
     fn recency_sql(ascending: bool) -> &'static str {
@@ -175,28 +176,22 @@ impl RetrievalRepository {
         Self::RECENCY_DESCENDING_SQL
     }
 
-    pub fn recency(
-        connection: &Connection,
-        account_id: &str,
-        limit: i64,
-        filters: &RetrievalFilters,
-        ascending: bool,
-    ) -> Result<Vec<i64>> {
-        let sql = Self::recency_sql(ascending);
+    pub fn recency(connection: &Connection, query: &RecencyQuery<'_>) -> Result<Vec<i64>> {
+        let sql = Self::recency_sql(query.ascending);
         let mut statement = connection.prepare_cached(sql)?;
         let sequences = statement
             .query_map(
                 params![
-                    account_id,
-                    filters.date_from,
-                    filters.date_to,
-                    filters.sender,
-                    filters.recipient,
-                    filters.folder,
-                    filters.has_attachment,
-                    filters.is_read.map(|read| !read),
-                    filters.is_starred,
-                    limit,
+                    query.account_id,
+                    query.filters.date_from,
+                    query.filters.date_to,
+                    query.filters.sender,
+                    query.filters.recipient,
+                    query.filters.folder,
+                    query.filters.has_attachment,
+                    query.filters.is_read.map(|read| !read),
+                    query.filters.is_starred,
+                    query.limit,
                 ],
                 |row| row.get(0),
             )?
@@ -204,15 +199,8 @@ impl RetrievalRepository {
         sequences
     }
 
-    fn lexical(
-        connection: &Connection,
-        sql: &str,
-        account_id: &str,
-        question: &str,
-        limit: i64,
-        filters: &RetrievalFilters,
-    ) -> Result<Vec<i64>> {
-        let Some(expression) = Self::match_expression(question) else {
+    fn lexical(connection: &Connection, sql: &str, query: &LexicalQuery<'_>) -> Result<Vec<i64>> {
+        let Some(expression) = Self::match_expression(query.question) else {
             return Ok(Vec::new());
         };
         let mut statement = connection.prepare_cached(sql)?;
@@ -220,16 +208,16 @@ impl RetrievalRepository {
             .query_map(
                 params![
                     expression,
-                    account_id,
-                    filters.date_from,
-                    filters.date_to,
-                    filters.sender,
-                    filters.recipient,
-                    filters.folder,
-                    filters.has_attachment,
-                    filters.is_read.map(|read| !read),
-                    filters.is_starred,
-                    limit,
+                    query.account_id,
+                    query.filters.date_from,
+                    query.filters.date_to,
+                    query.filters.sender,
+                    query.filters.recipient,
+                    query.filters.folder,
+                    query.filters.has_attachment,
+                    query.filters.is_read.map(|read| !read),
+                    query.filters.is_starred,
+                    query.limit,
                 ],
                 |row| row.get(0),
             )?
@@ -247,19 +235,18 @@ impl RetrievalRepository {
 
     pub fn candidates(
         connection: &Connection,
-        account_id: &str,
-        vector: &[f32],
-        limit: i64,
-        filters: &RetrievalFilters,
+        query: &CandidateQuery<'_>,
     ) -> Result<Vec<CandidatePassage>> {
         let table = EmbeddingRepository::table_name(EmbeddingRepository::account_seq(
-            connection, account_id,
+            connection,
+            query.account_id,
         )?);
-        let bytes: Vec<u8> = vector
+        let bytes: Vec<u8> = query
+            .vector
             .iter()
             .flat_map(|value| value.to_le_bytes())
             .collect();
-        let filtered = !filters.is_empty();
+        let filtered = !query.filters.is_empty();
         let mut statement = connection.prepare_cached(&Self::candidate_sql(&table, filtered))?;
         let read = |row: &rusqlite::Row<'_>| {
             Ok(CandidatePassage {
@@ -274,23 +261,23 @@ impl RetrievalRepository {
                 .query_map(
                     params![
                         bytes,
-                        limit,
-                        account_id,
-                        filters.date_from,
-                        filters.date_to,
-                        filters.sender,
-                        filters.recipient,
-                        filters.folder,
-                        filters.has_attachment,
-                        filters.is_read.map(|read| !read),
-                        filters.is_starred,
+                        query.limit,
+                        query.account_id,
+                        query.filters.date_from,
+                        query.filters.date_to,
+                        query.filters.sender,
+                        query.filters.recipient,
+                        query.filters.folder,
+                        query.filters.has_attachment,
+                        query.filters.is_read.map(|read| !read),
+                        query.filters.is_starred,
                     ],
                     read,
                 )?
                 .collect();
         }
         let rows = statement
-            .query_map(params![bytes, limit, account_id], read)?
+            .query_map(params![bytes, query.limit, query.account_id], read)?
             .collect();
         rows
     }

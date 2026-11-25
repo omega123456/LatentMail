@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import { toggleInSet } from '@/lib/collections';
+import {
+  emptyMultiSelect,
+  pruneMultiSelect,
+  selectAllInMultiSelect,
+  selectRangeInMultiSelect,
+  toggleInMultiSelect,
+} from './multi-select/transitions';
 
 type MultiSelectState = {
   selectedIds: Set<string>;
@@ -12,38 +18,15 @@ type MultiSelectState = {
 };
 
 export const useMultiSelectStore = create<MultiSelectState>((set, get) => ({
-  selectedIds: new Set(),
-  anchorId: null,
-  toggle: (id) =>
-    set((state) => ({
-      selectedIds: toggleInSet(state.selectedIds, id),
-      anchorId: id,
-    })),
-  selectRange: (orderedIds, targetId) => {
-    const anchor = get().anchorId ?? targetId;
-    const anchorIndex = orderedIds.indexOf(anchor);
-    const targetIndex = orderedIds.indexOf(targetId);
-    if (anchorIndex === -1 || targetIndex === -1) {
-      set({ selectedIds: new Set([targetId]), anchorId: targetId });
-      return;
-    }
-    const [start, end] =
-      anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
-    set({ selectedIds: new Set(orderedIds.slice(start, end + 1)), anchorId: anchor });
-  },
-  selectAll: (orderedIds) =>
-    set({ selectedIds: new Set(orderedIds), anchorId: orderedIds[0] ?? null }),
-  clear: () => set({ selectedIds: new Set(), anchorId: null }),
+  ...emptyMultiSelect(),
+  toggle: (id) => set((state) => toggleInMultiSelect(state, id)),
+  selectRange: (orderedIds, targetId) =>
+    set((state) => selectRangeInMultiSelect(state, { orderedIds, targetId })),
+  selectAll: (orderedIds) => set(selectAllInMultiSelect(orderedIds)),
+  clear: () => set(emptyMultiSelect()),
   prune: (loadedIds) => {
-    const state = get();
-    const loaded = new Set(loadedIds);
-    const stillSelected = [...state.selectedIds].filter((id) => loaded.has(id));
-    const anchorStillValid = state.anchorId === null || loaded.has(state.anchorId);
-    if (stillSelected.length === state.selectedIds.size && anchorStillValid) return;
-    set({
-      selectedIds: new Set(stillSelected),
-      anchorId: anchorStillValid ? state.anchorId : null,
-    });
+    const next = pruneMultiSelect(get(), loadedIds);
+    if (next) set(next);
   },
 }));
 

@@ -17,12 +17,17 @@ import { LABEL_COLOR_BY_ID } from '@/lib/labels/palette';
 import { compareLabelNames } from '@/lib/labels/order';
 import { formatCount } from '@/lib/format/strings';
 
-function useLabelLifecycleMutation<Request>(
-  accountId: string | null,
-  mutationFn: (request: Request) => Promise<unknown>,
-  copy: { done: string; failed: string },
-  optimistic: (labels: MailLabel[], request: Request) => MailLabel[],
-) {
+function useLabelLifecycleMutation<Request>({
+  accountId,
+  mutationFn,
+  copy,
+  optimistic,
+}: {
+  accountId: string | null;
+  mutationFn: (request: Request) => Promise<unknown>;
+  copy: { done: string; failed: string };
+  optimistic: (labels: MailLabel[], request: Request) => MailLabel[];
+}) {
   const queryClient = useQueryClient();
   const showSuccess = useToastStore((toaster) => toaster.showSuccess);
   const showError = useToastStore((toaster) => toaster.showError);
@@ -46,12 +51,12 @@ function labelColorFor(colorId: string | null): MailLabelColor | null {
 }
 
 export function useCreateLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(
-    accountId,
-    (request: { name: string; colorId: string | null }) =>
+  return useLabelLifecycleMutation({
+    accountId: accountId,
+    mutationFn: (request: { name: string; colorId: string | null }) =>
       invoke('create_label', { accountId: accountId as string, ...request }),
-    { done: 'Label created.', failed: 'Couldn’t create the label.' },
-    (labels, request) =>
+    copy: { done: 'Label created.', failed: 'Couldn’t create the label.' },
+    optimistic: (labels, request) =>
       [
         ...labels,
         {
@@ -63,43 +68,43 @@ export function useCreateLabelMutation(accountId: string | null) {
           unreadCount: 0,
         },
       ].sort(compareLabelNames),
-  );
+  });
 }
 
 export function useRenameLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(
-    accountId,
-    (request: { labelId: string; name: string }) =>
+  return useLabelLifecycleMutation({
+    accountId: accountId,
+    mutationFn: (request: { labelId: string; name: string }) =>
       invoke('rename_label', { accountId: accountId as string, ...request }),
-    { done: 'Label renamed.', failed: 'Couldn’t rename the label.' },
-    (labels, request) =>
+    copy: { done: 'Label renamed.', failed: 'Couldn’t rename the label.' },
+    optimistic: (labels, request) =>
       labels
         .map((label) => (label.id === request.labelId ? { ...label, name: request.name } : label))
         .sort(compareLabelNames),
-  );
+  });
 }
 
 export function useRecolorLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(
-    accountId,
-    (request: { labelId: string; colorId: string }) =>
+  return useLabelLifecycleMutation({
+    accountId: accountId,
+    mutationFn: (request: { labelId: string; colorId: string }) =>
       invoke('recolor_label', { accountId: accountId as string, ...request }),
-    { done: 'Label colour updated.', failed: 'Couldn’t update the colour.' },
-    (labels, request) =>
+    copy: { done: 'Label colour updated.', failed: 'Couldn’t update the colour.' },
+    optimistic: (labels, request) =>
       labels.map((label) =>
         label.id === request.labelId ? { ...label, color: labelColorFor(request.colorId) } : label,
       ),
-  );
+  });
 }
 
 export function useDeleteLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(
-    accountId,
-    (request: { labelId: string }) =>
+  return useLabelLifecycleMutation({
+    accountId: accountId,
+    mutationFn: (request: { labelId: string }) =>
       invoke('delete_label', { accountId: accountId as string, ...request }),
-    { done: 'Label deleted.', failed: 'Couldn’t delete the label.' },
-    (labels, request) => labels.filter((label) => label.id !== request.labelId),
-  );
+    copy: { done: 'Label deleted.', failed: 'Couldn’t delete the label.' },
+    optimistic: (labels, request) => labels.filter((label) => label.id !== request.labelId),
+  });
 }
 
 export type TriageChange = { threadIds: string[]; add: string[]; remove: string[] };
@@ -123,13 +128,19 @@ function formatFailureCopy(verb: string, count: number, singular: string): strin
   return `Couldn’t ${verb} ${singular}.`;
 }
 
-function optimisticallyUpdatePages<Page extends ThreadPage | ThreadSearchPage>(
-  queryClient: ReturnType<typeof useQueryClient>,
-  queryKey: QueryKey,
-  threadIds: string[],
-  removesMatching: boolean,
-  update: (thread: MailThread) => MailThread,
-) {
+function optimisticallyUpdatePages<Page extends ThreadPage | ThreadSearchPage>({
+  queryClient,
+  queryKey,
+  threadIds,
+  removesMatching,
+  update,
+}: {
+  queryClient: ReturnType<typeof useQueryClient>;
+  queryKey: QueryKey;
+  threadIds: string[];
+  removesMatching: boolean;
+  update: (thread: MailThread) => MailThread;
+}) {
   queryClient.setQueriesData(
     { queryKey: queryKey },
     (data: { pages: Page[] } | undefined) =>
@@ -145,29 +156,36 @@ function optimisticallyUpdatePages<Page extends ThreadPage | ThreadSearchPage>(
   );
 }
 
-function optimisticallyUpdateThreadAndSearchPages(
-  queryClient: ReturnType<typeof useQueryClient>,
-  accountId: string | null,
-  threadIds: string[],
-  leavesMailbox: boolean,
-  leavesSearch: boolean,
-  update: (thread: MailThread) => MailThread,
-) {
+function optimisticallyUpdateThreadAndSearchPages({
+  queryClient,
+  accountId,
+  threadIds,
+  leavesMailbox,
+  leavesSearch,
+  update,
+}: {
+  queryClient: ReturnType<typeof useQueryClient>;
+  accountId: string | null;
+  threadIds: string[];
+  leavesMailbox: boolean;
+  leavesSearch: boolean;
+  update: (thread: MailThread) => MailThread;
+}) {
   const accountKey = accountId ?? '';
-  optimisticallyUpdatePages<ThreadPage>(
-    queryClient,
-    queryKeys.threadsForAccount(accountKey),
-    threadIds,
-    leavesMailbox,
-    update,
-  );
-  optimisticallyUpdatePages<ThreadSearchPage>(
-    queryClient,
-    queryKeys.searchForAccount(accountKey),
-    threadIds,
-    leavesSearch,
-    update,
-  );
+  optimisticallyUpdatePages<ThreadPage>({
+    queryClient: queryClient,
+    queryKey: queryKeys.threadsForAccount(accountKey),
+    threadIds: threadIds,
+    removesMatching: leavesMailbox,
+    update: update,
+  });
+  optimisticallyUpdatePages<ThreadSearchPage>({
+    queryClient: queryClient,
+    queryKey: queryKeys.searchForAccount(accountKey),
+    threadIds: threadIds,
+    removesMatching: leavesSearch,
+    update: update,
+  });
   if (leavesSearch) {
     queryClient.setQueriesData<number>(
       { queryKey: queryKeys.searchTotalsForAccount(accountKey) },
@@ -192,12 +210,17 @@ function leavesMailboxForLabelChange(
   return mailboxId === 'INBOX' && (add.includes('TRASH') || add.includes('SPAM'));
 }
 
-function resolveFlagChange(
-  flagLabel: string,
-  add: string[],
-  remove: string[],
-  current: boolean,
-): boolean {
+function resolveFlagChange({
+  flagLabel,
+  add,
+  remove,
+  current,
+}: {
+  flagLabel: string;
+  add: string[];
+  remove: string[];
+  current: boolean;
+}): boolean {
   if (add.includes(flagLabel)) return true;
   if (remove.includes(flagLabel)) return false;
   return current;
@@ -233,8 +256,18 @@ export function useTriageMutation(accountId: string | null) {
       const removedNames = new Set(remove.map((labelId) => userLabelNames.get(labelId)));
       const update = (thread: MailThread) => ({
         ...thread,
-        isStarred: resolveFlagChange('STARRED', add, remove, thread.isStarred),
-        isUnread: resolveFlagChange('UNREAD', add, remove, thread.isUnread),
+        isStarred: resolveFlagChange({
+          flagLabel: 'STARRED',
+          add: add,
+          remove: remove,
+          current: thread.isStarred,
+        }),
+        isUnread: resolveFlagChange({
+          flagLabel: 'UNREAD',
+          add: add,
+          remove: remove,
+          current: thread.isUnread,
+        }),
         labelIndicators: [
           ...new Set([
             ...(thread.labelIndicators ?? []).filter((name) => !removedNames.has(name)),
@@ -243,43 +276,49 @@ export function useTriageMutation(accountId: string | null) {
         ].sort(),
       });
       for (const threadId of threadIds) {
-        optimisticallyUpdateConversationMessages(
-          queryClient,
-          accountId,
-          threadId,
-          null,
-          false,
-          (message) => ({
+        optimisticallyUpdateConversationMessages({
+          queryClient: queryClient,
+          accountId: accountId,
+          threadId: threadId,
+          messageIds: null,
+          removesMessage: false,
+          update: (message) => ({
             ...message,
             labelIds: [
               ...new Set([...message.labelIds.filter((id) => !remove.includes(id)), ...add]),
             ],
           }),
-        );
+        });
       }
       const scopeMailboxId = virtualMailboxIdForScope(useSearchStore.getState().scope);
       const leavesSearch = leavesMailboxForLabelChange(scopeMailboxId, add, remove);
-      optimisticallyUpdateThreadAndSearchPages(
-        queryClient,
-        accountId,
-        threadIds,
-        leavesMailbox,
-        leavesSearch,
-        update,
-      );
+      optimisticallyUpdateThreadAndSearchPages({
+        queryClient: queryClient,
+        accountId: accountId,
+        threadIds: threadIds,
+        leavesMailbox: leavesMailbox,
+        leavesSearch: leavesSearch,
+        update: update,
+      });
     },
     onError: (_error, { threadIds }) =>
       showError(formatFailureCopy('update', threadIds.length, 'conversation')),
   });
 }
 
-function useThreadTransferMutation<Change extends { threadIds: string[] }>(
-  accountId: string | null,
-  verb: string,
-  mutationFn: (change: Change) => Promise<unknown>,
-  destinationFor: (change: Change) => string,
-  clearActiveSelection: boolean,
-) {
+function useThreadTransferMutation<Change extends { threadIds: string[] }>({
+  accountId,
+  verb,
+  mutationFn,
+  destinationFor,
+  clearActiveSelection,
+}: {
+  accountId: string | null;
+  verb: string;
+  mutationFn: (change: Change) => Promise<unknown>;
+  destinationFor: (change: Change) => string;
+  clearActiveSelection: boolean;
+}) {
   const queryClient = useQueryClient();
   const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
@@ -297,14 +336,14 @@ function useThreadTransferMutation<Change extends { threadIds: string[] }>(
       const leavesMailbox = mailboxId !== destination;
       const scopeMailboxId = virtualMailboxIdForScope(useSearchStore.getState().scope);
       const leavesSearch = scopeMailboxId !== null && scopeMailboxId !== destination;
-      optimisticallyUpdateThreadAndSearchPages(
-        queryClient,
-        accountId,
-        change.threadIds,
-        leavesMailbox,
-        leavesSearch,
-        (thread) => thread,
-      );
+      optimisticallyUpdateThreadAndSearchPages({
+        queryClient: queryClient,
+        accountId: accountId,
+        threadIds: change.threadIds,
+        leavesMailbox: leavesMailbox,
+        leavesSearch: leavesSearch,
+        update: (thread) => thread,
+      });
     },
     onError: (_error, { threadIds }) =>
       showError(formatFailureCopy(verb, threadIds.length, 'conversation')),
@@ -312,23 +351,23 @@ function useThreadTransferMutation<Change extends { threadIds: string[] }>(
 }
 
 export function useDeleteThreadsMutation(accountId: string | null) {
-  return useThreadTransferMutation<{ threadIds: string[] }>(
-    accountId,
-    'delete',
-    (change) => invoke('delete_threads', { accountId: accountId as string, ...change }),
-    () => 'TRASH',
-    true,
-  );
+  return useThreadTransferMutation<{ threadIds: string[] }>({
+    accountId: accountId,
+    verb: 'delete',
+    mutationFn: (change) => invoke('delete_threads', { accountId: accountId as string, ...change }),
+    destinationFor: () => 'TRASH',
+    clearActiveSelection: true,
+  });
 }
 
 export function useMoveThreadsMutation(accountId: string | null) {
-  return useThreadTransferMutation<{ threadIds: string[]; destination: MoveDestination }>(
-    accountId,
-    'move',
-    (change) => invoke('move_threads', { accountId: accountId as string, ...change }),
-    (change) => change.destination,
-    false,
-  );
+  return useThreadTransferMutation<{ threadIds: string[]; destination: MoveDestination }>({
+    accountId: accountId,
+    verb: 'move',
+    mutationFn: (change) => invoke('move_threads', { accountId: accountId as string, ...change }),
+    destinationFor: (change) => change.destination,
+    clearActiveSelection: false,
+  });
 }
 
 export function useThreadTriageIntentMutation(accountId: string | null) {
@@ -358,14 +397,21 @@ type ReaderMessageCacheEntry = {
   isStarred: boolean;
 };
 
-function optimisticallyUpdateConversationMessages(
-  queryClient: ReturnType<typeof useQueryClient>,
-  accountId: string | null,
-  threadId: string,
-  messageIds: string[] | null,
-  removesMessage: boolean,
-  update: (message: ReaderMessageCacheEntry) => ReaderMessageCacheEntry,
-) {
+function optimisticallyUpdateConversationMessages({
+  queryClient,
+  accountId,
+  threadId,
+  messageIds,
+  removesMessage,
+  update,
+}: {
+  queryClient: ReturnType<typeof useQueryClient>;
+  accountId: string | null;
+  threadId: string;
+  messageIds: string[] | null;
+  removesMessage: boolean;
+  update: (message: ReaderMessageCacheEntry) => ReaderMessageCacheEntry;
+}) {
   const targeted = (messageId: string) => messageIds === null || messageIds.includes(messageId);
   queryClient.setQueriesData(
     { queryKey: queryKeys.conversationThread(accountId ?? '', threadId) },
@@ -387,21 +433,31 @@ export function useMessageTriageMutation(accountId: string | null) {
       invoke('mutate_messages', { accountId: accountId as string, ...change }),
     onMutate: async ({ threadId, messageIds, add, remove }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
-      optimisticallyUpdateConversationMessages(
-        queryClient,
-        accountId,
-        threadId,
-        messageIds,
-        add.includes('TRASH') || add.includes('SPAM'),
-        (message) => ({
+      optimisticallyUpdateConversationMessages({
+        queryClient: queryClient,
+        accountId: accountId,
+        threadId: threadId,
+        messageIds: messageIds,
+        removesMessage: add.includes('TRASH') || add.includes('SPAM'),
+        update: (message) => ({
           ...message,
-          isUnread: resolveFlagChange('UNREAD', add, remove, message.isUnread),
-          isStarred: resolveFlagChange('STARRED', add, remove, message.isStarred),
+          isUnread: resolveFlagChange({
+            flagLabel: 'UNREAD',
+            add: add,
+            remove: remove,
+            current: message.isUnread,
+          }),
+          isStarred: resolveFlagChange({
+            flagLabel: 'STARRED',
+            add: add,
+            remove: remove,
+            current: message.isStarred,
+          }),
           labelIds: [
             ...new Set([...message.labelIds.filter((id) => !remove.includes(id)), ...add]),
           ],
         }),
-      );
+      });
     },
     onError: (_error, { messageIds }) =>
       showError(formatFailureCopy('update', messageIds.length, 'message')),
@@ -419,14 +475,14 @@ function useMessageTransferMutation<Change extends { threadId: string; messageId
     mutationFn: mutationFn,
     onMutate: async ({ threadId, messageIds }: Change) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
-      optimisticallyUpdateConversationMessages(
-        queryClient,
-        accountId,
-        threadId,
-        messageIds,
-        true,
-        (message) => message,
-      );
+      optimisticallyUpdateConversationMessages({
+        queryClient: queryClient,
+        accountId: accountId,
+        threadId: threadId,
+        messageIds: messageIds,
+        removesMessage: true,
+        update: (message) => message,
+      });
     },
     onError: (_error, { messageIds }) =>
       showError(formatFailureCopy(verb, messageIds.length, 'message')),

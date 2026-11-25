@@ -104,8 +104,13 @@ fn clean(html: &str, cid_sources: &HashMap<String, String>, allow_remote: bool) 
             ]
             .into(),
         )
-        .attribute_filter(
-            move |element, attribute, value| match (element, attribute) {
+        .attribute_filter(move |element, attribute, value| {
+            let context = ImageFilterContext {
+                cid_sources: &cid_sources,
+                outcome: &outcome_in_filter,
+                allow_remote: allow_remote,
+            };
+            match (element, attribute) {
                 ("a", "href")
                     if matches!(
                         value.trim_start().to_ascii_lowercase().split_once(':'),
@@ -114,17 +119,13 @@ fn clean(html: &str, cid_sources: &HashMap<String, String>, allow_remote: bool) 
                 {
                     None
                 }
-                ("img", "src") => {
-                    image_source(value, &cid_sources, &outcome_in_filter, allow_remote)
-                        .map(Cow::Owned)
+                ("img", "src") => image_source(value, &context).map(Cow::Owned),
+                (_, "style") => {
+                    Some(style_images(value, &context).map_or(Cow::Borrowed(value), Cow::Owned))
                 }
-                (_, "style") => Some(
-                    style_images(value, &cid_sources, &outcome_in_filter, allow_remote)
-                        .map_or(Cow::Borrowed(value), Cow::Owned),
-                ),
                 _ => Some(Cow::Borrowed(value)),
-            },
-        );
+            }
+        });
     let html = builder.clean(html).to_string();
     SanitizedHtml {
         html: html,
@@ -134,22 +135,24 @@ fn clean(html: &str, cid_sources: &HashMap<String, String>, allow_remote: bool) 
     }
 }
 
-fn image_source(
-    value: &str,
-    cid_sources: &HashMap<String, String>,
-    outcome: &ImageOutcome,
+struct ImageFilterContext<'a> {
+    cid_sources: &'a HashMap<String, String>,
+    outcome: &'a ImageOutcome,
     allow_remote: bool,
-) -> Option<String> {
+}
+
+fn image_source(value: &str, context: &ImageFilterContext<'_>) -> Option<String> {
     let source = value.trim();
     let lower = source.to_ascii_lowercase();
     if let Some(cid) = lower.strip_prefix(CID_SCHEME) {
         let id = source[source.len() - cid.len()..].trim_matches(['<', '>']);
-        let source = cid_sources
+        let source = context
+            .cid_sources
             .get(id)
-            .or_else(|| cid_sources.get(&format!("<{id}>")))
+            .or_else(|| context.cid_sources.get(&format!("<{id}>")))
             .filter(|source| !source.is_empty());
         let Some(source) = source else {
-            ImageOutcome::mark(&outcome.inline_missing);
+            ImageOutcome::mark(&context.outcome.inline_missing);
             return Some(REMOTE_IMAGE_PLACEHOLDER.to_owned());
         };
         return Some(source.clone());
@@ -160,19 +163,14 @@ fn image_source(
     if lower.starts_with(DATA_SCHEME) {
         return None;
     }
-    if allow_remote {
+    if context.allow_remote {
         return Some(crate::remote_images::proxy_url(source));
     }
-    ImageOutcome::mark(&outcome.remote_blocked);
+    ImageOutcome::mark(&context.outcome.remote_blocked);
     Some(REMOTE_IMAGE_PLACEHOLDER.to_owned())
 }
 
-fn style_images(
-    value: &str,
-    cid_sources: &HashMap<String, String>,
-    outcome: &ImageOutcome,
-    allow_remote: bool,
-) -> Option<String> {
+fn style_images(value: &str, context: &ImageFilterContext<'_>) -> Option<String> {
     let lower = value.to_ascii_lowercase();
     if !lower.contains("url(") {
         return None;
@@ -189,8 +187,7 @@ fn style_images(
         rewritten.push_str(&value[cursor..open]);
         rewritten.push('\'');
         rewritten.push_str(
-            &image_source(target, cid_sources, outcome, allow_remote)
-                .unwrap_or_else(|| REMOTE_IMAGE_PLACEHOLDER.to_owned()),
+            &image_source(target, context).unwrap_or_else(|| REMOTE_IMAGE_PLACEHOLDER.to_owned()),
         );
         rewritten.push('\'');
         cursor = close;

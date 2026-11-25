@@ -1,3 +1,4 @@
+use latentmail_lib::queue::QueueConfig;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -78,11 +79,14 @@ async fn suspension_is_independent_from_user_pause_and_resume_work_waits_for_set
 async fn suspension_emits_summary_and_holds_new_work() {
     let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = Arc::clone(&events);
-    let queue = QueueEngine::new_with_events(
-        250,
-        250,
+    let queue = QueueEngine::with_config(
+        QueueConfig {
+            rate_per_second: 250,
+            burst: 250,
+            events: Arc::new(move |event, payload| recorded.lock().unwrap().push((event, payload))),
+            ..QueueConfig::default()
+        },
         Arc::new(|_| Box::pin(async { Ok(()) })),
-        Arc::new(move |event, payload| recorded.lock().unwrap().push((event, payload))),
     );
     queue.set_suspended(true);
     queue.enqueue(operation("held")).await.unwrap();

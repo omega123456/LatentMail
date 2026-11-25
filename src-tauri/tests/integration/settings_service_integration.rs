@@ -1,3 +1,5 @@
+use latentmail_lib::ipc::{AppServices, CommandPayload};
+use latentmail_lib::settings::WriteSettingRequest;
 use latentmail_lib::settings::{
     initialize, read_settings, restore_window, save_window, write_setting, Settings,
     SettingsService, WindowState,
@@ -20,29 +22,31 @@ fn app_with_service() -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDi
 async fn read_and_write_setting_commands_round_trip_through_the_service() {
     let (app, _directory) = app_with_service();
 
-    let defaults = read_settings(app.state()).await.unwrap();
+    let defaults = read_settings(AppServices::new(app.handle())).await.unwrap();
     assert_eq!(defaults, Settings::default());
 
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "theme".into(),
-        serde_json::json!("dark"),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "theme".into(),
+            value: serde_json::json!("dark"),
+        }),
     )
     .await
     .unwrap();
 
-    let updated = read_settings(app.state()).await.unwrap();
+    let updated = read_settings(AppServices::new(app.handle())).await.unwrap();
     assert_eq!(
         updated.theme,
         latentmail_lib::settings::ThemePreference::Dark
     );
 
     let error = write_setting(
-        app.handle().clone(),
-        app.state(),
-        "not-a-real-key".into(),
-        serde_json::json!(true),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "not-a-real-key".into(),
+            value: serde_json::json!(true),
+        }),
     )
     .await
     .unwrap_err();
@@ -58,26 +62,29 @@ async fn startup_preferences_persist_through_the_service_and_test_autostart() {
     assert!(service.read().await.unwrap().start_at_login);
 
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "startAtLogin".into(),
-        serde_json::json!(false),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "startAtLogin".into(),
+            value: serde_json::json!(false),
+        }),
     )
     .await
     .unwrap();
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "closeToTray".into(),
-        serde_json::json!(false),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "closeToTray".into(),
+            value: serde_json::json!(false),
+        }),
     )
     .await
     .unwrap();
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "startMinimized".into(),
-        serde_json::json!(true),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "startMinimized".into(),
+            value: serde_json::json!(true),
+        }),
     )
     .await
     .unwrap();
@@ -111,12 +118,18 @@ async fn every_persisted_setting_accepts_its_wire_value() {
         ("prefetchImageAttachments", serde_json::json!(true)),
         ("updateCheckInterval", serde_json::json!("7d")),
     ] {
-        write_setting(app.handle().clone(), app.state(), key.into(), value)
-            .await
-            .unwrap();
+        write_setting(
+            AppServices::new(app.handle()),
+            CommandPayload(WriteSettingRequest {
+                key: key.into(),
+                value: value,
+            }),
+        )
+        .await
+        .unwrap();
     }
 
-    let settings = read_settings(app.state()).await.unwrap();
+    let settings = read_settings(AppServices::new(app.handle())).await.unwrap();
     assert_eq!(
         settings.theme,
         latentmail_lib::settings::ThemePreference::Light
@@ -156,15 +169,16 @@ async fn writing_every_log_level_persists_and_applies_it_live_without_panicking(
 
     for level in ["debug", "info", "warn", "error"] {
         write_setting(
-            app.handle().clone(),
-            app.state(),
-            "logLevel".into(),
-            serde_json::json!(level),
+            AppServices::new(app.handle()),
+            CommandPayload(WriteSettingRequest {
+                key: "logLevel".into(),
+                value: serde_json::json!(level),
+            }),
         )
         .await
         .unwrap();
 
-        let settings = read_settings(app.state()).await.unwrap();
+        let settings = read_settings(AppServices::new(app.handle())).await.unwrap();
         assert_eq!(
             serde_json::to_value(&settings.log_level).unwrap(),
             serde_json::json!(level)
@@ -177,16 +191,17 @@ async fn writing_an_invalid_log_level_value_leaves_the_persisted_setting_unchang
     let (app, _directory) = app_with_service();
 
     let error = write_setting(
-        app.handle().clone(),
-        app.state(),
-        "logLevel".into(),
-        serde_json::json!("not-a-real-level"),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "logLevel".into(),
+            value: serde_json::json!("not-a-real-level"),
+        }),
     )
     .await
     .unwrap_err();
     assert!(error.contains("Unknown or invalid setting"));
 
-    let settings = read_settings(app.state()).await.unwrap();
+    let settings = read_settings(AppServices::new(app.handle())).await.unwrap();
     assert_eq!(settings.log_level, latentmail_lib::settings::LogLevel::Info);
 }
 
@@ -327,16 +342,17 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     });
 
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "syncIntervalSeconds".into(),
-        serde_json::json!(30),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "syncIntervalSeconds".into(),
+            value: serde_json::json!(30),
+        }),
     )
     .await
     .unwrap();
 
     assert_eq!(
-        read_settings(app.state())
+        read_settings(AppServices::new(app.handle()))
             .await
             .unwrap()
             .sync_interval_seconds,
@@ -349,10 +365,11 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     );
 
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "syncIntervalSeconds".into(),
-        serde_json::json!(10),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "syncIntervalSeconds".into(),
+            value: serde_json::json!(10),
+        }),
     )
     .await
     .unwrap();
@@ -368,16 +385,17 @@ async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() 
     let (app, _directory) = app_with_service();
 
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "syncIntervalSeconds".into(),
-        serde_json::json!(20),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "syncIntervalSeconds".into(),
+            value: serde_json::json!(20),
+        }),
     )
     .await
     .unwrap();
 
     assert_eq!(
-        read_settings(app.state())
+        read_settings(AppServices::new(app.handle()))
             .await
             .unwrap()
             .sync_interval_seconds,
@@ -389,7 +407,7 @@ async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() 
 async fn writing_every_update_check_interval_persists_it() {
     let (app, _directory) = app_with_service();
 
-    let defaults = read_settings(app.state()).await.unwrap();
+    let defaults = read_settings(AppServices::new(app.handle())).await.unwrap();
     assert_eq!(
         defaults.update_check_interval,
         latentmail_lib::settings::UpdateCheckInterval::Daily
@@ -407,29 +425,31 @@ async fn writing_every_update_check_interval_persists_it() {
         ("off", latentmail_lib::settings::UpdateCheckInterval::Off),
     ] {
         write_setting(
-            app.handle().clone(),
-            app.state(),
-            "updateCheckInterval".into(),
-            serde_json::json!(wire),
+            AppServices::new(app.handle()),
+            CommandPayload(WriteSettingRequest {
+                key: "updateCheckInterval".into(),
+                value: serde_json::json!(wire),
+            }),
         )
         .await
         .unwrap();
 
-        let settings = read_settings(app.state()).await.unwrap();
+        let settings = read_settings(AppServices::new(app.handle())).await.unwrap();
         assert_eq!(settings.update_check_interval, expected);
     }
 
     write_setting(
-        app.handle().clone(),
-        app.state(),
-        "installUpdateOnQuit".into(),
-        serde_json::json!(false),
+        AppServices::new(app.handle()),
+        CommandPayload(WriteSettingRequest {
+            key: "installUpdateOnQuit".into(),
+            value: serde_json::json!(false),
+        }),
     )
     .await
     .unwrap();
 
     assert!(
-        !read_settings(app.state())
+        !read_settings(AppServices::new(app.handle()))
             .await
             .unwrap()
             .install_update_on_quit

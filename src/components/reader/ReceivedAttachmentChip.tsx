@@ -17,12 +17,17 @@ const ERROR_WELL_CLASS =
 const NEUTRAL_WELL_CLASS =
   'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant';
 
-function chipWellClass(
-  downloadState: DownloadState,
-  coloured: boolean,
-  wellClassName: string,
-  inkClassName: string,
-): string {
+function chipWellClass({
+  downloadState,
+  coloured,
+  wellClassName,
+  inkClassName,
+}: {
+  downloadState: DownloadState;
+  coloured: boolean;
+  wellClassName: string;
+  inkClassName: string;
+}): string {
   if (downloadState === 'failed') return ERROR_WELL_CLASS;
   if (coloured && downloadState !== 'downloading') return `${wellClassName} ${inkClassName}`;
   return NEUTRAL_WELL_CLASS;
@@ -84,7 +89,12 @@ export function ReceivedAttachmentChip({
     attachment.filename,
   );
   const wantsThumbnail = prefetch && family === 'image';
-  const cachedQuery = useCachedAttachmentQuery(accountId, messageId, attachment.id, wantsThumbnail);
+  const cachedQuery = useCachedAttachmentQuery({
+    accountId: accountId,
+    messageId: messageId,
+    attachmentId: attachment.id,
+    enabled: wantsThumbnail,
+  });
   const thumbnailPath =
     wantsThumbnail && cachedQuery.isSuccess ? cachedQuery.data.displayPath : null;
   const thumbnailLoading = wantsThumbnail && cachedQuery.isPending;
@@ -124,7 +134,7 @@ export function ReceivedAttachmentChip({
       />
       <div
         aria-hidden="true"
-        className={`relative size-7 shrink-0 overflow-hidden rounded-chip ${chipWellClass(downloadState, coloured, wellClassName, inkClassName)} grid place-items-center ${thumbnailLoading ? 'animate-pulse' : ''}`}
+        className={`relative size-7 shrink-0 overflow-hidden rounded-chip ${chipWellClass({ downloadState, coloured, wellClassName, inkClassName })} grid place-items-center ${thumbnailLoading ? 'animate-pulse' : ''}`}
       >
         {renderWellContent({
           downloadState: downloadState,

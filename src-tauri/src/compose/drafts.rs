@@ -11,8 +11,8 @@ use tokio::sync::Mutex;
 use crate::{
     gmail::{GmailClient, GmailError, GmailMessage},
     queue::{
-        self, Executor, Lane, OperationFuture, OperationKind, QueueEngine, QueueError,
-        QueueOperation, QueueRoute,
+        self, DurableSubmission, Executor, Lane, OperationFuture, OperationKind, QueueEngine,
+        QueueError, QueueOperation, QueueRoute,
     },
     storage::{
         addresses::split_addresses, ComposeDraftMetadata, ComposeDraftMetadataRepository,
@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     mime::{self, OutgoingMessage},
-    staging::Staging,
+    staging::{OwnerTransfer, Staging},
 };
 
 pub fn generate_id(prefix: &str) -> String {
@@ -71,6 +71,7 @@ pub struct SaveCoalescer {
     generations: Mutex<std::collections::HashMap<String, u64>>,
     draft_ids: Mutex<std::collections::HashMap<String, String>>,
 }
+
 impl SaveCoalescer {
     pub fn new() -> Self {
         Self::default()
@@ -107,6 +108,37 @@ pub struct DraftAdmission {
     pub payload: DraftOperationPayload,
 }
 
+pub struct DraftTarget<'a> {
+    pub account_id: &'a str,
+    pub draft_id: &'a str,
+}
+
+pub struct DraftExecutorContext<R: Runtime> {
+    pub app: AppHandle<R>,
+    pub storage: Storage,
+    pub staging: Arc<Staging>,
+    pub coalescer: Arc<SaveCoalescer>,
+    pub base_url: String,
+}
+
+struct OriginalQuote {
+    html: Option<String>,
+    inline_parts: Vec<super::mime::Part>,
+}
+
+struct GmailDraftOutcome {
+    message: GmailMessage,
+    consumed: bool,
+    draft_id: String,
+}
+
+struct PostReplaceRow<'a> {
+    account_id: &'a str,
+    message: &'a GmailMessage,
+    metadata: &'a ComposeDraftMetadata,
+    consumed: bool,
+}
+
 pub async fn admit(
     services: &AdmissionServices<'_>,
     admission: DraftAdmission,
@@ -136,17 +168,19 @@ pub async fn admit(
     queue::admit_durable(
         services.queue,
         services.storage,
-        QueueOperation::new(
-            id,
-            account_id,
-            QueueRoute {
-                lane: Lane::Interactive,
-                kind: kind,
-                entity_key: entity_key,
-                description: description,
-            },
-        ),
-        payload_json,
+        DurableSubmission {
+            operation: QueueOperation::new(
+                id,
+                account_id,
+                QueueRoute {
+                    lane: Lane::Interactive,
+                    kind: kind,
+                    entity_key: entity_key,
+                    description: description,
+                },
+            ),
+            payload: payload_json,
+        },
     )
     .await
     .map(|()| generation)
@@ -156,15 +190,14 @@ pub async fn admit(
 pub async fn delete(
     client: &GmailClient,
     storage: &Storage,
-    account_id: &str,
-    draft_id: &str,
+    target: DraftTarget<'_>,
 ) -> Result<(), String> {
     client
-        .delete_draft(draft_id)
+        .delete_draft(target.draft_id)
         .await
         .map_err(|error| error.to_string())?;
-    let account = account_id.to_owned();
-    let draft = draft_id.to_owned();
+    let account = target.account_id.to_owned();
+    let draft = target.draft_id.to_owned();
     storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
@@ -180,22 +213,17 @@ pub async fn delete(
         .map_err(|error| error.to_string())
 }
 
-pub fn build_executor<R: Runtime>(
-    app: AppHandle<R>,
-    storage: Storage,
-    staging: Arc<Staging>,
-    coalescer: Arc<SaveCoalescer>,
-    base_url: String,
-) -> Executor {
+pub fn build_executor<R: Runtime>(context: DraftExecutorContext<R>) -> Executor {
     Arc::new(move |operation: QueueOperation| -> OperationFuture {
-        let app = app.clone();
-        let storage = storage.clone();
-        let staging = Arc::clone(&staging);
-        let coalescer = Arc::clone(&coalescer);
-        let base_url = base_url.clone();
-        Box::pin(
-            async move { run(&app, &storage, &staging, &coalescer, &base_url, operation).await },
-        )
+        let run = DraftRun {
+            app: context.app.clone(),
+            storage: context.storage.clone(),
+            staging: Arc::clone(&context.staging),
+            coalescer: Arc::clone(&context.coalescer),
+            base_url: context.base_url.clone(),
+            operation: operation,
+        };
+        Box::pin(async move { run.execute().await })
     })
 }
 
@@ -217,9 +245,12 @@ async fn load_original_quote(
     storage: &Storage,
     account_id: &str,
     original_message_id: Option<&str>,
-) -> (Option<String>, Vec<super::mime::Part>) {
+) -> OriginalQuote {
     let Some(original_id) = original_message_id else {
-        return (None, Vec::new());
+        return OriginalQuote {
+            html: None,
+            inline_parts: Vec::new(),
+        };
     };
     let account_id = account_id.to_owned();
     let original_id = original_id.to_owned();
@@ -232,7 +263,10 @@ async fn load_original_quote(
         .await
         .ok();
     let Some((Some(message), parts)) = loaded else {
-        return (None, Vec::new());
+        return OriginalQuote {
+            html: None,
+            inline_parts: Vec::new(),
+        };
     };
     let mime_parts = parts
         .into_iter()
@@ -243,65 +277,27 @@ async fn load_original_quote(
             content_id: Some(part.content_id),
         })
         .collect();
-    (Some(super::context::outgoing_quote(&message)), mime_parts)
+    OriginalQuote {
+        html: Some(super::context::outgoing_quote(&message)),
+        inline_parts: mime_parts,
+    }
 }
 
 fn record_post_replace_rows(
     transaction: &rusqlite::Transaction<'_>,
-    account_id: &str,
-    message: &GmailMessage,
-    metadata: &ComposeDraftMetadata,
-    consumed: bool,
+    row: PostReplaceRow<'_>,
 ) -> rusqlite::Result<()> {
-    if !consumed {
-        return ComposeDraftMetadataRepository::upsert(transaction, metadata);
+    if !row.consumed {
+        return ComposeDraftMetadataRepository::upsert(transaction, row.metadata);
     }
-    crate::contacts::observe_now(transaction, account_id, &message.sender)?;
-    for mailbox in split_addresses(&message.to_recipients)
+    crate::contacts::observe_now(transaction, row.account_id, &row.message.sender)?;
+    for mailbox in split_addresses(&row.message.to_recipients)
         .into_iter()
-        .chain(split_addresses(&message.cc_recipients))
+        .chain(split_addresses(&row.message.cc_recipients))
     {
-        crate::contacts::observe_now(transaction, account_id, &mailbox)?;
+        crate::contacts::observe_now(transaction, row.account_id, &mailbox)?;
     }
     Ok(())
-}
-
-async fn terminal_failed<R: Runtime>(
-    app: &AppHandle<R>,
-    storage: &Storage,
-    operation: &QueueOperation,
-    error: &str,
-) {
-    tracing::error!(target: "compose", "operation {} failed: {error}", operation.id);
-    let id = operation.id.clone();
-    let owned = error.to_owned();
-    let _ = storage
-        .run(move |connection| {
-            OperationRepository::mark_terminal(connection, &id, "failed", Some(&owned))
-        })
-        .await;
-    let _ = app.emit(
-        crate::events::COMPOSE_FAILED,
-        serde_json::json!({
-            "accountId": operation.account_id,
-            "sessionId": operation.entity_key,
-            "kind": operation_kind_label(operation.kind),
-            "error": error,
-        }),
-    );
-}
-
-async fn fail<R: Runtime>(
-    app: &AppHandle<R>,
-    storage: &Storage,
-    operation: &QueueOperation,
-    error: &str,
-    queue_error: QueueError,
-) -> Result<(), QueueError> {
-    if !operation.will_retry(queue_error) {
-        terminal_failed(app, storage, operation, error).await;
-    }
-    Err(queue_error)
 }
 
 fn classify(error: &GmailError) -> QueueError {
@@ -314,289 +310,373 @@ fn classify(error: &GmailError) -> QueueError {
     }
 }
 
-async fn run<R: Runtime>(
-    app: &AppHandle<R>,
-    storage: &Storage,
-    staging: &Staging,
-    coalescer: &SaveCoalescer,
-    base_url: &str,
+enum LoadedPayload {
+    Skip,
+    Ready(Box<DraftOperationPayload>),
+}
+
+struct AssembledDraft {
+    raw: Vec<u8>,
+    quote_html: Option<String>,
+}
+
+struct LocalPersistInput<'a> {
+    payload: &'a DraftOperationPayload,
+    assembled: &'a AssembledDraft,
+    outcome: &'a GmailDraftOutcome,
+}
+
+struct DraftRun<R: Runtime> {
+    app: AppHandle<R>,
+    storage: Storage,
+    staging: Arc<Staging>,
+    coalescer: Arc<SaveCoalescer>,
+    base_url: String,
     operation: QueueOperation,
-) -> Result<(), QueueError> {
-    let id = operation.id.clone();
-    let row = {
-        let id = id.clone();
-        storage
-            .run(move |connection| OperationRepository::get(connection, &id))
-            .await
-            .map_err(|_| QueueError::Permanent)?
-    };
-    let Some(row) = row else {
-        return Ok(());
-    };
-    if row.status == "discarded" {
-        let _ = staging.release_snapshot(&id);
-        return Ok(());
-    }
-    let mut payload: DraftOperationPayload = match serde_json::from_str(&row.payload) {
-        Ok(payload) => payload,
-        Err(error) => {
-            return fail(
-                app,
-                storage,
-                &operation,
-                &error.to_string(),
-                QueueError::Permanent,
-            )
-            .await;
-        }
-    };
-    {
-        let id = id.clone();
-        let _ = storage
-            .run(move |connection| OperationRepository::mark_active(connection, &id))
-            .await;
-    }
+}
 
-    if !coalescer
-        .is_current(&operation.entity_key, payload.coalescing_generation)
-        .await
-    {
-        let _ = staging.release_snapshot(&id);
-        let id = id.clone();
-        let _ = storage
-            .run(move |connection| {
-                OperationRepository::mark_terminal(connection, &id, "superseded", None)
-            })
-            .await;
-        return Ok(());
-    }
-
-    let created_server_draft = matches!(payload.mode, DraftOperationMode::Create);
-    if created_server_draft {
-        if let Some(draft_id) = coalescer.draft_id(&operation.entity_key).await {
-            payload.mode = DraftOperationMode::Update;
-            payload.draft_id = Some(draft_id);
-        }
-    }
-
-    let manifest = match staging.snapshot_manifest(&id) {
-        Ok(manifest) => manifest,
-        Err(error) => {
-            return fail(
-                app,
-                storage,
-                &operation,
-                &error.to_string(),
-                QueueError::Permanent,
-            )
-            .await;
-        }
-    };
-    let mut inline = Vec::new();
-    let mut attachments = Vec::new();
-    for part in &manifest.parts {
-        match part.read() {
-            Ok(read) if part.content_id.is_some() => inline.push(read),
-            Ok(read) => attachments.push(read),
-            Err(error) => {
-                return fail(
-                    app,
-                    storage,
-                    &operation,
-                    &error.to_string(),
-                    QueueError::Permanent,
-                )
-                .await;
+impl<R: Runtime> DraftRun<R> {
+    async fn execute(self) -> Result<(), QueueError> {
+        let mut payload = match self.load_and_claim_payload().await? {
+            LoadedPayload::Skip => return Ok(()),
+            LoadedPayload::Ready(payload) => *payload,
+        };
+        let created_server_draft = matches!(payload.mode, DraftOperationMode::Create);
+        if created_server_draft {
+            if let Some(draft_id) = self.coalescer.draft_id(&self.operation.entity_key).await {
+                payload.mode = DraftOperationMode::Update;
+                payload.draft_id = Some(draft_id);
             }
         }
+        let assembled = self.assemble_draft(&payload).await?;
+        let client = self.authorized_client().await?;
+        let outcome = match execute_gmail(&client, &payload, &assembled.raw).await {
+            Ok(outcome) => outcome,
+            Err(error) => return self.fail(&error.to_string(), classify(&error)).await,
+        };
+        if created_server_draft && !outcome.consumed && payload.draft_id.is_none() {
+            self.coalescer
+                .set_draft_id(&self.operation.entity_key, outcome.draft_id.clone())
+                .await;
+        }
+        if self.was_discarded().await {
+            self.cleanup_discarded(&client, &outcome.draft_id).await;
+            return Ok(());
+        }
+        if created_server_draft {
+            self.rehome_staging_if_needed(&payload, &outcome).await?;
+        }
+        self.persist_local(LocalPersistInput {
+            payload: &payload,
+            assembled: &assembled,
+            outcome: &outcome,
+        })
+        .await?;
+        self.finish(&payload, &outcome).await;
+        Ok(())
     }
 
-    let (quote_html, original_inline) = load_original_quote(
-        storage,
-        &operation.account_id,
-        payload.original_message_id.as_deref(),
-    )
-    .await;
-    inline.extend(original_inline);
-
-    let outgoing = OutgoingMessage {
-        from: payload.from.clone(),
-        to: payload.to.clone(),
-        cc: payload.cc.clone(),
-        bcc: payload.bcc.clone(),
-        subject: payload.subject.clone(),
-        html: payload.html.clone(),
-        quote_html: quote_html.clone(),
-        in_reply_to: payload.in_reply_to.clone(),
-        references: payload.references.clone(),
-        inline: inline,
-        attachments: attachments,
-    };
-    let raw = match mime::assemble(&outgoing) {
-        Ok(raw) => raw,
-        Err(error) => {
-            return fail(
-                app,
-                storage,
-                &operation,
-                &error.to_string(),
-                QueueError::Permanent,
-            )
-            .await;
+    async fn load_and_claim_payload(&self) -> Result<LoadedPayload, QueueError> {
+        let id = self.operation.id.clone();
+        let row = self
+            .storage
+            .run(move |connection| OperationRepository::get(connection, &id))
+            .await
+            .map_err(|_| QueueError::Permanent)?;
+        let Some(row) = row else {
+            return Ok(LoadedPayload::Skip);
+        };
+        if row.status == "discarded" {
+            let _ = self.staging.release_snapshot(&self.operation.id);
+            return Ok(LoadedPayload::Skip);
         }
-    };
-
-    let auth = app.state::<crate::auth::AuthService>().inner().clone();
-    let token = match auth.refresh_access_token(app, &operation.account_id).await {
-        Ok(token) => token,
-        Err(error) => {
-            return fail(app, storage, &operation, &error, QueueError::Network).await;
-        }
-    };
-    let client = GmailClient::with_base_url(token, base_url.to_owned());
-
-    let (message, consumed, draft_id) = match execute_gmail(&client, &payload, &raw).await {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            return fail(
-                app,
-                storage,
-                &operation,
-                &error.to_string(),
-                classify(&error),
-            )
+        let payload: DraftOperationPayload = match serde_json::from_str(&row.payload) {
+            Ok(payload) => payload,
+            Err(error) => return self.fail(&error.to_string(), QueueError::Permanent).await,
+        };
+        let active_id = self.operation.id.clone();
+        let _ = self
+            .storage
+            .run(move |connection| OperationRepository::mark_active(connection, &active_id))
             .await;
+        if !self
+            .coalescer
+            .is_current(&self.operation.entity_key, payload.coalescing_generation)
+            .await
+        {
+            let _ = self.staging.release_snapshot(&self.operation.id);
+            let superseded_id = self.operation.id.clone();
+            let _ = self
+                .storage
+                .run(move |connection| {
+                    OperationRepository::mark_terminal(
+                        connection,
+                        &superseded_id,
+                        crate::storage::TerminalOutcome {
+                            status: "superseded",
+                            error: None,
+                        },
+                    )
+                })
+                .await;
+            return Ok(LoadedPayload::Skip);
         }
-    };
-
-    if created_server_draft && !consumed && payload.draft_id.is_none() {
-        coalescer
-            .set_draft_id(&operation.entity_key, draft_id.clone())
-            .await;
+        Ok(LoadedPayload::Ready(Box::new(payload)))
     }
 
-    let discarded = {
-        let id = id.clone();
-        storage
+    async fn assemble_draft(
+        &self,
+        payload: &DraftOperationPayload,
+    ) -> Result<AssembledDraft, QueueError> {
+        let manifest = match self.staging.snapshot_manifest(&self.operation.id) {
+            Ok(manifest) => manifest,
+            Err(error) => return self.fail(&error.to_string(), QueueError::Permanent).await,
+        };
+        let mut inline = Vec::new();
+        let mut attachments = Vec::new();
+        for part in &manifest.parts {
+            match part.read() {
+                Ok(read) if part.content_id.is_some() => inline.push(read),
+                Ok(read) => attachments.push(read),
+                Err(error) => return self.fail(&error.to_string(), QueueError::Permanent).await,
+            }
+        }
+        let quote = load_original_quote(
+            &self.storage,
+            &self.operation.account_id,
+            payload.original_message_id.as_deref(),
+        )
+        .await;
+        inline.extend(quote.inline_parts);
+        let outgoing = OutgoingMessage {
+            from: payload.from.clone(),
+            to: payload.to.clone(),
+            cc: payload.cc.clone(),
+            bcc: payload.bcc.clone(),
+            subject: payload.subject.clone(),
+            html: payload.html.clone(),
+            quote_html: quote.html.clone(),
+            in_reply_to: payload.in_reply_to.clone(),
+            references: payload.references.clone(),
+            inline: inline,
+            attachments: attachments,
+        };
+        let raw = match mime::assemble(&outgoing) {
+            Ok(raw) => raw,
+            Err(error) => return self.fail(&error.to_string(), QueueError::Permanent).await,
+        };
+        Ok(AssembledDraft {
+            raw: raw,
+            quote_html: quote.html,
+        })
+    }
+
+    async fn authorized_client(&self) -> Result<GmailClient, QueueError> {
+        let auth = self.app.state::<crate::auth::AuthService>().inner().clone();
+        let token = match auth
+            .refresh_access_token(&self.app, &self.operation.account_id)
+            .await
+        {
+            Ok(token) => token,
+            Err(error) => return self.fail(&error, QueueError::Network).await,
+        };
+        Ok(GmailClient::with_base_url(token, self.base_url.clone()))
+    }
+
+    async fn was_discarded(&self) -> bool {
+        let id = self.operation.id.clone();
+        self.storage
             .run(move |connection| {
                 Ok::<_, rusqlite::Error>(
-                    crate::storage::OperationRepository::get(connection, &id)?
+                    OperationRepository::get(connection, &id)?
                         .map(|row| row.status == "discarded")
                         .unwrap_or(false),
                 )
             })
             .await
             .unwrap_or(false)
-    };
-    if discarded {
-        let _ = client.delete_draft(&draft_id).await;
-        let _ = staging.release_snapshot(&id);
-        let _ = staging.release_owner(&operation.account_id, &operation.entity_key);
-        return Ok(());
     }
 
-    if created_server_draft
-        && payload.draft_id.is_none()
-        && !consumed
-        && !operation.entity_key.starts_with("draft:")
-    {
-        if let Err(error) =
-            staging.move_owner(&operation.account_id, &operation.entity_key, &draft_id)
-        {
-            return fail(
-                app,
-                storage,
-                &operation,
-                &error.to_string(),
-                QueueError::Permanent,
-            )
-            .await;
+    async fn cleanup_discarded(&self, client: &GmailClient, draft_id: &str) {
+        let _ = client.delete_draft(draft_id).await;
+        let _ = self.staging.release_snapshot(&self.operation.id);
+        let _ = self
+            .staging
+            .release_owner(&self.operation.account_id, &self.operation.entity_key);
+    }
+
+    async fn rehome_staging_if_needed(
+        &self,
+        payload: &DraftOperationPayload,
+        outcome: &GmailDraftOutcome,
+    ) -> Result<(), QueueError> {
+        let should_move = payload.draft_id.is_none()
+            && !outcome.consumed
+            && !self.operation.entity_key.starts_with("draft:");
+        if !should_move {
+            return Ok(());
         }
+        if let Err(error) = self.staging.move_owner(OwnerTransfer {
+            account_id: &self.operation.account_id,
+            from: &self.operation.entity_key,
+            to: &outcome.draft_id,
+        }) {
+            return self.fail(&error.to_string(), QueueError::Permanent).await;
+        }
+        Ok(())
     }
 
-    let account_id = operation.account_id.clone();
-    let metadata = ComposeDraftMetadata {
-        account_id: account_id.clone(),
-        draft_id: draft_id.clone(),
-        mode: payload.metadata_mode.clone(),
-        original_message_id: payload.original_message_id.clone(),
-        original_gmail_message_id: payload.original_gmail_message_id.clone(),
-        target_thread_id: payload.thread_id.clone(),
-        in_reply_to: payload.in_reply_to.clone(),
-        rfc_references: (!payload.references.is_empty()).then(|| payload.references.join(" ")),
-        boundary_version: 1,
-        editable_body_fingerprint: payload.editable_body_fingerprint.clone(),
-
-        quote_html: quote_html.clone(),
-        quote_plain: payload.quote_plain.clone(),
-    };
-    let persisted = {
-        let account_id = account_id.clone();
-        let draft_id = draft_id.clone();
-        storage
+    async fn persist_local(&self, input: LocalPersistInput<'_>) -> Result<(), QueueError> {
+        let LocalPersistInput {
+            payload,
+            assembled,
+            outcome,
+        } = input;
+        let account_id = self.operation.account_id.clone();
+        let draft_id = outcome.draft_id.clone();
+        let message = outcome.message.clone();
+        let consumed = outcome.consumed;
+        let metadata = ComposeDraftMetadata {
+            account_id: account_id.clone(),
+            draft_id: draft_id.clone(),
+            mode: payload.metadata_mode.clone(),
+            original_message_id: payload.original_message_id.clone(),
+            original_gmail_message_id: payload.original_gmail_message_id.clone(),
+            target_thread_id: payload.thread_id.clone(),
+            in_reply_to: payload.in_reply_to.clone(),
+            rfc_references: (!payload.references.is_empty()).then(|| payload.references.join(" ")),
+            boundary_version: 1,
+            editable_body_fingerprint: payload.editable_body_fingerprint.clone(),
+            quote_html: assembled.quote_html.clone(),
+            quote_plain: payload.quote_plain.clone(),
+        };
+        let persisted = self
+            .storage
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
                 materialize::replace_draft_rows(
                     &transaction,
-                    &account_id,
-                    &draft_id,
-                    &message,
-                    consumed,
+                    materialize::DraftReplacement {
+                        account_id: &account_id,
+                        draft_id: &draft_id,
+                        replacement: &message,
+                        consumed: consumed,
+                    },
                 )?;
-                record_post_replace_rows(&transaction, &account_id, &message, &metadata, consumed)?;
+                record_post_replace_rows(
+                    &transaction,
+                    PostReplaceRow {
+                        account_id: &account_id,
+                        message: &message,
+                        metadata: &metadata,
+                        consumed: consumed,
+                    },
+                )?;
                 transaction.commit()
             })
-            .await
-    };
-    if let Err(error) = persisted {
-        if !consumed {
-            return fail(
-                app,
-                storage,
-                &operation,
-                &error.to_string(),
-                QueueError::Permanent,
-            )
             .await;
+        if let Err(error) = persisted {
+            if !outcome.consumed {
+                return self.fail(&error.to_string(), QueueError::Permanent).await;
+            }
+            tracing::warn!(
+                target: "compose",
+                "operation {} sent but its local copy was not written: {error}",
+                self.operation.id
+            );
         }
-        tracing::warn!(
-            target: "compose",
-            "operation {} sent but its local copy was not written: {error}",
-            operation.id
+        Ok(())
+    }
+
+    async fn finish(&self, payload: &DraftOperationPayload, outcome: &GmailDraftOutcome) {
+        let _ = self.staging.release_snapshot(&self.operation.id);
+        if outcome.consumed {
+            let _ = self
+                .staging
+                .release_owner(&self.operation.account_id, &outcome.draft_id);
+            if payload.draft_id.is_none() {
+                let _ = self
+                    .staging
+                    .release_owner(&self.operation.account_id, &self.operation.entity_key);
+            }
+        }
+        let id_for_terminal = self.operation.id.clone();
+        let _ = self
+            .storage
+            .run(move |connection| {
+                OperationRepository::mark_terminal(
+                    connection,
+                    &id_for_terminal,
+                    crate::storage::TerminalOutcome {
+                        status: "done",
+                        error: None,
+                    },
+                )
+            })
+            .await;
+        let event = completion_event(outcome.consumed);
+        let _ = self.app.emit(
+            event,
+            serde_json::json!({
+                "accountId": self.operation.account_id,
+                "sessionId": self.operation.entity_key,
+                "draftId": outcome.draft_id,
+            }),
         );
     }
 
-    let _ = staging.release_snapshot(&id);
-    if consumed {
-        let _ = staging.release_owner(&account_id, &draft_id);
-
-        if payload.draft_id.is_none() {
-            let _ = staging.release_owner(&account_id, &operation.entity_key);
+    async fn fail<T>(&self, error: &str, queue_error: QueueError) -> Result<T, QueueError> {
+        if !self.operation.will_retry(queue_error) {
+            tracing::error!(
+                target: "compose",
+                "operation {} failed: {error}",
+                self.operation.id
+            );
+            let id = self.operation.id.clone();
+            let owned = error.to_owned();
+            let _ = self
+                .storage
+                .run(move |connection| {
+                    OperationRepository::mark_terminal(
+                        connection,
+                        &id,
+                        crate::storage::TerminalOutcome {
+                            status: "failed",
+                            error: Some(&owned),
+                        },
+                    )
+                })
+                .await;
+            let _ = self.app.emit(
+                crate::events::COMPOSE_FAILED,
+                serde_json::json!({
+                    "accountId": self.operation.account_id,
+                    "sessionId": self.operation.entity_key,
+                    "kind": operation_kind_label(self.operation.kind),
+                    "error": error,
+                }),
+            );
         }
+        Err(queue_error)
     }
-    let id_for_terminal = id.clone();
-    let _ = storage
-        .run(move |connection| {
-            OperationRepository::mark_terminal(connection, &id_for_terminal, "done", None)
-        })
-        .await;
-    let event = completion_event(consumed);
-    let _ = app.emit(event, serde_json::json!({ "accountId": account_id, "sessionId": operation.entity_key, "draftId": draft_id }));
-    Ok(())
 }
 
 async fn execute_gmail(
     client: &GmailClient,
     payload: &DraftOperationPayload,
     raw: &[u8],
-) -> Result<(GmailMessage, bool, String), GmailError> {
+) -> Result<GmailDraftOutcome, GmailError> {
     match payload.mode {
         DraftOperationMode::Create => {
             let draft_id = client
                 .create_draft(raw, payload.thread_id.as_deref())
                 .await?;
             let full = client.draft(&draft_id).await?;
-            Ok((full.message, false, full.id))
+            Ok(GmailDraftOutcome {
+                message: full.message,
+                consumed: false,
+                draft_id: full.id,
+            })
         }
         DraftOperationMode::Update => {
             let draft_id = payload
@@ -604,16 +684,32 @@ async fn execute_gmail(
                 .clone()
                 .expect("update carries an existing draft id");
             client
-                .update_draft(&draft_id, raw, payload.thread_id.as_deref())
+                .update_draft(
+                    &draft_id,
+                    crate::gmail::DraftContent {
+                        raw: raw,
+                        thread_id: payload.thread_id.as_deref(),
+                    },
+                )
                 .await?;
             let full = client.draft(&draft_id).await?;
-            Ok((full.message, false, full.id))
+            Ok(GmailDraftOutcome {
+                message: full.message,
+                consumed: false,
+                draft_id: full.id,
+            })
         }
         DraftOperationMode::Send => {
             let draft_id = match &payload.draft_id {
                 Some(draft_id) => {
                     client
-                        .update_draft(draft_id, raw, payload.thread_id.as_deref())
+                        .update_draft(
+                            draft_id,
+                            crate::gmail::DraftContent {
+                                raw: raw,
+                                thread_id: payload.thread_id.as_deref(),
+                            },
+                        )
                         .await?;
                     draft_id.clone()
                 }
@@ -624,9 +720,12 @@ async fn execute_gmail(
                 }
             };
             let sent_id = client.send_draft(&draft_id).await?;
-
             let message = client.message(&sent_id).await?;
-            Ok((message, true, draft_id))
+            Ok(GmailDraftOutcome {
+                message: message,
+                consumed: true,
+                draft_id: draft_id,
+            })
         }
     }
 }

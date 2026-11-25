@@ -1,100 +1,73 @@
-use std::sync::Arc;
+use serde::Deserialize;
+use tauri::Runtime;
 
-use tauri::State;
+use crate::ipc::{AppServices, CommandPayload};
 
-use crate::storage::{OperationRepository, Storage};
+use super::{AccountQueueSnapshot, PauseScope};
 
-use super::{recovered_queue_operation, AccountQueueSnapshot, PauseScope, QueueEngine};
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetQueuePausedPayload {
+    pub scope: PauseScope,
+    pub paused: bool,
+}
 
 #[tauri::command]
-pub async fn read_queue_operations(
-    queue: State<'_, Arc<QueueEngine>>,
+pub async fn read_queue_operations<R: Runtime>(
+    services: AppServices<'_, R>,
 ) -> Result<Vec<AccountQueueSnapshot>, String> {
-    Ok(queue.snapshot().await)
+    Ok(services.queue()?.snapshot().await)
 }
 
 #[tauri::command]
-pub async fn cancel_queue_operation(
-    queue: State<'_, Arc<QueueEngine>>,
-    storage: State<'_, Storage>,
+pub async fn cancel_queue_operation<R: Runtime>(
+    services: AppServices<'_, R>,
     operation_id: String,
 ) -> Result<bool, String> {
-    let Some(cancelled) = queue.cancel(&operation_id).await else {
-        return Ok(false);
-    };
-    if !cancelled.kind.persists() {
-        return Ok(true);
-    }
-    let id = operation_id.clone();
-    storage
-        .run(move |connection| {
-            OperationRepository::mark_terminal(connection, &id, "cancelled", None)
-        })
+    services
+        .queue()?
+        .cancel_durable(services.storage()?.inner(), operation_id)
         .await
-        .map_err(|error| error.to_string())?;
-    Ok(true)
 }
 
 #[tauri::command]
-pub async fn retry_queue_operation(
-    queue: State<'_, Arc<QueueEngine>>,
-    storage: State<'_, Storage>,
+pub async fn retry_queue_operation<R: Runtime>(
+    services: AppServices<'_, R>,
     operation_id: String,
 ) -> Result<bool, String> {
-    let id = operation_id.clone();
-    let row = storage
-        .run(move |connection| OperationRepository::get(connection, &id))
+    services
+        .queue()?
+        .retry_durable(services.storage()?.inner(), operation_id)
         .await
-        .map_err(|error| error.to_string())?;
-    let Some(row) = row else {
-        return Ok(false);
-    };
-    if row.status != "failed" {
-        return Ok(false);
-    }
-    let Some(operation) = recovered_queue_operation(&row) else {
-        return Ok(false);
-    };
-    queue
-        .enqueue(operation)
-        .await
-        .map_err(|error| error.to_owned())?;
-    Ok(true)
 }
 
 #[tauri::command]
-pub async fn retry_failed_operations(
-    queue: State<'_, Arc<QueueEngine>>,
-    storage: State<'_, Storage>,
+pub async fn retry_failed_operations<R: Runtime>(
+    services: AppServices<'_, R>,
     account_id: Option<String>,
 ) -> Result<usize, String> {
-    let rows = storage
-        .run(move |connection| {
-            OperationRepository::failed_durable(connection, account_id.as_deref())
-        })
+    services
+        .queue()?
+        .retry_all_failed(services.storage()?.inner(), account_id)
         .await
-        .map_err(|error| error.to_string())?;
-    let mut retried = 0usize;
-    for row in rows {
-        if let Some(operation) = recovered_queue_operation(&row) {
-            if queue.enqueue(operation).await.is_ok() {
-                retried += 1;
-            }
-        }
-    }
-    Ok(retried)
 }
 
 #[tauri::command]
-pub fn clear_queue_history(queue: State<'_, Arc<QueueEngine>>, account_id: Option<String>) {
-    queue.clear_history(account_id.as_deref());
+pub fn clear_queue_history<R: Runtime>(
+    services: AppServices<'_, R>,
+    account_id: Option<String>,
+) -> Result<(), String> {
+    services.queue()?.clear_history(account_id.as_deref());
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn set_queue_paused(
-    queue: State<'_, Arc<QueueEngine>>,
-    scope: PauseScope,
-    paused: bool,
+pub async fn set_queue_paused<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(payload): CommandPayload<SetQueuePausedPayload>,
 ) -> Result<bool, String> {
-    Ok(queue.set_paused(&scope, paused).await)
+    Ok(services
+        .queue()?
+        .set_paused(&payload.scope, payload.paused)
+        .await)
 }

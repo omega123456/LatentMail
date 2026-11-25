@@ -2,12 +2,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
     ai::{
-        chunker,
+        chunker::{self, ChunkMessage},
         fusion::{self, Selected},
         planner, prompts,
         provider::Provider,
     },
-    storage::{PassageSource, RetrievalFilters, RetrievalRepository, Storage, StorageError},
+    storage::{
+        CandidateQuery, LexicalQuery, PassageSource, RecencyQuery, RetrievalFilters,
+        RetrievalRepository, Storage, StorageError,
+    },
 };
 
 pub const CANDIDATE_BUDGET: i64 = 1360;
@@ -77,6 +80,24 @@ pub struct RetrievalRequest<'a> {
     pub history: &'a [HistoryMessage],
 }
 
+pub struct RetrieveContext<'a> {
+    pub provider: &'a Provider,
+    pub storage: &'a Storage,
+    pub cancel: &'a AtomicBool,
+}
+
+struct ArmTarget<'a> {
+    storage: &'a Storage,
+    account_id: &'a str,
+    question: &'a str,
+}
+
+struct OwnedArmTarget {
+    storage: Storage,
+    account_id: String,
+    question: String,
+}
+
 enum Arm {
     Vector(Vec<f32>, RetrievalFilters),
     Lexical(RetrievalFilters),
@@ -89,6 +110,23 @@ enum ArmOutput {
     Sequences(Vec<i64>),
 }
 
+struct SplitArms {
+    outputs: Vec<ArmOutput>,
+    failure: Option<String>,
+}
+
+struct UnfilteredPass {
+    vector: Vec<f32>,
+    outcomes: Vec<Result<ArmOutput, String>>,
+}
+
+struct PlannedVectorInput<'a> {
+    embedding_model: &'a str,
+    query: &'a str,
+    contextual: bool,
+    fallback: Vec<f32>,
+}
+
 fn storage_error(error: StorageError) -> String {
     error.to_string()
 }
@@ -97,21 +135,23 @@ fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::SeqCst)
 }
 
-async fn run_arm(
-    storage: Storage,
-    account_id: String,
-    question: String,
-    arm: Arm,
-) -> Result<ArmOutput, String> {
+async fn run_arm(target: OwnedArmTarget, arm: Arm) -> Result<ArmOutput, String> {
+    let OwnedArmTarget {
+        storage,
+        account_id,
+        question,
+    } = target;
     storage
         .run(move |connection| match arm {
             Arm::Vector(vector, filters) => Ok(ArmOutput::Passages(
                 RetrievalRepository::candidates(
                     connection,
-                    &account_id,
-                    &vector,
-                    CANDIDATE_BUDGET,
-                    &filters,
+                    &CandidateQuery {
+                        account_id: &account_id,
+                        vector: &vector,
+                        limit: CANDIDATE_BUDGET,
+                        filters: &filters,
+                    },
                 )?
                 .into_iter()
                 .map(|candidate| Selected {
@@ -125,28 +165,34 @@ async fn run_arm(
             Arm::Lexical(filters) => Ok(ArmOutput::Sequences(
                 RetrievalRepository::lexical_relevance(
                     connection,
-                    &account_id,
-                    &question,
-                    LEXICAL_LIMIT,
-                    &filters,
+                    &LexicalQuery {
+                        account_id: &account_id,
+                        question: &question,
+                        limit: LEXICAL_LIMIT,
+                        filters: &filters,
+                    },
                 )?,
             )),
             Arm::Chronological(filters) => Ok(ArmOutput::Sequences(
                 RetrievalRepository::lexical_chronological(
                     connection,
-                    &account_id,
-                    &question,
-                    CHRONOLOGICAL_LIMIT,
-                    &filters,
+                    &LexicalQuery {
+                        account_id: &account_id,
+                        question: &question,
+                        limit: CHRONOLOGICAL_LIMIT,
+                        filters: &filters,
+                    },
                 )?,
             )),
             Arm::Recency(filters, ascending) => {
                 Ok(ArmOutput::Sequences(RetrievalRepository::recency(
                     connection,
-                    &account_id,
-                    RECENCY_LIMIT,
-                    &filters,
-                    ascending,
+                    &RecencyQuery {
+                        account_id: &account_id,
+                        limit: RECENCY_LIMIT,
+                        filters: &filters,
+                        ascending: ascending,
+                    },
                 )?))
             }
         })
@@ -154,18 +200,15 @@ async fn run_arm(
         .map_err(storage_error)
 }
 
-async fn run_arms(
-    storage: &Storage,
-    account_id: &str,
-    question: &str,
-    arms: Vec<Arm>,
-) -> Vec<Result<ArmOutput, String>> {
+async fn run_arms(target: ArmTarget<'_>, arms: Vec<Arm>) -> Vec<Result<ArmOutput, String>> {
     let mut set = tokio::task::JoinSet::new();
     for (index, arm) in arms.into_iter().enumerate() {
-        let storage = storage.clone();
-        let account_id = account_id.to_owned();
-        let question = question.to_owned();
-        set.spawn(async move { (index, run_arm(storage, account_id, question, arm).await) });
+        let owned = OwnedArmTarget {
+            storage: target.storage.clone(),
+            account_id: target.account_id.to_owned(),
+            question: target.question.to_owned(),
+        };
+        set.spawn(async move { (index, run_arm(owned, arm).await) });
     }
     let mut collected: Vec<(usize, Result<ArmOutput, String>)> = Vec::new();
     while let Some(joined) = set.join_next().await {
@@ -192,7 +235,7 @@ fn sequences(output: &ArmOutput) -> Vec<i64> {
     }
 }
 
-fn split(outcomes: Vec<Result<ArmOutput, String>>) -> (Vec<ArmOutput>, Option<String>) {
+fn split(outcomes: Vec<Result<ArmOutput, String>>) -> SplitArms {
     let mut outputs = Vec::new();
     let mut failure = None;
     for outcome in outcomes {
@@ -201,7 +244,10 @@ fn split(outcomes: Vec<Result<ArmOutput, String>>) -> (Vec<ArmOutput>, Option<St
             Err(error) => failure = failure.or(Some(error)),
         }
     }
-    (outputs, failure)
+    SplitArms {
+        outputs: outputs,
+        failure: failure,
+    }
 }
 
 fn scored(outputs: &[ArmOutput]) -> Vec<Selected> {
@@ -228,14 +274,14 @@ fn assemble(selected: &[Selected], sources: &[PassageSource]) -> Vec<Passage> {
         .map(|source| {
             (
                 source.message_seq,
-                chunker::chunks(
-                    &source.sender,
-                    &source.recipients,
-                    &source.subject,
-                    source.truncated_body.as_deref(),
-                    source.plain_body.as_deref(),
-                    source.html_body.as_deref(),
-                ),
+                chunker::chunks(&ChunkMessage {
+                    sender: &source.sender,
+                    recipients: &source.recipients,
+                    subject: &source.subject,
+                    truncated_body: source.truncated_body.as_deref(),
+                    plain_body: source.plain_body.as_deref(),
+                    html_body: source.html_body.as_deref(),
+                }),
             )
         })
         .collect();
@@ -296,13 +342,20 @@ async fn unfiltered_pass(
     provider: &Provider,
     storage: &Storage,
     request: &RetrievalRequest<'_>,
-) -> Result<(Vec<f32>, Vec<Result<ArmOutput, String>>), String> {
+) -> Result<UnfilteredPass, String> {
+    let target = ArmTarget {
+        storage: storage,
+        account_id: request.account_id,
+        question: request.question,
+    };
     let (embedded, lexical) = futures_util::future::join(
         provider.embed(request.embedding_model, vec![request.question.to_owned()]),
         run_arms(
-            storage,
-            request.account_id,
-            request.question,
+            ArmTarget {
+                storage: target.storage,
+                account_id: target.account_id,
+                question: target.question,
+            },
             vec![Arm::Lexical(RetrievalFilters::default())],
         ),
     )
@@ -312,28 +365,26 @@ async fn unfiltered_pass(
         return Err("Provider returned an incomplete embedding batch".to_owned());
     };
     let mut outputs = run_arms(
-        storage,
-        request.account_id,
-        request.question,
+        target,
         vec![Arm::Vector(vector.clone(), RetrievalFilters::default())],
     )
     .await;
     outputs.extend(lexical);
-    Ok((vector, outputs))
+    Ok(UnfilteredPass {
+        vector: vector,
+        outcomes: outputs,
+    })
 }
 
 async fn resolve_planned_vector(
     provider: &Provider,
-    embedding_model: &str,
-    query: &str,
-    contextual: bool,
-    fallback: Vec<f32>,
+    input: PlannedVectorInput<'_>,
 ) -> Option<Vec<f32>> {
-    if !contextual {
-        return Some(fallback);
+    if !input.contextual {
+        return Some(input.fallback);
     }
     provider
-        .embed(embedding_model, vec![query.to_owned()])
+        .embed(input.embedding_model, vec![input.query.to_owned()])
         .await
         .ok()
         .and_then(|vectors| vectors.into_iter().next())
@@ -352,33 +403,40 @@ fn select_outputs(
 }
 
 pub async fn retrieve(
-    provider: &Provider,
-    storage: &Storage,
+    context: RetrieveContext<'_>,
     request: &RetrievalRequest<'_>,
-    cancel: &AtomicBool,
 ) -> Result<Retrieval, String> {
     let account = request.account_id.to_owned();
-    let folders = storage
+    let folders = context
+        .storage
         .run(move |connection| RetrievalRepository::folder_names(connection, &account))
         .await
         .map_err(storage_error)?;
-    if cancelled(cancel) {
+    if cancelled(context.cancel) {
         return Ok(Retrieval::Cancelled);
     }
     let (base, plan) = futures_util::future::join(
-        unfiltered_pass(provider, storage, request),
-        planner::plan(provider, request, &folders),
+        unfiltered_pass(context.provider, context.storage, request),
+        planner::plan(context.provider, request, &folders),
     )
     .await;
-    let (vector, outcomes) = base?;
-    if cancelled(cancel) {
+    let base = base?;
+    if cancelled(context.cancel) {
         return Ok(Retrieval::Cancelled);
     }
     let query = plan.query.as_deref().unwrap_or(request.question);
     let contextual = plan.query.is_some();
-    let planned_vector =
-        resolve_planned_vector(provider, request.embedding_model, query, contextual, vector).await;
-    if cancelled(cancel) {
+    let planned_vector = resolve_planned_vector(
+        context.provider,
+        PlannedVectorInput {
+            embedding_model: request.embedding_model,
+            query: query,
+            contextual: contextual,
+            fallback: base.vector,
+        },
+    )
+    .await;
+    if cancelled(context.cancel) {
         return Ok(Retrieval::Cancelled);
     }
     let constrained = !plan.filters.is_empty();
@@ -398,15 +456,23 @@ pub async fn retrieve(
     }
     let mut narrowed: Vec<Result<ArmOutput, String>> = Vec::new();
     if !extra.is_empty() {
-        narrowed = run_arms(storage, request.account_id, query, extra).await;
-        if cancelled(cancel) {
+        narrowed = run_arms(
+            ArmTarget {
+                storage: context.storage,
+                account_id: request.account_id,
+                question: query,
+            },
+            extra,
+        )
+        .await;
+        if cancelled(context.cancel) {
             return Ok(Retrieval::Cancelled);
         }
     }
-    let (unfiltered, unfiltered_failure) = split(outcomes);
-    let (filtered, filtered_failure) = split(narrowed);
-    let outputs = select_outputs(unfiltered, filtered, prefer_filtered);
-    if let (true, Some(error)) = (outputs.is_empty(), unfiltered_failure.or(filtered_failure)) {
+    let unfiltered = split(base.outcomes);
+    let filtered = split(narrowed);
+    let outputs = select_outputs(unfiltered.outputs, filtered.outputs, prefer_filtered);
+    if let (true, Some(error)) = (outputs.is_empty(), unfiltered.failure.or(filtered.failure)) {
         return Err(error);
     }
     let arms: Vec<Vec<i64>> = outputs.iter().map(sequences).collect();
@@ -414,12 +480,13 @@ pub async fn retrieve(
     let selected = fusion::select(&order, &scored(&outputs), PASSAGE_LIMIT);
     let wanted: Vec<i64> = selected.iter().map(|entry| entry.message_seq).collect();
     let account = request.account_id.to_owned();
-    let sources = storage
+    let sources = context
+        .storage
         .run(move |connection| RetrievalRepository::sources(connection, &account, &wanted))
         .await
         .map_err(storage_error)?;
     let passages = assemble(&selected, &sources);
-    if cancelled(cancel) {
+    if cancelled(context.cancel) {
         return Ok(Retrieval::Cancelled);
     }
     if passages.is_empty() {

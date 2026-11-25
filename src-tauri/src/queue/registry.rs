@@ -84,6 +84,16 @@ pub enum PauseScope {
     },
 }
 
+pub struct TerminalTransition {
+    pub status: OperationStatus,
+    pub error: Option<String>,
+}
+
+pub struct LaneTarget<'a> {
+    pub account_id: &'a str,
+    pub lane: Lane,
+}
+
 #[derive(Default)]
 struct Inner {
     operations: HashMap<String, OperationRecord>,
@@ -177,21 +187,17 @@ impl QueueRegistry {
         record.updated_at = now.timestamp();
     }
 
-    pub fn transition_terminal(
-        &self,
-        operation: &QueueOperation,
-        status: OperationStatus,
-        error: Option<String>,
-    ) {
+    pub fn transition_terminal(&self, operation: &QueueOperation, transition: TerminalTransition) {
         let mut inner = self.lock();
         let Some(mut record) = inner.operations.remove(&operation.id) else {
             return;
         };
         let now = chrono::Utc::now().timestamp();
-        record.status = status;
+        record.status = transition.status;
         record.attempts = operation.attempts;
-        record.error = error;
-        record.retryable = status == OperationStatus::Failed && operation.kind.persists();
+        record.error = transition.error;
+        record.retryable =
+            transition.status == OperationStatus::Failed && operation.kind.persists();
         record.next_attempt_at = None;
         record.updated_at = now;
         inner.push_history(record);
@@ -224,9 +230,9 @@ impl QueueRegistry {
         inner.account_paused.remove(account_id)
     }
 
-    pub fn set_lane_paused(&self, account_id: &str, lane: Lane, paused: bool) -> bool {
+    pub fn set_lane_paused(&self, target: LaneTarget<'_>, paused: bool) -> bool {
         let mut inner = self.lock();
-        let key = (account_id.to_owned(), lane);
+        let key = (target.account_id.to_owned(), target.lane);
         if paused {
             return inner.lane_paused.insert(key);
         }

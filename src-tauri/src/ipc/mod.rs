@@ -1,3 +1,7 @@
+pub mod command;
+
+pub use command::{AccountIdRequest, AccountMessageRequest, AppServices, CommandPayload};
+
 use crate::queue::{QueueEngine, QueueSummary};
 use tauri::{AppHandle, Emitter, Runtime, Url};
 #[cfg(not(feature = "test-utils"))]
@@ -12,6 +16,37 @@ pub fn health_response() -> HealthCheck {
     HealthCheck { status: "ok" }
 }
 
+fn open_validated_url<R: Runtime>(app: AppHandle<R>, url: &str) -> Result<(), String> {
+    let url = validate_external_url(url)?;
+    open_url(app, url)
+}
+
+fn log_frontend_message(level: FrontendLogLevel, message: &str) {
+    match level {
+        FrontendLogLevel::Debug => tracing::debug!(target: "frontend", "{message}"),
+        FrontendLogLevel::Info => tracing::info!(target: "frontend", "{message}"),
+        FrontendLogLevel::Warn => tracing::warn!(target: "frontend", "{message}"),
+        FrontendLogLevel::Error => tracing::error!(target: "frontend", "{message}"),
+    }
+}
+
+fn apply_queue_pause_state<R: Runtime>(
+    app: &AppHandle<R>,
+    queue: &QueueEngine,
+    paused: bool,
+) -> Result<QueueSummary, String> {
+    if paused {
+        queue.pause();
+    }
+    if !paused {
+        queue.resume();
+    }
+    let summary = queue.summary();
+    app.emit(crate::events::QUEUE_SUMMARY, &summary)
+        .map_err(|error| error.to_string())?;
+    Ok(summary)
+}
+
 #[tauri::command]
 pub fn health_check() -> HealthCheck {
     health_response()
@@ -19,8 +54,7 @@ pub fn health_check() -> HealthCheck {
 
 #[tauri::command]
 pub fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
-    let url = validate_external_url(&url)?;
-    open_url(app, url)
+    open_validated_url(app, &url)
 }
 
 #[derive(serde::Deserialize)]
@@ -34,41 +68,24 @@ pub enum FrontendLogLevel {
 
 #[tauri::command]
 pub fn write_frontend_log(level: FrontendLogLevel, message: String) {
-    match level {
-        FrontendLogLevel::Debug => tracing::debug!(target: "frontend", "{}", message),
-        FrontendLogLevel::Info => tracing::info!(target: "frontend", "{}", message),
-        FrontendLogLevel::Warn => tracing::warn!(target: "frontend", "{}", message),
-        FrontendLogLevel::Error => tracing::error!(target: "frontend", "{}", message),
-    }
+    log_frontend_message(level, &message);
 }
 
 #[tauri::command]
-pub fn pause_queue<R: Runtime>(
-    app: AppHandle<R>,
-    queue: tauri::State<'_, std::sync::Arc<QueueEngine>>,
+pub fn pause_queue<R: Runtime>(services: AppServices<'_, R>) -> Result<QueueSummary, String> {
+    apply_queue_pause_state(services.app(), services.queue()?.inner(), true)
+}
+
+#[tauri::command]
+pub fn resume_queue<R: Runtime>(services: AppServices<'_, R>) -> Result<QueueSummary, String> {
+    apply_queue_pause_state(services.app(), services.queue()?.inner(), false)
+}
+
+#[tauri::command]
+pub fn read_queue_summary<R: Runtime>(
+    services: AppServices<'_, R>,
 ) -> Result<QueueSummary, String> {
-    queue.pause();
-    let summary = queue.summary();
-    app.emit(crate::events::QUEUE_SUMMARY, &summary)
-        .map_err(|error| error.to_string())?;
-    Ok(summary)
-}
-
-#[tauri::command]
-pub fn resume_queue<R: Runtime>(
-    app: AppHandle<R>,
-    queue: tauri::State<'_, std::sync::Arc<QueueEngine>>,
-) -> Result<QueueSummary, String> {
-    queue.resume();
-    let summary = queue.summary();
-    app.emit(crate::events::QUEUE_SUMMARY, &summary)
-        .map_err(|error| error.to_string())?;
-    Ok(summary)
-}
-
-#[tauri::command]
-pub fn read_queue_summary(queue: tauri::State<'_, std::sync::Arc<QueueEngine>>) -> QueueSummary {
-    queue.summary()
+    Ok(services.queue()?.summary())
 }
 
 #[cfg(not(feature = "test-utils"))]

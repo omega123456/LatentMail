@@ -4,21 +4,37 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
+    attachments::MessageTarget,
     auth::AuthService,
-    gmail::labels::resolve_color,
+    compose::{
+        context::ReplyInput,
+        drafts::DraftTarget,
+        staging::{
+            OwnerScope, PartLookup, StageAttachmentRequest, StageBytesRequest, StagePathRequest,
+        },
+    },
+    gmail::{labels::resolve_color, AccountClientConfig},
+    ipc::{AccountIdRequest, AccountMessageRequest, AppServices, CommandPayload},
     sanitize,
     storage::{
-        addresses::split_addresses, ConversationEntryScope, LabelColor, LabelRepository,
-        MessageRepository, Storage, ThreadRepository, TraversalCursorRepository, TraversalKind,
+        addresses::split_addresses, ConversationEntryScope, LabelColor, LabelKey, LabelNameCheck,
+        LabelRepository, MessageBodyUpdate, MessageKey, MessageRepository, Storage, ThreadKey,
+        ThreadPageCursor, ThreadPageQuery, ThreadRepository, TraversalCursorRepository,
+        TraversalKind,
     },
 };
 
 use super::{
     announce::MailChangeAnnouncer,
-    triage::{self, LabelChange},
-    dto::{message_body_dto, message_dto, ImagePolicy, MessageBodyDto, MessageBodyFetchedDto},
-    gmail_base_url, ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto,
-    ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
+    dto::{
+        message_body_dto, message_dto, ImagePolicy, ImagePolicyTarget, MessageBodyDto,
+        MessageBodyFetchedDto, MessageBodyInput, MessageDtoInput,
+    },
+    gmail_base_url,
+    mutations::{DraftMessageRef, LabelDelta, ThreadMutation},
+    triage::{self, LabelChange, MessagesChangeRequest, ThreadsChangeRequest},
+    ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto, ThreadCursor,
+    ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
 };
 
 #[derive(Deserialize)]
@@ -44,6 +60,13 @@ pub struct ComposeDraftRequest {
     editable_body_fingerprint: Option<String>,
     attachments: Vec<ComposeAttachmentRequest>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposeDraftCommand {
+    pub draft: ComposeDraftRequest,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeAttachmentRequest {
@@ -52,12 +75,14 @@ pub struct ComposeAttachmentRequest {
     mime_type: String,
     content_id: Option<String>,
 }
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeQueueAcceptance {
     operation_id: String,
     draft_id: Option<String>,
 }
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HydratedComposeDraft {
@@ -81,6 +106,151 @@ pub struct HydratedComposeDraft {
     attachments: Vec<super::dto::StagedAttachmentDto>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscardDraftRequest {
+    pub account_id: String,
+    pub draft_id: Option<String>,
+    pub session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HydrateDraftRequest {
+    pub account_id: String,
+    pub draft_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LookupContactsRequest {
+    pub account_id: String,
+    pub query: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyContextRequest {
+    pub account_id: String,
+    pub message_id: String,
+    pub account_email: String,
+    pub reply_all: bool,
+    pub forward: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageFromPathRequest {
+    pub account_id: String,
+    pub owner: String,
+    pub path: String,
+    pub mime_type: String,
+    pub content_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageFromBytesRequest {
+    pub account_id: String,
+    pub owner: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub content_id: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseStagedRequest {
+    pub account_id: String,
+    pub owner: String,
+    pub id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListThreadsRequest {
+    pub account_id: String,
+    pub label_id: Option<String>,
+    pub cursor: Option<ThreadCursor>,
+    pub direction: Option<ThreadPageDirection>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadConversationRequest {
+    pub account_id: String,
+    pub thread_id: String,
+    pub image_policy: Option<ImagePolicy>,
+    pub entry_scope: Option<ConversationEntryScope>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadMessageBodyRequest {
+    pub account_id: String,
+    pub message_id: String,
+    pub image_policy: Option<ImagePolicy>,
+    pub entry_scope: Option<ConversationEntryScope>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountThreadRequest {
+    pub account_id: String,
+    pub thread_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutateThreadsRequest {
+    pub account_id: String,
+    pub thread_ids: Vec<String>,
+    pub add: Vec<String>,
+    pub remove: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutateMessagesRequest {
+    pub account_id: String,
+    pub message_ids: Vec<String>,
+    pub add: Vec<String>,
+    pub remove: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLabelRequest {
+    pub account_id: String,
+    pub name: String,
+    pub color_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameLabelRequest {
+    pub account_id: String,
+    pub label_id: String,
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecolorLabelRequest {
+    pub account_id: String,
+    pub label_id: String,
+    pub color_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteLabelRequest {
+    pub account_id: String,
+    pub label_id: String,
+}
+
 fn compose_operation_prefix(send: bool) -> &'static str {
     if send {
         return "send";
@@ -101,14 +271,15 @@ fn compose_operation_mode(
     crate::compose::drafts::DraftOperationMode::Create
 }
 
-async fn admit_compose(
-    queue: &std::sync::Arc<crate::queue::QueueEngine>,
-    storage: &Storage,
-    staging: &std::sync::Arc<crate::compose::staging::Staging>,
-    coalescer: &std::sync::Arc<crate::compose::drafts::SaveCoalescer>,
+async fn admit_compose<R: Runtime>(
+    services: AppServices<'_, R>,
     request: ComposeDraftRequest,
     send: bool,
 ) -> Result<ComposeQueueAcceptance, String> {
+    let queue = services.queue()?;
+    let storage = services.storage()?;
+    let staging = services.staging()?;
+    let coalescer = services.coalescer()?;
     let operation_id = crate::compose::drafts::generate_id(compose_operation_prefix(send));
 
     let owners: Vec<&str> = request
@@ -121,14 +292,14 @@ async fn admit_compose(
         .attachments
         .iter()
         .map(|part| {
-            staging.part(
-                &request.account_id,
-                &owners,
-                &part.id,
-                part.filename.clone(),
-                part.mime_type.clone(),
-                part.content_id.clone(),
-            )
+            staging.part(PartLookup {
+                account_id: &request.account_id,
+                owners: &owners,
+                id: &part.id,
+                filename: part.filename.clone(),
+                mime_type: part.mime_type.clone(),
+                content_id: part.content_id.clone(),
+            })
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
@@ -152,11 +323,11 @@ async fn admit_compose(
         quote_plain: request.quote_plain,
         coalescing_generation: 0,
     };
-    let services = crate::compose::drafts::AdmissionServices {
-        queue,
-        storage,
-        staging,
-        coalescer,
+    let admission_services = crate::compose::drafts::AdmissionServices {
+        queue: queue.inner(),
+        storage: storage.inner(),
+        staging: staging.inner(),
+        coalescer: coalescer.inner(),
     };
     let admission = crate::compose::drafts::DraftAdmission {
         id: operation_id.clone(),
@@ -167,48 +338,23 @@ async fn admit_compose(
             .unwrap_or(request.session_id.clone()),
         payload: payload,
     };
-    crate::compose::drafts::admit(&services, admission, &parts).await?;
+    crate::compose::drafts::admit(&admission_services, admission, &parts).await?;
     Ok(ComposeQueueAcceptance {
         operation_id: operation_id,
         draft_id: request.draft_id,
     })
 }
 
-#[tauri::command]
-pub async fn save_compose_draft(
-    queue: tauri::State<'_, std::sync::Arc<crate::queue::QueueEngine>>,
-    storage: tauri::State<'_, Storage>,
-    staging: tauri::State<'_, std::sync::Arc<crate::compose::staging::Staging>>,
-    coalescer: tauri::State<'_, std::sync::Arc<crate::compose::drafts::SaveCoalescer>>,
-    draft: ComposeDraftRequest,
-) -> Result<ComposeQueueAcceptance, String> {
-    admit_compose(&queue, &storage, &staging, &coalescer, draft, false).await
-}
-
-#[tauri::command]
-pub async fn send_compose_draft(
-    queue: tauri::State<'_, std::sync::Arc<crate::queue::QueueEngine>>,
-    storage: tauri::State<'_, Storage>,
-    staging: tauri::State<'_, std::sync::Arc<crate::compose::staging::Staging>>,
-    coalescer: tauri::State<'_, std::sync::Arc<crate::compose::drafts::SaveCoalescer>>,
-    draft: ComposeDraftRequest,
-) -> Result<ComposeQueueAcceptance, String> {
-    admit_compose(&queue, &storage, &staging, &coalescer, draft, true).await
-}
-
-#[tauri::command]
-pub async fn discard_compose_draft<R: Runtime>(
-    services: super::services::GmailServices<'_, R>,
-    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
-    account_id: String,
-    draft_id: Option<String>,
-    session_id: String,
+async fn run_discard_compose_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: DiscardDraftRequest,
 ) -> Result<(), String> {
-    services
-        .storage
+    let storage = services.storage()?;
+    let staging = services.staging()?;
+    storage
         .run({
-            let account_id = account_id.clone();
-            let session_id = session_id.clone();
+            let account_id = request.account_id.clone();
+            let session_id = request.session_id.clone();
             move |connection| {
                 crate::storage::OperationRepository::discard_session_creates(
                     connection,
@@ -219,35 +365,94 @@ pub async fn discard_compose_draft<R: Runtime>(
         })
         .await
         .map_err(|error| error.to_string())?;
-    let Some(draft_id) = draft_id else {
-        let _ = staging.release_owner(&account_id, &session_id);
+    let Some(draft_id) = request.draft_id else {
+        let _ = staging.release_owner(&request.account_id, &request.session_id);
         return Ok(());
     };
-    let client = services.client(&account_id).await?;
-    crate::compose::drafts::delete(&client, &services.storage, &account_id, &draft_id).await?;
-    let _ = staging.release_owner(&account_id, &draft_id);
-    let _ = staging.release_owner(&account_id, &session_id);
+    let client = services.gmail_client(&request.account_id).await?;
+    crate::compose::drafts::delete(
+        &client,
+        storage.inner(),
+        DraftTarget {
+            account_id: &request.account_id,
+            draft_id: &draft_id,
+        },
+    )
+    .await?;
+    let _ = staging.release_owner(&request.account_id, &draft_id);
+    let _ = staging.release_owner(&request.account_id, &request.session_id);
     Ok(())
 }
 
-#[tauri::command]
-pub async fn hydrate_compose_draft<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
-    account_id: String,
-    draft_id: String,
+struct HydratedAttachmentContext<'a> {
+    staging: &'a crate::compose::staging::Staging,
+    client: &'a crate::gmail::GmailClient,
+    account_id: &'a str,
+    draft_id: &'a str,
+    message_id: &'a str,
+}
+
+async fn stage_hydrated_attachment(
+    context: &HydratedAttachmentContext<'_>,
+    part: &crate::gmail::AttachmentPart,
+) -> Result<crate::compose::staging::StagedPart, String> {
+    let scope = OwnerScope {
+        account_id: context.account_id,
+        owner: context.draft_id,
+    };
+    if let Some(bytes) = &part.inline_bytes {
+        let descriptor = crate::compose::staging::StagedPart {
+            id: crate::compose::drafts::generate_id("staged"),
+            filename: part.filename.clone(),
+            mime_type: part.mime_type.clone(),
+            path: std::path::PathBuf::new(),
+            content_id: None,
+            size: 0,
+        };
+        return context
+            .staging
+            .stage_bytes(StageBytesRequest {
+                scope: scope,
+                descriptor: &descriptor,
+                bytes: bytes,
+            })
+            .map_err(|error| error.to_string());
+    }
+    context
+        .staging
+        .stage_attachment(
+            context.client,
+            StageAttachmentRequest {
+                scope: scope,
+                source: crate::compose::staging::GmailAttachmentSource {
+                    message_id: context.message_id,
+                    attachment_id: &part.attachment_id,
+                },
+                descriptor: crate::compose::staging::NewStagedPart {
+                    id: crate::compose::drafts::generate_id("staged"),
+                    filename: part.filename.clone(),
+                    mime_type: part.mime_type.clone(),
+                    content_id: None,
+                },
+            },
+        )
+        .await
+}
+
+async fn run_hydrate_compose_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: HydrateDraftRequest,
 ) -> Result<HydratedComposeDraft, String> {
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    let draft = crate::compose::drafts::hydrate(&client, &draft_id)
+    let storage = services.storage()?;
+    let staging = services.staging()?;
+    let client = services.gmail_client(&request.account_id).await?;
+    let draft = crate::compose::drafts::hydrate(&client, &request.draft_id)
         .await
         .map_err(|error| error.to_string())?;
     let metadata = storage
         .run({
-            let account_id = account_id.clone();
-            let draft_id = draft_id.clone();
+            let account_id = request.account_id.clone();
+            let draft_id = request.draft_id.clone();
             move |connection| {
                 crate::storage::ComposeDraftMetadataRepository::get(
                     connection,
@@ -258,17 +463,16 @@ pub async fn hydrate_compose_draft<R: Runtime>(
         })
         .await
         .map_err(|error| error.to_string())?;
+    let attachment_context = HydratedAttachmentContext {
+        staging: staging.as_ref(),
+        client: &client,
+        account_id: &request.account_id,
+        draft_id: &request.draft_id,
+        message_id: &draft.message.id,
+    };
     let mut attachments = Vec::new();
     for part in &draft.message.attachment_parts {
-        let staged = stage_hydrated_attachment(
-            staging.as_ref(),
-            &client,
-            &account_id,
-            &draft_id,
-            &draft.message.id,
-            part,
-        )
-        .await?;
+        let staged = stage_hydrated_attachment(&attachment_context, part).await?;
         attachments.push(staged.into());
     }
     let quote_html = metadata.as_ref().and_then(|value| value.quote_html.clone());
@@ -283,8 +487,8 @@ pub async fn hydrate_compose_draft<R: Runtime>(
                 })
     });
     if metadata.is_some() && !boundary_matches {
-        let account = account_id.clone();
-        let draft = draft_id.clone();
+        let account = request.account_id.clone();
+        let draft = request.draft_id.clone();
         storage
             .run(move |connection| {
                 crate::storage::ComposeDraftMetadataRepository::remove(connection, &account, &draft)
@@ -297,8 +501,8 @@ pub async fn hydrate_compose_draft<R: Runtime>(
     let html = hydrated_editable_html(boundary_matches, quote_html.as_deref(), &remote_html);
     Ok(HydratedComposeDraft {
         session_id: crate::compose::drafts::generate_id("compose"),
-        account_id: account_id,
-        draft_id: draft_id,
+        account_id: request.account_id,
+        draft_id: request.draft_id,
         from: draft.message.sender,
         to: split_addresses(&draft.message.to_recipients),
         cc: split_addresses(&draft.message.cc_recipients),
@@ -331,46 +535,6 @@ pub async fn hydrate_compose_draft<R: Runtime>(
     })
 }
 
-async fn stage_hydrated_attachment(
-    staging: &crate::compose::staging::Staging,
-    client: &crate::gmail::GmailClient,
-    account_id: &str,
-    draft_id: &str,
-    message_id: &str,
-    part: &crate::gmail::AttachmentPart,
-) -> Result<crate::compose::staging::StagedPart, String> {
-    if let Some(bytes) = &part.inline_bytes {
-        let descriptor = crate::compose::staging::StagedPart {
-            id: crate::compose::drafts::generate_id("staged"),
-            filename: part.filename.clone(),
-            mime_type: part.mime_type.clone(),
-            path: std::path::PathBuf::new(),
-            content_id: None,
-            size: 0,
-        };
-        return staging
-            .stage_bytes(account_id, draft_id, &descriptor, bytes)
-            .map_err(|error| error.to_string());
-    }
-    staging
-        .stage_attachment(
-            client,
-            account_id,
-            draft_id,
-            crate::compose::staging::GmailAttachmentSource {
-                message_id: message_id,
-                attachment_id: &part.attachment_id,
-            },
-            crate::compose::staging::NewStagedPart {
-                id: crate::compose::drafts::generate_id("staged"),
-                filename: part.filename.clone(),
-                mime_type: part.mime_type.clone(),
-                content_id: None,
-            },
-        )
-        .await
-}
-
 fn hydrated_editable_html(
     boundary_matches: bool,
     quote_html: Option<&str>,
@@ -385,11 +549,7 @@ fn hydrated_editable_html(
     remote_html.to_owned()
 }
 
-#[tauri::command]
-pub async fn list_labels(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-) -> Result<Vec<LabelDto>, String> {
+async fn run_list_labels(storage: &Storage, account_id: String) -> Result<Vec<LabelDto>, String> {
     let (labels, unread_counts) = string_try!(
         storage
             .run(move |connection| Ok((
@@ -407,18 +567,18 @@ pub async fn list_labels(
         .collect())
 }
 
-#[tauri::command]
-pub async fn lookup_contacts(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    query: String,
+async fn run_lookup_contacts(
+    storage: &Storage,
+    request: LookupContactsRequest,
 ) -> Result<Vec<super::dto::ContactSuggestionDto>, String> {
-    if query.trim().chars().count() < 2 {
+    if request.query.trim().chars().count() < 2 {
         return Ok(Vec::new());
     }
     let contacts = string_try!(
         storage
-            .run(move |connection| crate::contacts::lookup(connection, &account_id, &query))
+            .run(move |connection| {
+                crate::contacts::lookup(connection, &request.account_id, &request.query)
+            })
             .await
     );
     Ok(contacts
@@ -430,24 +590,23 @@ pub async fn lookup_contacts(
         .collect())
 }
 
-#[tauri::command]
-pub async fn reply_context(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    message_id: String,
-    account_email: String,
-    reply_all: bool,
-    forward: bool,
+async fn run_reply_context(
+    storage: &Storage,
+    request: ReplyContextRequest,
 ) -> Result<crate::compose::context::ReplyContext, String> {
     let context = string_try!(
         storage
             .run(move |connection| {
-                MessageRepository::compose_context(connection, &account_id, &message_id)?
-                    .ok_or(rusqlite::Error::QueryReturnedNoRows)
+                MessageRepository::compose_context(
+                    connection,
+                    &request.account_id,
+                    &request.message_id,
+                )?
+                .ok_or(rusqlite::Error::QueryReturnedNoRows)
             })
             .await
     );
-    if forward {
+    if request.forward {
         let attachments = context
             .attachments
             .iter()
@@ -465,95 +624,97 @@ pub async fn reply_context(
     }
     Ok(crate::compose::context::reply(
         &context.message,
-        &context.recipient_roles.0,
-        &context.recipient_roles.1,
-        &account_email,
-        reply_all,
-        context.references.as_deref(),
-        Vec::new(),
+        ReplyInput {
+            to: &context.recipient_roles.to,
+            cc: &context.recipient_roles.cc,
+            account_email: &request.account_email,
+            all: request.reply_all,
+            references: context.references.as_deref(),
+            attachments: Vec::new(),
+        },
     ))
 }
 
-#[tauri::command]
-pub async fn stage_attachment_from_path(
-    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
-    account_id: String,
-    owner: String,
-    path: String,
-    mime_type: String,
-    content_id: Option<String>,
+fn run_stage_from_path(
+    staging: &Arc<crate::compose::staging::Staging>,
+    request: StageFromPathRequest,
 ) -> Result<super::dto::StagedAttachmentDto, String> {
     let id = crate::compose::drafts::generate_id("staged");
-    let part = string_try!(staging.stage_path(
-        &account_id,
-        &owner,
-        std::path::Path::new(&path),
-        &id,
-        mime_type,
-        content_id,
-    ));
+    let part = string_try!(staging.stage_path(StagePathRequest {
+        scope: OwnerScope {
+            account_id: &request.account_id,
+            owner: &request.owner,
+        },
+        source: std::path::Path::new(&request.path),
+        id: &id,
+        mime_type: request.mime_type,
+        content_id: request.content_id,
+    }));
     Ok(part.into())
 }
 
-#[tauri::command]
-pub async fn stage_attachment_from_bytes(
-    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
-    account_id: String,
-    owner: String,
-    filename: String,
-    mime_type: String,
-    content_id: Option<String>,
-    bytes: Vec<u8>,
+fn run_stage_from_bytes(
+    staging: &Arc<crate::compose::staging::Staging>,
+    request: StageFromBytesRequest,
 ) -> Result<super::dto::StagedAttachmentDto, String> {
     let id = crate::compose::drafts::generate_id("staged");
     let descriptor = crate::compose::staging::StagedPart {
         id: id,
-        filename: filename,
-        mime_type: mime_type,
+        filename: request.filename,
+        mime_type: request.mime_type,
         path: std::path::PathBuf::new(),
-        content_id: content_id,
-
+        content_id: request.content_id,
         size: 0,
     };
-    let part = string_try!(staging.stage_bytes(&account_id, &owner, &descriptor, &bytes));
+    let part = string_try!(staging.stage_bytes(StageBytesRequest {
+        scope: OwnerScope {
+            account_id: &request.account_id,
+            owner: &request.owner,
+        },
+        descriptor: &descriptor,
+        bytes: &request.bytes,
+    }));
     Ok(part.into())
 }
 
-#[tauri::command]
-pub async fn release_staged_attachment(
-    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
-    account_id: String,
-    owner: String,
-    id: String,
+fn run_release_staged(
+    staging: &Arc<crate::compose::staging::Staging>,
+    request: ReleaseStagedRequest,
 ) -> Result<(), String> {
-    string_try!(staging.remove_part(&account_id, &owner, &id));
+    string_try!(staging.remove_part(
+        OwnerScope {
+            account_id: &request.account_id,
+            owner: &request.owner,
+        },
+        &request.id,
+    ));
     Ok(())
 }
 
-#[tauri::command]
-pub async fn list_threads(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    label_id: Option<String>,
-    cursor: Option<ThreadCursor>,
-    direction: Option<ThreadPageDirection>,
-    limit: Option<u32>,
+async fn run_list_threads(
+    storage: &Storage,
+    request: ListThreadsRequest,
 ) -> Result<ThreadPage, String> {
-    let limit = crate::sync::thread_page_limit(limit);
+    let limit = crate::sync::thread_page_limit(request.limit);
     let page_size = usize::try_from(limit).unwrap_or(usize::MAX);
-    let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
-    let has_cursor = cursor_pair.is_some();
-    let direction = direction.unwrap_or_default();
+    let cursor = request.cursor.map(|cursor| ThreadPageCursor {
+        latest_at: cursor.latest_at,
+        thread_id: cursor.id,
+    });
+    let has_cursor = cursor.is_some();
+    let direction = request.direction.unwrap_or_default();
     let mut rows = string_try!(
         storage
             .run(move |connection| {
                 ThreadRepository::list_paginated_with_direction(
                     connection,
-                    &account_id,
-                    label_id.as_deref(),
-                    cursor_pair,
-                    i64::from(limit) + 1,
-                    direction,
+                    ThreadPageQuery {
+                        account_id: &request.account_id,
+                        label_id: request.label_id.as_deref(),
+                        cursor: cursor,
+                        limit: i64::from(limit) + 1,
+                        direction: direction,
+                    },
                 )
             })
             .await
@@ -578,16 +739,7 @@ pub async fn list_threads(
         || (direction == ThreadPageDirection::Forward && has_cursor))
         .then(|| rows.first().map(cursor_for))
         .flatten();
-    let items = rows
-        .into_iter()
-        .map(|row| {
-            ThreadDto::from(row.thread).with_row_details(
-                row.snippet,
-                row.label_indicators,
-                row.system_label_ids,
-            )
-        })
-        .collect();
+    let items = rows.into_iter().map(ThreadDto::from_row).collect();
     Ok(ThreadPage {
         items,
         next_cursor,
@@ -595,24 +747,23 @@ pub async fn list_threads(
     })
 }
 
-#[tauri::command]
-pub async fn load_conversation(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    thread_id: String,
-    image_policy: Option<ImagePolicy>,
-    entry_scope: Option<ConversationEntryScope>,
+async fn run_load_conversation(
+    storage: &Storage,
+    request: LoadConversationRequest,
 ) -> Result<ConversationDto, String> {
-    let image_policy = image_policy.unwrap_or_default();
-    let (account_for_read, thread_for_read) = (account_id.clone(), thread_id.clone());
+    let image_policy = request.image_policy.unwrap_or_default();
+    let (account_for_read, thread_for_read) =
+        (request.account_id.clone(), request.thread_id.clone());
     let (messages, thread_subject, newest_body) = string_try!(
         storage
             .run(move |connection| {
                 let messages = MessageRepository::list_conversation_metadata(
                     connection,
-                    &account_for_read,
-                    &thread_for_read,
-                    entry_scope.as_ref(),
+                    ThreadKey {
+                        account_id: &account_for_read,
+                        thread_id: &thread_for_read,
+                    },
+                    request.entry_scope.as_ref(),
                 )?;
                 let subject =
                     ThreadRepository::get(connection, &account_for_read, &thread_for_read)?
@@ -623,9 +774,11 @@ pub async fn load_conversation(
                     .map(|stored| {
                         MessageRepository::conversation_body(
                             connection,
-                            &account_for_read,
-                            &stored.message.id,
-                            entry_scope.as_ref(),
+                            MessageKey {
+                                account_id: &account_for_read,
+                                message_id: &stored.message.id,
+                            },
+                            request.entry_scope.as_ref(),
                         )
                         .map(|body| (stored.message.id.clone(), stored.label_ids.clone(), body))
                     })
@@ -637,24 +790,33 @@ pub async fn load_conversation(
 
     let mut message_dtos = Vec::with_capacity(messages.len());
     for stored in messages {
-        let allow_remote = image_policy.allows(
-            &stored.label_ids,
-            &stored.message.id,
-            &stored.message.sender,
-        );
-        message_dtos.push(message_dto(
-            stored.message,
-            stored.recipient_roles,
-            stored.label_ids,
-            None,
-            allow_remote,
-            stored.draft_id,
-            stored.attachments,
-        ));
+        let allow_remote = image_policy.allows(ImagePolicyTarget {
+            label_ids: &stored.label_ids,
+            message_id: &stored.message.id,
+            sender: &stored.message.sender,
+        });
+        message_dtos.push(message_dto(MessageDtoInput {
+            message: stored.message,
+            recipient_roles: stored.recipient_roles,
+            label_ids: stored.label_ids,
+            sanitized: None,
+            remote_images_allowed: allow_remote,
+            draft_id: stored.draft_id,
+            attachments: stored.attachments,
+        }));
     }
-    if let Some((message_id, label_ids, Some((message, content_ids)))) = newest_body {
-        let allow_remote = image_policy.allows(&label_ids, &message.id, &message.sender);
-        let body = message_body_dto(&message, &content_ids, allow_remote, &account_id);
+    if let Some((message_id, label_ids, Some(body_data))) = newest_body {
+        let allow_remote = image_policy.allows(ImagePolicyTarget {
+            label_ids: &label_ids,
+            message_id: &body_data.message.id,
+            sender: &body_data.message.sender,
+        });
+        let body = message_body_dto(MessageBodyInput {
+            account_id: &request.account_id,
+            message: &body_data.message,
+            inline_content_ids: &body_data.inline_content_ids,
+            allow_remote: allow_remote,
+        });
         if let Some(dto) = message_dtos.iter_mut().find(|dto| dto.id == message_id) {
             dto.html_body = body.html_body;
             dto.plain_body = body.plain_body;
@@ -666,23 +828,19 @@ pub async fn load_conversation(
     }
 
     Ok(ConversationDto {
-        thread_id: thread_id,
+        thread_id: request.thread_id,
         subject: thread_subject,
         messages: message_dtos,
     })
 }
 
-#[tauri::command]
-pub async fn load_message_body(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    message_id: String,
-    image_policy: Option<ImagePolicy>,
-    entry_scope: Option<ConversationEntryScope>,
+async fn run_load_message_body(
+    storage: &Storage,
+    request: LoadMessageBodyRequest,
 ) -> Result<MessageBodyDto, String> {
-    let image_policy = image_policy.unwrap_or_default();
-    let account_for_read = account_id.clone();
-    let id_for_read = message_id.clone();
+    let image_policy = request.image_policy.unwrap_or_default();
+    let account_for_read = request.account_id.clone();
+    let id_for_read = request.message_id.clone();
     let body = string_try!(
         storage
             .run(move |connection| {
@@ -690,37 +848,48 @@ pub async fn load_message_body(
                     MessageRepository::label_ids(connection, &account_for_read, &id_for_read)?;
                 let body = MessageRepository::conversation_body(
                     connection,
-                    &account_for_read,
-                    &id_for_read,
-                    entry_scope.as_ref(),
+                    MessageKey {
+                        account_id: &account_for_read,
+                        message_id: &id_for_read,
+                    },
+                    request.entry_scope.as_ref(),
                 )?;
                 Ok((labels, body))
             })
             .await
     );
-    let (label_ids, Some((message, content_ids))) = body else {
+    let (label_ids, Some(body_data)) = body else {
         return Err("Message is unavailable".to_owned());
     };
-    let allow_remote = image_policy.allows(&label_ids, &message.id, &message.sender);
-    Ok(message_body_dto(
-        &message,
-        &content_ids,
-        allow_remote,
-        &account_id,
-    ))
+    let allow_remote = image_policy.allows(ImagePolicyTarget {
+        label_ids: &label_ids,
+        message_id: &body_data.message.id,
+        sender: &body_data.message.sender,
+    });
+    Ok(message_body_dto(MessageBodyInput {
+        account_id: &request.account_id,
+        message: &body_data.message,
+        inline_content_ids: &body_data.inline_content_ids,
+        allow_remote: allow_remote,
+    }))
+}
+
+struct InlineDownloadTarget<'a> {
+    message_id: &'a str,
+    html: Option<&'a str>,
+    attachment_parts: &'a [crate::gmail::AttachmentPart],
 }
 
 async fn download_inline_images(
     client: &crate::gmail::GmailClient,
-    message_id: &str,
-    html: Option<&str>,
-    attachment_parts: &[crate::gmail::AttachmentPart],
+    target: InlineDownloadTarget<'_>,
     parts: &mut Vec<crate::storage::InlinePart>,
 ) {
-    let referenced = html
+    let referenced = target
+        .html
         .map(sanitize::referenced_content_ids)
         .unwrap_or_default();
-    for part in attachment_parts {
+    for part in target.attachment_parts {
         let Some(content_id) = part
             .content_id
             .clone()
@@ -728,30 +897,33 @@ async fn download_inline_images(
         else {
             continue;
         };
-        match client.attachment(message_id, &part.attachment_id).await {
+        match client
+            .attachment(target.message_id, &part.attachment_id)
+            .await
+        {
             Ok(bytes) => parts.push(crate::storage::InlinePart {
                 content_id: content_id,
                 mime_type: part.mime_type.clone(),
                 bytes: bytes,
             }),
             Err(error) => {
-                tracing::debug!("inline image {content_id} of {message_id} failed: {error}");
+                tracing::debug!(
+                    "inline image {content_id} of {} failed: {error}",
+                    target.message_id
+                );
             }
         }
     }
 }
 
-#[tauri::command]
-pub async fn fetch_message_body<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    message_id: String,
+async fn run_fetch_message_body<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: AccountMessageRequest,
 ) -> Result<(), String> {
-    let account = account_id.clone();
-    let id = message_id.clone();
+    let storage = services.storage()?;
+    let engine = services.sync()?;
+    let account = request.account_id.clone();
+    let id = request.message_id.clone();
     let stored = string_try!(
         storage
             .run(move |connection| {
@@ -783,8 +955,8 @@ pub async fn fetch_message_body<R: Runtime>(
     if already_complete {
         return Ok(());
     }
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    let message = string_try!(client.message(&message_id).await);
+    let client = services.gmail_client(&request.account_id).await?;
+    let message = string_try!(client.message(&request.message_id).await);
     let html_presence = fetched_html_presence(message.oversize, message.html_body.as_deref());
     let html_body = message.html_body;
     let plain_body = message.plain_body;
@@ -799,144 +971,120 @@ pub async fn fetch_message_body<R: Runtime>(
         .collect::<Vec<_>>();
     download_inline_images(
         &client,
-        &message_id,
-        html_body.as_deref(),
-        &message.attachment_parts,
+        InlineDownloadTarget {
+            message_id: &request.message_id,
+            html: html_body.as_deref(),
+            attachment_parts: &message.attachment_parts,
+        },
         &mut parts,
     )
     .await;
     let attachments =
         crate::sync::materialize::attachment_records_from_parts(&message.attachment_parts);
     if let Some(cache) = engine.attachment_cache() {
-        crate::attachments::seed_cache(cache, &account_id, &message_id, &message.attachment_parts);
+        crate::attachments::seed_cache(
+            cache,
+            MessageTarget {
+                account_id: &request.account_id,
+                message_id: &request.message_id,
+            },
+            &message.attachment_parts,
+        );
     }
-    let account_for_persist = account_id.clone();
-    let message_for_persist = message_id.clone();
+    let account_for_persist = request.account_id.clone();
+    let message_for_persist = request.message_id.clone();
     string_try!(
         storage
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
+                let key = MessageKey {
+                    account_id: &account_for_persist,
+                    message_id: &message_for_persist,
+                };
                 MessageRepository::set_body(
                     &transaction,
-                    &account_for_persist,
-                    &message_for_persist,
-                    html_body.as_deref(),
-                    plain_body.as_deref(),
-                    html_presence,
+                    key,
+                    MessageBodyUpdate {
+                        html_body: html_body.as_deref(),
+                        plain_body: plain_body.as_deref(),
+                        presence: html_presence,
+                    },
                 )?;
-                MessageRepository::replace_inline_parts(
-                    &transaction,
-                    &account_for_persist,
-                    &message_for_persist,
-                    &parts,
-                )?;
+                MessageRepository::replace_inline_parts(&transaction, key, &parts)?;
                 crate::storage::AttachmentRepository::replace_for_message(
                     &transaction,
-                    &account_for_persist,
-                    &message_for_persist,
+                    key,
                     &attachments,
                 )?;
                 transaction.commit()
             })
             .await
     );
-    app.emit(
-        crate::events::MESSAGE_BODY_FETCHED,
-        MessageBodyFetchedDto {
-            account_id,
-            message_id,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    services
+        .app()
+        .emit(
+            crate::events::MESSAGE_BODY_FETCHED,
+            MessageBodyFetchedDto {
+                account_id: request.account_id,
+                message_id: request.message_id,
+            },
+        )
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
-fn fetched_html_presence(
-    oversize: bool,
-    html_body: Option<&str>,
-) -> crate::storage::HtmlPresence {
+fn fetched_html_presence(oversize: bool, html_body: Option<&str>) -> crate::storage::HtmlPresence {
     if oversize {
         return crate::storage::HtmlPresence::TooLarge;
     }
     crate::storage::HtmlPresence::from_fetched_body(html_body)
 }
 
-fn single_label_delta(label_id: &'static str, present: bool) -> (HashSet<String>, HashSet<String>) {
+fn single_label_delta(label_id: &'static str, present: bool) -> LabelDelta {
     if present {
-        return (HashSet::from([label_id.to_owned()]), HashSet::new());
+        return LabelDelta {
+            additions: HashSet::from([label_id.to_owned()]),
+            removals: HashSet::new(),
+        };
     }
-    (HashSet::new(), HashSet::from([label_id.to_owned()]))
+    LabelDelta {
+        additions: HashSet::new(),
+        removals: HashSet::from([label_id.to_owned()]),
+    }
+}
+
+struct ThreadFlagChange {
+    label_id: &'static str,
+    present: bool,
 }
 
 async fn mutate_thread<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_id: String,
-    label_id: &'static str,
-    present: bool,
+    services: AppServices<'_, R>,
+    request: AccountThreadRequest,
+    flag: ThreadFlagChange,
 ) -> Result<(), String> {
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-
-    let (add, remove) = single_label_delta(label_id, present);
+    let engine = services.sync()?;
+    let client = services.gmail_client(&request.account_id).await?;
     string_try!(
         engine
-            .mutate(&account_id, client, thread_id, add, remove)
+            .mutate(ThreadMutation {
+                account_id: request.account_id,
+                client: client,
+                thread_id: request.thread_id,
+                labels: single_label_delta(flag.label_id, flag.present),
+            })
             .await
     );
     Ok(())
 }
-#[tauri::command]
-pub async fn star_thread<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_id: String,
-) -> Result<(), String> {
-    mutate_thread(app, auth, engine, account_id, thread_id, "STARRED", true).await
-}
-#[tauri::command]
-pub async fn unstar_thread<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_id: String,
-) -> Result<(), String> {
-    mutate_thread(app, auth, engine, account_id, thread_id, "STARRED", false).await
-}
-#[tauri::command]
-pub async fn mark_thread_read<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_id: String,
-) -> Result<(), String> {
-    mutate_thread(app, auth, engine, account_id, thread_id, "UNREAD", false).await
-}
-#[tauri::command]
-pub async fn mark_thread_unread<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_id: String,
-) -> Result<(), String> {
-    mutate_thread(app, auth, engine, account_id, thread_id, "UNREAD", true).await
-}
 
-#[tauri::command]
-pub async fn trigger_sync<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
+async fn run_trigger_sync<R: Runtime>(
+    services: AppServices<'_, R>,
     account_id: String,
 ) -> Result<SyncStatusDto, String> {
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    let engine = Arc::clone(&engine);
+    let auth = services.auth()?;
+    let engine = Arc::clone(services.sync()?.inner());
+    let client = services.gmail_client(&account_id).await?;
     tracing::info!(target: "sync", "{account_id}: manual sync requested");
     let result = engine.run_sync(&account_id, client).await;
     if result.is_err() {
@@ -947,94 +1095,87 @@ pub async fn trigger_sync<R: Runtime>(
     Ok(status)
 }
 
-#[tauri::command]
-pub async fn read_sync_status(
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-) -> Result<SyncStatusDto, String> {
-    Ok(engine.status(&account_id).await)
-}
-
-#[tauri::command]
-pub async fn mutate_threads<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_ids: Vec<String>,
-    add: Vec<String>,
-    remove: Vec<String>,
+async fn run_mutate_threads<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: MutateThreadsRequest,
 ) -> Result<Vec<MutationResultDto>, String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome =
-        apply_mutate_threads(app, auth, engine, account_id, thread_ids, add, remove).await;
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = match LabelChange::explicit(request.add, request.remove) {
+        Ok(change) => {
+            triage::apply_to_threads(
+                &services,
+                ThreadsChangeRequest {
+                    account_id: request.account_id,
+                    thread_ids: request.thread_ids,
+                    change: change,
+                },
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
     announcer.announce(outcome)
 }
 
-async fn apply_mutate_threads<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    thread_ids: Vec<String>,
-    add: Vec<String>,
-    remove: Vec<String>,
-) -> Result<Vec<MutationResultDto>, String> {
-    let change = LabelChange::explicit(add, remove)?;
-    triage::apply_to_threads(app, auth, engine, account_id, thread_ids, change).await
-}
-
-#[tauri::command]
-pub async fn mutate_messages<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_ids: Vec<String>,
-    add: Vec<String>,
-    remove: Vec<String>,
+async fn run_mutate_messages<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: MutateMessagesRequest,
 ) -> Result<(), String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome =
-        apply_mutate_messages(app, auth, engine, account_id, message_ids, add, remove).await;
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = match LabelChange::explicit(request.add, request.remove) {
+        Ok(change) => {
+            triage::apply_to_messages(
+                &services,
+                MessagesChangeRequest {
+                    account_id: request.account_id,
+                    message_ids: request.message_ids,
+                    change: change,
+                },
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
     announcer.announce(outcome)
 }
 
-async fn apply_mutate_messages<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_ids: Vec<String>,
-    add: Vec<String>,
-    remove: Vec<String>,
+async fn run_delete_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: AccountMessageRequest,
 ) -> Result<(), String> {
-    let change = LabelChange::explicit(add, remove)?;
-    triage::apply_to_messages(app, auth, engine, account_id, message_ids, change).await
+    let storage = services.storage()?;
+    let client = services.gmail_client(&request.account_id).await?;
+    super::mutations::delete_draft(
+        storage.inner(),
+        &client,
+        DraftMessageRef {
+            account_id: &request.account_id,
+            message_id: &request.message_id,
+        },
+    )
+    .await
 }
 
-#[tauri::command]
-pub async fn delete_draft<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    message_id: String,
-) -> Result<(), String> {
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    super::mutations::delete_draft(&storage, &client, &account_id, &message_id).await
+pub(crate) struct GmailClientDeps<'a, R: Runtime> {
+    pub app: &'a AppHandle<R>,
+    pub auth: &'a AuthService,
+    pub engine: &'a SyncEngine,
 }
 
 pub(crate) async fn gmail_client_for<R: Runtime>(
-    app: &AppHandle<R>,
-    auth: &AuthService,
-    engine: &SyncEngine,
+    deps: GmailClientDeps<'_, R>,
     account_id: &str,
 ) -> Result<crate::gmail::GmailClient, String> {
-    let token = auth.refresh_access_token(app, account_id).await?;
+    let token = deps.auth.refresh_access_token(deps.app, account_id).await?;
     let base_url = gmail_base_url();
-    Ok(engine.gmail_client(account_id, token, base_url).await)
+    Ok(deps
+        .engine
+        .gmail_client(AccountClientConfig {
+            account_id: account_id,
+            access_token: token,
+            base_url: base_url,
+        })
+        .await)
 }
 
 fn resolve_color_or_error(color_id: Option<&str>) -> Result<Option<LabelColor>, String> {
@@ -1070,43 +1211,29 @@ async fn read_label_dto(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn create_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    name: String,
-    color_id: Option<String>,
-) -> Result<LabelDto, String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome = apply_create_label(app, auth, engine, storage, account_id, name, color_id).await;
-    announcer.announce(outcome)
-}
-
 async fn apply_create_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    name: String,
-    color_id: Option<String>,
+    services: &AppServices<'_, R>,
+    request: CreateLabelRequest,
 ) -> Result<LabelDto, String> {
-    let color = resolve_color_or_error(color_id.as_deref())?;
-    let account = account_id.clone();
+    let storage = services.storage()?;
+    let color = resolve_color_or_error(request.color_id.as_deref())?;
+    let account = request.account_id.clone();
     let trimmed = storage
         .run(move |connection| {
             Ok(LabelRepository::validate_name(
-                connection, &account, &name, None,
+                connection,
+                LabelNameCheck {
+                    account_id: &account,
+                    name: &request.name,
+                    exclude_id: None,
+                },
             ))
         })
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
 
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
+    let client = services.gmail_client(&request.account_id).await?;
     let gmail_color = color.as_ref().map(|color| crate::gmail::LabelColorPair {
         text_color: color.text.clone(),
         background_color: color.background.clone(),
@@ -1116,169 +1243,186 @@ async fn apply_create_label<R: Runtime>(
         .await
         .map_err(|error| error.to_string())?;
 
-    let stored = super::to_label(&account_id, &created);
+    let stored = super::to_label(&request.account_id, &created);
     storage
         .run(move |connection| LabelRepository::upsert(connection, &stored))
         .await
         .map_err(|error| error.to_string())?;
-    read_label_dto(&storage, account_id, created.id)
+    read_label_dto(storage.inner(), request.account_id, created.id)
         .await?
         .ok_or_else(|| "label vanished immediately after creation".to_owned())
 }
 
-#[tauri::command]
-pub async fn rename_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    label_id: String,
-    name: String,
+async fn run_create_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: CreateLabelRequest,
 ) -> Result<LabelDto, String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome = apply_rename_label(app, auth, engine, storage, account_id, label_id, name).await;
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = apply_create_label(&services, request).await;
     announcer.announce(outcome)
 }
 
 async fn apply_rename_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    label_id: String,
-    name: String,
+    services: &AppServices<'_, R>,
+    request: RenameLabelRequest,
 ) -> Result<LabelDto, String> {
-    let (account_for_validate, id_for_validate) = (account_id.clone(), label_id.clone());
+    let storage = services.storage()?;
+    let (account_for_validate, id_for_validate) =
+        (request.account_id.clone(), request.label_id.clone());
     let trimmed = storage
         .run(move |connection| {
             Ok(LabelRepository::validate_name(
                 connection,
-                &account_for_validate,
-                &name,
-                Some(&id_for_validate),
+                LabelNameCheck {
+                    account_id: &account_for_validate,
+                    name: &request.name,
+                    exclude_id: Some(&id_for_validate),
+                },
             ))
         })
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
 
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
+    let client = services.gmail_client(&request.account_id).await?;
     client
-        .update_label(&label_id, Some(&trimmed), None)
+        .update_label(
+            &request.label_id,
+            crate::gmail::labels::LabelUpdate {
+                name: Some(&trimmed),
+                color: None,
+            },
+        )
         .await
         .map_err(|error| error.to_string())?;
 
-    let (account, id, new_name) = (account_id.clone(), label_id.clone(), trimmed);
+    let (account, id, new_name) = (
+        request.account_id.clone(),
+        request.label_id.clone(),
+        trimmed,
+    );
     storage
-        .run(move |connection| LabelRepository::rename(connection, &account, &id, &new_name))
+        .run(move |connection| {
+            LabelRepository::rename(
+                connection,
+                LabelKey {
+                    account_id: &account,
+                    id: &id,
+                },
+                &new_name,
+            )
+        })
         .await
         .map_err(|error| error.to_string())?;
-    read_label_dto(&storage, account_id, label_id)
+    read_label_dto(storage.inner(), request.account_id, request.label_id)
         .await?
         .ok_or_else(|| "label not found".to_owned())
 }
 
-#[tauri::command]
-pub async fn recolor_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    label_id: String,
-    color_id: String,
+async fn run_rename_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: RenameLabelRequest,
 ) -> Result<LabelDto, String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome =
-        apply_recolor_label(app, auth, engine, storage, account_id, label_id, color_id).await;
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = apply_rename_label(&services, request).await;
     announcer.announce(outcome)
 }
 
 async fn apply_recolor_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    label_id: String,
-    color_id: String,
+    services: &AppServices<'_, R>,
+    request: RecolorLabelRequest,
 ) -> Result<LabelDto, String> {
-    let color = resolve_color(&color_id)
+    let storage = services.storage()?;
+    let color = resolve_color(&request.color_id)
         .map(|pair| LabelColor {
             text: pair.text_color,
             background: pair.background_color,
         })
-        .ok_or_else(|| format!("'{color_id}' is not a recognised label colour"))?;
+        .ok_or_else(|| format!("'{}' is not a recognised label colour", request.color_id))?;
 
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
+    let client = services.gmail_client(&request.account_id).await?;
     let gmail_color = crate::gmail::LabelColorPair {
         text_color: color.text.clone(),
         background_color: color.background.clone(),
     };
     client
-        .update_label(&label_id, None, Some(&gmail_color))
+        .update_label(
+            &request.label_id,
+            crate::gmail::labels::LabelUpdate {
+                name: None,
+                color: Some(&gmail_color),
+            },
+        )
         .await
         .map_err(|error| error.to_string())?;
 
-    let (account, id, stored_color) = (account_id.clone(), label_id.clone(), color);
+    let (account, id, stored_color) = (request.account_id.clone(), request.label_id.clone(), color);
     storage
         .run(move |connection| {
-            LabelRepository::set_color(connection, &account, &id, Some(&stored_color))
+            LabelRepository::set_color(
+                connection,
+                LabelKey {
+                    account_id: &account,
+                    id: &id,
+                },
+                Some(&stored_color),
+            )
         })
         .await
         .map_err(|error| error.to_string())?;
-    read_label_dto(&storage, account_id, label_id)
+    read_label_dto(storage.inner(), request.account_id, request.label_id)
         .await?
         .ok_or_else(|| "label not found".to_owned())
 }
 
-#[tauri::command]
-pub async fn delete_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    label_id: String,
-) -> Result<(), String> {
-    let announcer = MailChangeAnnouncer::new(&app, &account_id);
-    let outcome = apply_delete_label(app, auth, engine, storage, account_id, label_id).await;
+async fn run_recolor_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: RecolorLabelRequest,
+) -> Result<LabelDto, String> {
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = apply_recolor_label(&services, request).await;
     announcer.announce(outcome)
 }
 
 async fn apply_delete_label<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    label_id: String,
+    services: &AppServices<'_, R>,
+    request: DeleteLabelRequest,
 ) -> Result<(), String> {
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
+    let storage = services.storage()?;
+    let client = services.gmail_client(&request.account_id).await?;
     client
-        .delete_label(&label_id)
+        .delete_label(&request.label_id)
         .await
         .map_err(|error| error.to_string())?;
     storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
-            let touched: std::collections::HashSet<String> =
-                LabelRepository::threads_with_label(&transaction, &account_id, &label_id)?
-                    .into_iter()
-                    .collect();
-            LabelRepository::delete(&transaction, &account_id, &label_id)?;
-            ThreadRepository::recompute_many(&transaction, &account_id, &touched)?;
+            let touched: std::collections::HashSet<String> = LabelRepository::threads_with_label(
+                &transaction,
+                &request.account_id,
+                &request.label_id,
+            )?
+            .into_iter()
+            .collect();
+            LabelRepository::delete(&transaction, &request.account_id, &request.label_id)?;
+            ThreadRepository::recompute_many(&transaction, &request.account_id, &touched)?;
             transaction.commit()
         })
         .await
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn read_traversal_status(
-    storage: tauri::State<'_, Storage>,
+async fn run_delete_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: DeleteLabelRequest,
+) -> Result<(), String> {
+    let announcer = MailChangeAnnouncer::new(services.app(), &request.account_id);
+    let outcome = apply_delete_label(&services, request).await;
+    announcer.announce(outcome)
+}
+
+async fn run_read_traversal_status(
+    storage: &Storage,
     account_id: String,
 ) -> Result<TraversalStatusDto, String> {
     let account = account_id.clone();
@@ -1300,4 +1444,260 @@ pub async fn read_traversal_status(
         backfill,
         reconciliation,
     ))
+}
+
+#[tauri::command]
+pub async fn save_compose_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<ComposeDraftCommand>,
+) -> Result<ComposeQueueAcceptance, String> {
+    admit_compose(services, request.draft, false).await
+}
+
+#[tauri::command]
+pub async fn send_compose_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<ComposeDraftCommand>,
+) -> Result<ComposeQueueAcceptance, String> {
+    admit_compose(services, request.draft, true).await
+}
+
+#[tauri::command]
+pub async fn discard_compose_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<DiscardDraftRequest>,
+) -> Result<(), String> {
+    run_discard_compose_draft(services, request).await
+}
+
+#[tauri::command]
+pub async fn hydrate_compose_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<HydrateDraftRequest>,
+) -> Result<HydratedComposeDraft, String> {
+    run_hydrate_compose_draft(services, request).await
+}
+
+#[tauri::command]
+pub async fn list_labels<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountIdRequest>,
+) -> Result<Vec<LabelDto>, String> {
+    run_list_labels(services.storage()?.inner(), request.account_id).await
+}
+
+#[tauri::command]
+pub async fn lookup_contacts<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<LookupContactsRequest>,
+) -> Result<Vec<super::dto::ContactSuggestionDto>, String> {
+    run_lookup_contacts(services.storage()?.inner(), request).await
+}
+
+#[tauri::command]
+pub async fn reply_context<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<ReplyContextRequest>,
+) -> Result<crate::compose::context::ReplyContext, String> {
+    run_reply_context(services.storage()?.inner(), request).await
+}
+
+#[tauri::command]
+pub async fn stage_attachment_from_path<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<StageFromPathRequest>,
+) -> Result<super::dto::StagedAttachmentDto, String> {
+    run_stage_from_path(services.staging()?.inner(), request)
+}
+
+#[tauri::command]
+pub async fn stage_attachment_from_bytes<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<StageFromBytesRequest>,
+) -> Result<super::dto::StagedAttachmentDto, String> {
+    run_stage_from_bytes(services.staging()?.inner(), request)
+}
+
+#[tauri::command]
+pub async fn release_staged_attachment<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<ReleaseStagedRequest>,
+) -> Result<(), String> {
+    run_release_staged(services.staging()?.inner(), request)
+}
+
+#[tauri::command]
+pub async fn list_threads<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<ListThreadsRequest>,
+) -> Result<ThreadPage, String> {
+    run_list_threads(services.storage()?.inner(), request).await
+}
+
+#[tauri::command]
+pub async fn load_conversation<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<LoadConversationRequest>,
+) -> Result<ConversationDto, String> {
+    run_load_conversation(services.storage()?.inner(), request).await
+}
+
+#[tauri::command]
+pub async fn load_message_body<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<LoadMessageBodyRequest>,
+) -> Result<MessageBodyDto, String> {
+    run_load_message_body(services.storage()?.inner(), request).await
+}
+
+#[tauri::command]
+pub async fn fetch_message_body<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountMessageRequest>,
+) -> Result<(), String> {
+    run_fetch_message_body(services, request).await
+}
+
+#[tauri::command]
+pub async fn star_thread<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountThreadRequest>,
+) -> Result<(), String> {
+    mutate_thread(
+        services,
+        request,
+        ThreadFlagChange {
+            label_id: "STARRED",
+            present: true,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn unstar_thread<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountThreadRequest>,
+) -> Result<(), String> {
+    mutate_thread(
+        services,
+        request,
+        ThreadFlagChange {
+            label_id: "STARRED",
+            present: false,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn mark_thread_read<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountThreadRequest>,
+) -> Result<(), String> {
+    mutate_thread(
+        services,
+        request,
+        ThreadFlagChange {
+            label_id: "UNREAD",
+            present: false,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn mark_thread_unread<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountThreadRequest>,
+) -> Result<(), String> {
+    mutate_thread(
+        services,
+        request,
+        ThreadFlagChange {
+            label_id: "UNREAD",
+            present: true,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn trigger_sync<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountIdRequest>,
+) -> Result<SyncStatusDto, String> {
+    run_trigger_sync(services, request.account_id).await
+}
+
+#[tauri::command]
+pub async fn read_sync_status<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountIdRequest>,
+) -> Result<SyncStatusDto, String> {
+    Ok(services.sync()?.status(&request.account_id).await)
+}
+
+#[tauri::command]
+pub async fn mutate_threads<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<MutateThreadsRequest>,
+) -> Result<Vec<MutationResultDto>, String> {
+    run_mutate_threads(services, request).await
+}
+
+#[tauri::command]
+pub async fn mutate_messages<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<MutateMessagesRequest>,
+) -> Result<(), String> {
+    run_mutate_messages(services, request).await
+}
+
+#[tauri::command]
+pub async fn delete_draft<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountMessageRequest>,
+) -> Result<(), String> {
+    run_delete_draft(services, request).await
+}
+
+#[tauri::command]
+pub async fn create_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<CreateLabelRequest>,
+) -> Result<LabelDto, String> {
+    run_create_label(services, request).await
+}
+
+#[tauri::command]
+pub async fn rename_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<RenameLabelRequest>,
+) -> Result<LabelDto, String> {
+    run_rename_label(services, request).await
+}
+
+#[tauri::command]
+pub async fn recolor_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<RecolorLabelRequest>,
+) -> Result<LabelDto, String> {
+    run_recolor_label(services, request).await
+}
+
+#[tauri::command]
+pub async fn delete_label<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<DeleteLabelRequest>,
+) -> Result<(), String> {
+    run_delete_label(services, request).await
+}
+
+#[tauri::command]
+pub async fn read_traversal_status<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountIdRequest>,
+) -> Result<TraversalStatusDto, String> {
+    run_read_traversal_status(services.storage()?.inner(), request.account_id).await
 }

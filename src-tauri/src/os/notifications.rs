@@ -138,13 +138,22 @@ fn arrival_body(preview: String, additional_count: usize) -> String {
     format!("{preview} — and {additional_count} more")
 }
 
-pub fn content(arrivals: &[MailArrival]) -> Option<(String, String)> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotificationContent {
+    pub title: String,
+    pub body: String,
+}
+
+pub fn content(arrivals: &[MailArrival]) -> Option<NotificationContent> {
     let (first, rest) = arrivals.split_first()?;
     let subject = arrival_subject(&first.subject);
     let preview = arrival_preview(subject, &first.snippet);
     let title = crate::storage::addresses::first_identity(&first.sender)
         .map_or_else(|| "(No sender)".to_owned(), |identity| identity.display);
-    Some((title, arrival_body(preview, rest.len())))
+    Some(NotificationContent {
+        title: title,
+        body: arrival_body(preview, rest.len()),
+    })
 }
 
 pub fn click_intent(account_id: String, thread_id: Option<String>) -> serde_json::Value {
@@ -237,9 +246,11 @@ fn register_click_handler<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> 
 async fn show<R: Runtime>(_: &AppHandle<R>, account_id: &str, arrivals: &[MailArrival]) {
     use user_notify::NotificationBuilder;
 
-    let Some((title, body)) = content(arrivals) else {
+    let Some(notification) = content(arrivals) else {
         return;
     };
+    let title = notification.title;
+    let body = notification.body;
     let first = &arrivals[0];
     let mut info = HashMap::from([(ACCOUNT_ID.to_owned(), account_id.to_owned())]);
     if arrivals.len() == 1 {

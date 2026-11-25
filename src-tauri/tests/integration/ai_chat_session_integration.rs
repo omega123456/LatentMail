@@ -1,8 +1,13 @@
+use latentmail_lib::ai::chat::{ChatBeginRequest, ChatExchange};
+use latentmail_lib::storage::EmbeddingModelSpec;
 use std::sync::{Arc, Mutex};
 
 use latentmail_lib::{
     ai::{
-        chat::{citations, validate_question, ChatRun, HISTORY_LIMIT, NO_RESULTS, QUESTION_LIMIT},
+        chat::{
+            citations, validate_question, ChatRun, RewrittenCitations, HISTORY_LIMIT, NO_RESULTS,
+            QUESTION_LIMIT,
+        },
         retrieval::Passage,
         AiService,
     },
@@ -101,7 +106,15 @@ async fn fixture(base_url: &str) -> (tempfile::TempDir, AiService) {
     AccountAiConfigRepository::set_enabled(&connection, "account", true).unwrap();
     AccountAiConfigRepository::set_base_url(&connection, "account", base_url).unwrap();
     AccountAiConfigRepository::set_chat_model(&connection, "account", Some("chat")).unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "account", "embedding", 2).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "account",
+        EmbeddingModelSpec {
+            model: "embedding",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
     EmbeddingRepository::create(&connection, "account", 2).unwrap();
     MessageRepository::write_full_state(
         &connection,
@@ -222,15 +235,33 @@ fn a_blank_a_whitespace_only_and_an_over_long_question_are_all_rejected() {
 async fn only_one_request_is_active_and_cancellation_and_completion_cannot_clear_each_other() {
     let (_directory, service) = fixture("http://127.0.0.1:1/v1").await;
     let registry = service.chat();
-    let first = registry.begin("account", "session", "question").unwrap();
-    assert!(registry.begin("account", "session", "another").is_err());
+    let first = registry
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "question",
+        })
+        .unwrap();
+    assert!(registry
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "another"
+        })
+        .is_err());
 
     assert!(!registry.cancel("chat-unknown").unwrap());
     assert!(registry.cancel(&first.request_id).unwrap());
     assert!(first.cancel.load(std::sync::atomic::Ordering::SeqCst));
     assert!(!registry.retire(&first.request_id).unwrap());
 
-    let second = registry.begin("account", "session", "question").unwrap();
+    let second = registry
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "question",
+        })
+        .unwrap();
     assert_ne!(second.request_id, first.request_id);
     assert!(registry.retire(&second.request_id).unwrap());
     assert!(!registry.cancel(&second.request_id).unwrap());
@@ -240,25 +271,57 @@ async fn only_one_request_is_active_and_cancellation_and_completion_cannot_clear
 async fn only_the_ten_most_recent_messages_travel_with_a_new_question() {
     let (_directory, service) = fixture("http://127.0.0.1:1/v1").await;
     let registry = service.chat();
-    let first = registry.begin("account", "session", "question").unwrap();
+    let first = registry
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "question",
+        })
+        .unwrap();
     registry.retire(&first.request_id).unwrap();
     for index in 0..6 {
         registry
-            .record("session", &format!("question {index}"), "answer")
+            .record(ChatExchange {
+                session_id: "session",
+                question: &format!("question {index}"),
+                answer: "answer",
+            })
             .unwrap();
     }
-    let request = registry.begin("account", "session", "next").unwrap();
+    let request = registry
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "next",
+        })
+        .unwrap();
     assert_eq!(request.history.len(), HISTORY_LIMIT);
     assert_eq!(request.history[0].content, "question 1");
     registry.retire(&request.request_id).unwrap();
 
-    let fresh = registry.begin("account", "other-session", "next").unwrap();
+    let fresh = registry
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "other-session",
+            question: "next",
+        })
+        .unwrap();
     assert!(fresh.history.is_empty());
     registry.retire(&fresh.request_id).unwrap();
     registry
-        .record("session", "ignored for a stale session", "answer")
+        .record(ChatExchange {
+            session_id: "session",
+            question: "ignored for a stale session",
+            answer: "answer",
+        })
         .unwrap();
-    let unchanged = registry.begin("account", "other-session", "next").unwrap();
+    let unchanged = registry
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "other-session",
+            question: "next",
+        })
+        .unwrap();
     assert!(unchanged.history.is_empty());
     registry.retire(&unchanged.request_id).unwrap();
 }
@@ -272,10 +335,13 @@ fn citations_are_deduplicated_by_first_appearance_renumbered_and_pruned() {
         source(9, "cara", "Cara"),
     ];
     assert_eq!(
-        citations("plain answer [x] [12a] [", &passages, &sources).0,
+        citations("plain answer [x] [12a] [", &passages, &sources).answer,
         "plain answer [x] [12a] ["
     );
-    let (rewritten, resolved) = citations(
+    let RewrittenCitations {
+        answer: rewritten,
+        sources: resolved,
+    } = citations(
         "Second [2], first [1], again [2], unknown [8].",
         &passages,
         &sources,
@@ -295,9 +361,12 @@ fn citations_are_deduplicated_by_first_appearance_renumbered_and_pruned() {
     assert_eq!(resolved[1].thread_id, "thread-alice");
     assert_eq!(resolved[1].sent_at_millis, 1_700_000_100_000);
     assert!(citations("No citation at all.", &passages, &sources)
-        .1
+        .sources
         .is_empty());
-    let (pruned, none) = citations("Out of range [4].", &passages, &sources);
+    let RewrittenCitations {
+        answer: pruned,
+        sources: none,
+    } = citations("Out of range [4].", &passages, &sources);
     assert!(none.is_empty());
     assert_eq!(pruned, "Out of range.");
 }
@@ -309,21 +378,25 @@ async fn a_full_exchange_streams_deltas_then_sources_and_logs_the_provider_excha
     let (_directory, service) = fixture(&format!("{}/v1", server.uri())).await;
     let recorder = recorder();
     let logs = tempfile::tempdir().unwrap();
-    let (dispatch, guard, _handle) = latentmail_lib::logging::subscriber(
+    let log_parts = latentmail_lib::logging::subscriber(
         logs.path(),
         tracing_subscriber::filter::LevelFilter::DEBUG,
     )
     .unwrap();
     let request = service
         .chat()
-        .begin("account", "session", "deadline?")
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "deadline?",
+        })
         .unwrap();
     let request_id = request.request_id.clone();
     {
-        let _default = tracing::dispatcher::set_default(&dispatch);
+        let _default = tracing::dispatcher::set_default(&log_parts.dispatch);
         latentmail_lib::ai::chat::run(recorder.app.handle(), &service, request).await;
     }
-    drop(guard);
+    drop(log_parts.guard);
 
     assert_eq!(
         recorder.kinds(),
@@ -346,7 +419,14 @@ async fn a_full_exchange_streams_deltas_then_sources_and_logs_the_provider_excha
     let done = recorder.of_kind("done");
     assert_eq!(done[0]["cancelled"], false);
     assert_eq!(done[0]["error"], serde_json::Value::Null);
-    let following = service.chat().begin("account", "session", "next").unwrap();
+    let following = service
+        .chat()
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "next",
+        })
+        .unwrap();
     assert_eq!(following.history.len(), 2);
     assert_eq!(following.history[0].content, "deadline?");
     assert_eq!(following.history[1].content, CITED_ANSWER);
@@ -376,7 +456,11 @@ async fn a_cancelled_request_keeps_its_partial_text_and_gains_no_sources() {
     let recorder = recorder();
     let request = service
         .chat()
-        .begin("account", "session", "deadline?")
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "deadline?",
+        })
         .unwrap();
     assert!(service.chat().cancel(&request.request_id).unwrap());
     latentmail_lib::ai::chat::run(recorder.app.handle(), &service, request).await;
@@ -386,7 +470,11 @@ async fn a_cancelled_request_keeps_its_partial_text_and_gains_no_sources() {
     assert!(recorder.of_kind("sources").is_empty());
     let following = service
         .chat()
-        .begin("account", "session", "next")
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "next",
+        })
         .expect("a cancelled request no longer occupies the registry");
     assert!(following.history.is_empty());
 }
@@ -414,7 +502,11 @@ async fn retrieval_that_finds_nothing_answers_without_calling_the_chat_model() {
     let recorder = recorder();
     let request = service
         .chat()
-        .begin("account", "session", "zzzqqq wwwvvv?")
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "zzzqqq wwwvvv?",
+        })
         .unwrap();
     latentmail_lib::ai::chat::run(recorder.app.handle(), &service, request).await;
 
@@ -432,7 +524,11 @@ async fn a_failure_reaching_the_provider_ends_the_request_with_its_error() {
     let recorder = recorder();
     let request = service
         .chat()
-        .begin("account", "session", "deadline?")
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "deadline?",
+        })
         .unwrap();
     let request_id = request.request_id.clone();
     latentmail_lib::ai::chat::run(recorder.app.handle(), &service, request).await;
@@ -471,7 +567,14 @@ async fn a_storage_backed_readiness_failure_names_the_missing_prerequisite() {
 #[tokio::test]
 async fn a_request_carries_its_own_identity_for_every_event() {
     let (_directory, service) = fixture("http://127.0.0.1:1/v1").await;
-    let request: ChatRun = service.chat().begin("account", "session", "hello").unwrap();
+    let request: ChatRun = service
+        .chat()
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: "hello",
+        })
+        .unwrap();
     assert!(request.request_id.starts_with("chat-"));
     assert_eq!(request.session_id, "session");
     assert_eq!(request.account_id, "account");
@@ -502,7 +605,11 @@ async fn a_configuration_gap_discovered_after_the_request_started_ends_it_with_t
             .unwrap();
         let request = service
             .chat()
-            .begin("account", "session", "deadline?")
+            .begin(ChatBeginRequest {
+                account_id: "account",
+                session_id: "session",
+                question: "deadline?",
+            })
             .unwrap();
         latentmail_lib::ai::chat::run(recorder.app.handle(), &service, request).await;
         assert_eq!(

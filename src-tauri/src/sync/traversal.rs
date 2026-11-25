@@ -3,11 +3,12 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::{
-    attachments::AttachmentCache,
-    gmail::{GmailClient, GmailMessage, ListOptions, MAX_PAGE_SIZE},
+    attachments::{AttachmentCache, MessageTarget},
+    gmail::{GmailClient, GmailMessage, ListOptions, MessageListQuery, MAX_PAGE_SIZE},
     storage::{
-        AttachmentRepository, HtmlPresence, Message, MessageRepository, Storage, ThreadRepository,
-        TraversalCursor, TraversalCursorRepository, TraversalKind,
+        AttachmentRepository, HtmlPresence, Message, MessageKey, MessageRepository,
+        RecipientRolesUpdate, Storage, ThreadRepository, TraversalCursor,
+        TraversalCursorRepository, TraversalKind,
     },
 };
 
@@ -39,17 +40,34 @@ pub fn emit_traversal_progress(sink: &EventSink, event: TraversalProgressEvent) 
     );
 }
 
-pub async fn run_backfill_step(
-    storage: &Storage,
-    client: &GmailClient,
-    account_id: &str,
-    events: &EventSink,
-    resumed: bool,
-    cache: Option<AttachmentCache>,
-) -> Result<bool, SyncError> {
-    let existing = storage
+pub struct BackfillStepContext<'a> {
+    pub storage: &'a Storage,
+    pub client: &'a GmailClient,
+    pub account_id: &'a str,
+    pub events: &'a EventSink,
+    pub resumed: bool,
+    pub cache: Option<AttachmentCache>,
+}
+
+pub struct FetchPersistRequest<'a> {
+    pub storage: &'a Storage,
+    pub client: &'a GmailClient,
+    pub account_id: &'a str,
+    pub ids: &'a [String],
+    pub cache: Option<AttachmentCache>,
+}
+
+#[derive(Clone, Copy)]
+struct TraversalWriteTarget<'a> {
+    account_id: &'a str,
+    cache: Option<&'a AttachmentCache>,
+}
+
+pub async fn run_backfill_step(context: BackfillStepContext<'_>) -> Result<bool, SyncError> {
+    let existing = context
+        .storage
         .run({
-            let account = account_id.to_owned();
+            let account = context.account_id.to_owned();
             move |connection| {
                 TraversalCursorRepository::get(connection, &account, TraversalKind::Backfill)
             }
@@ -75,7 +93,7 @@ pub async fn run_backfill_step(
     };
 
     if needs_mailbox_total {
-        discovered = client.profile().await?.messages_total;
+        discovered = context.client.profile().await?.messages_total;
     }
 
     let options = ListOptions {
@@ -83,27 +101,38 @@ pub async fn run_backfill_step(
         page_size: MAX_PAGE_SIZE,
     };
 
-    let page = client
-        .list_messages_page_matching(&[], None, token.as_deref(), options)
+    let page = context
+        .client
+        .list_messages_page_matching(MessageListQuery {
+            label_ids: &[],
+            query_filter: None,
+            page_token: token.as_deref(),
+            options: options,
+        })
         .await?;
     let is_last_page = page.next_page_token.is_none();
     let next_token = page.next_page_token.clone();
     let ids: Vec<String> = page.items.iter().map(|item| item.id.clone()).collect();
 
-    let messages = concurrency::fetch_messages(client, ids).await?;
+    let messages = concurrency::fetch_messages(context.client, ids).await?;
 
     let persisted = persisted + messages.len() as i64;
-    let account_owned = account_id.to_owned();
+    let account_owned = context.account_id.to_owned();
     let position = next_token;
     let now = chrono::Utc::now().timestamp();
-    storage
+    let cache = context.cache;
+    let resumed = context.resumed;
+    context
+        .storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
             write_traversal_messages_and_recompute(
                 &transaction,
-                &account_owned,
+                TraversalWriteTarget {
+                    account_id: &account_owned,
+                    cache: cache.as_ref(),
+                },
                 &messages,
-                cache.as_ref(),
             )?;
 
             TraversalCursorRepository::upsert(
@@ -124,9 +153,9 @@ pub async fn run_backfill_step(
         .await?;
 
     emit_traversal_progress(
-        events,
+        context.events,
         TraversalProgressEvent {
-            account_id: account_id.to_owned(),
+            account_id: context.account_id.to_owned(),
             kind: "backfill",
             discovered_count: discovered,
             persisted_count: persisted,
@@ -140,23 +169,21 @@ pub async fn run_backfill_step(
     Ok(is_last_page)
 }
 
-pub async fn fetch_and_persist(
-    storage: &Storage,
-    client: &GmailClient,
-    account_id: &str,
-    ids: &[String],
-    cache: Option<AttachmentCache>,
-) -> Result<Vec<String>, SyncError> {
-    let messages = concurrency::fetch_messages(client, ids.to_vec()).await?;
-    let account_owned = account_id.to_owned();
-    let thread_ids = storage
+pub async fn fetch_and_persist(request: FetchPersistRequest<'_>) -> Result<Vec<String>, SyncError> {
+    let messages = concurrency::fetch_messages(request.client, request.ids.to_vec()).await?;
+    let account_owned = request.account_id.to_owned();
+    let cache = request.cache;
+    let thread_ids = request
+        .storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
             let touched = write_traversal_messages_and_recompute(
                 &transaction,
-                &account_owned,
+                TraversalWriteTarget {
+                    account_id: &account_owned,
+                    cache: cache.as_ref(),
+                },
                 &messages,
-                cache.as_ref(),
             )?;
             transaction.commit()?;
             Ok(touched.into_iter().collect::<Vec<_>>())
@@ -167,29 +194,27 @@ pub async fn fetch_and_persist(
 
 fn write_traversal_messages_and_recompute(
     connection: &rusqlite::Connection,
-    account_id: &str,
+    target: TraversalWriteTarget<'_>,
     messages: &[GmailMessage],
-    cache: Option<&AttachmentCache>,
 ) -> rusqlite::Result<HashSet<String>> {
     let mut touched = HashSet::new();
     for message in messages {
         touched.insert(message.thread_id.clone());
-        write_traversal_message(connection, account_id, message, cache)?;
+        write_traversal_message(connection, target, message)?;
     }
-    ThreadRepository::recompute_many(connection, account_id, &touched)?;
+    ThreadRepository::recompute_many(connection, target.account_id, &touched)?;
     Ok(touched)
 }
 
 fn write_traversal_message(
     connection: &rusqlite::Connection,
-    account_id: &str,
+    target: TraversalWriteTarget<'_>,
     message: &GmailMessage,
-    cache: Option<&AttachmentCache>,
 ) -> rusqlite::Result<()> {
     let truncated_body =
         crate::storage::truncate_body(message.plain_body.as_deref(), message.html_body.as_deref());
     let record = Message {
-        account_id: account_id.to_owned(),
+        account_id: target.account_id.to_owned(),
         id: message.id.clone(),
         thread_id: message.thread_id.clone(),
         rfc_message_id: message.rfc_message_id.clone(),
@@ -208,28 +233,35 @@ fn write_traversal_message(
         truncated_body: truncated_body,
         html_presence: traversal_html_presence(message.oversize),
     };
+    let key = MessageKey {
+        account_id: target.account_id,
+        message_id: &message.id,
+    };
     let changed = MessageRepository::write_traversal_state(connection, &record)?;
     if changed {
         MessageRepository::set_recipient_roles(
             connection,
-            account_id,
-            &message.id,
-            &message.to_recipients,
-            &message.cc_recipients,
-            &message.bcc_recipients,
-            message.rfc_references.as_deref(),
+            key,
+            RecipientRolesUpdate {
+                to: &message.to_recipients,
+                cc: &message.cc_recipients,
+                bcc: &message.bcc_recipients,
+                references: message.rfc_references.as_deref(),
+            },
         )?;
-        write_label_membership(connection, account_id, &message.id, &message.label_ids)?;
+        write_label_membership(connection, key, &message.label_ids)?;
     }
 
-    AttachmentRepository::replace_for_message(
-        connection,
-        account_id,
-        &message.id,
-        &attachment_records(message),
-    )?;
-    if let Some(cache) = cache {
-        crate::attachments::seed_cache(cache, account_id, &message.id, &message.attachment_parts);
+    AttachmentRepository::replace_for_message(connection, key, &attachment_records(message))?;
+    if let Some(cache) = target.cache {
+        crate::attachments::seed_cache(
+            cache,
+            MessageTarget {
+                account_id: target.account_id,
+                message_id: &message.id,
+            },
+            &message.attachment_parts,
+        );
     }
     Ok(())
 }

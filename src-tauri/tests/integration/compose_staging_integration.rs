@@ -1,3 +1,7 @@
+use latentmail_lib::compose::staging::{
+    OwnerScope, OwnerTransfer, PartLookup, StageAttachmentRequest, StageBytesRequest,
+    StagePathRequest,
+};
 use std::{collections::HashSet, fs};
 
 use latentmail_lib::{compose::staging::Staging, gmail::GmailClient};
@@ -13,14 +17,16 @@ fn snapshots_survive_source_removal_and_completed_snapshots_can_be_released() {
     fs::write(&source, b"attachment").unwrap();
     let staging = Staging::new(directory.path().join("staged"));
     let part = staging
-        .stage_path(
-            "account",
-            "draft",
-            &source,
-            "part",
-            "text/plain".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "draft",
+            },
+            source: &source,
+            id: "part",
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
     assert_eq!(part.size, b"attachment".len() as u64);
     fs::remove_file(source).unwrap();
@@ -39,10 +45,12 @@ fn snapshots_survive_source_removal_and_completed_snapshots_can_be_released() {
     assert!(!snapshot.parts[0].path.exists());
     assert_eq!(
         staging
-            .stage_bytes(
-                "account",
-                "draft",
-                &latentmail_lib::compose::staging::StagedPart {
+            .stage_bytes(StageBytesRequest {
+                scope: OwnerScope {
+                    account_id: "account",
+                    owner: "draft"
+                },
+                descriptor: &latentmail_lib::compose::staging::StagedPart {
                     id: "second".into(),
                     filename: "inline.png".into(),
                     mime_type: "image/png".into(),
@@ -50,8 +58,8 @@ fn snapshots_survive_source_removal_and_completed_snapshots_can_be_released() {
                     content_id: Some("cid".into()),
                     size: 0,
                 },
-                b"image"
-            )
+                bytes: b"image"
+            })
             .unwrap()
             .read()
             .unwrap()
@@ -81,17 +89,21 @@ async fn gmail_hydrated_attachments_produce_the_same_staged_descriptor_shape_as_
     let hydrated = staging
         .stage_attachment(
             &client,
-            "account",
-            "draft",
-            latentmail_lib::compose::staging::GmailAttachmentSource {
-                message_id: "m1",
-                attachment_id: "a1",
-            },
-            latentmail_lib::compose::staging::NewStagedPart {
-                id: "hydrated-1".into(),
-                filename: "photo.png".into(),
-                mime_type: "image/png".into(),
-                content_id: Some("cid:1".into()),
+            StageAttachmentRequest {
+                scope: OwnerScope {
+                    account_id: "account",
+                    owner: "draft",
+                },
+                source: latentmail_lib::compose::staging::GmailAttachmentSource {
+                    message_id: "m1",
+                    attachment_id: "a1",
+                },
+                descriptor: latentmail_lib::compose::staging::NewStagedPart {
+                    id: "hydrated-1".into(),
+                    filename: "photo.png".into(),
+                    mime_type: "image/png".into(),
+                    content_id: Some("cid:1".into()),
+                },
             },
         )
         .await
@@ -103,14 +115,16 @@ async fn gmail_hydrated_attachments_produce_the_same_staged_descriptor_shape_as_
     let source = directory.path().join("source.png");
     fs::write(&source, b"bytes").unwrap();
     let path_staged = staging
-        .stage_path(
-            "account",
-            "draft",
-            &source,
-            "path-1",
-            "image/png".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "draft",
+            },
+            source: &source,
+            id: "path-1",
+            mime_type: "image/png".into(),
+            content_id: None,
+        })
         .unwrap();
     assert_eq!(
         path_staged.read().unwrap().bytes,
@@ -125,13 +139,24 @@ fn removing_one_staged_part_never_touches_its_siblings_or_a_live_snapshot() {
     fs::write(&source, b"a").unwrap();
     let staging = Staging::new(directory.path().join("staged"));
     let staged_path = staging
-        .stage_path("account", "draft", &source, "a", "text/plain".into(), None)
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "draft",
+            },
+            source: &source,
+            id: "a",
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
     let staged_bytes = staging
-        .stage_bytes(
-            "account",
-            "draft",
-            &latentmail_lib::compose::staging::StagedPart {
+        .stage_bytes(StageBytesRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "draft",
+            },
+            descriptor: &latentmail_lib::compose::staging::StagedPart {
                 id: "b".into(),
                 filename: "b.txt".into(),
                 mime_type: "text/plain".into(),
@@ -139,14 +164,22 @@ fn removing_one_staged_part_never_touches_its_siblings_or_a_live_snapshot() {
                 content_id: None,
                 size: 0,
             },
-            b"b",
-        )
+            bytes: b"b",
+        })
         .unwrap();
     let snapshot = staging
         .snapshot("op", &[staged_path.clone(), staged_bytes.clone()])
         .unwrap();
 
-    staging.remove_part("account", "draft", "a").unwrap();
+    staging
+        .remove_part(
+            OwnerScope {
+                account_id: "account",
+                owner: "draft",
+            },
+            "a",
+        )
+        .unwrap();
     assert!(!staged_path.path.exists());
     assert!(staged_bytes.path.exists());
     assert!(snapshot.parts[0].path.exists(), "snapshot is immutable");
@@ -158,10 +191,12 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
     let directory = tempfile::tempdir().unwrap();
     let staging = Staging::new(directory.path().join("staged"));
     let part = staging
-        .stage_bytes(
-            "account",
-            "session",
-            &latentmail_lib::compose::staging::StagedPart {
+        .stage_bytes(StageBytesRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "session",
+            },
+            descriptor: &latentmail_lib::compose::staging::StagedPart {
                 id: "part".into(),
                 filename: "note.txt".into(),
                 mime_type: "text/plain".into(),
@@ -169,24 +204,40 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
                 content_id: None,
                 size: 0,
             },
-            b"note",
-        )
+            bytes: b"note",
+        })
         .unwrap();
 
     staging
-        .move_owner("account", "nonexistent-owner", "draft")
+        .move_owner(OwnerTransfer {
+            account_id: "account",
+            from: "nonexistent-owner",
+            to: "draft",
+        })
         .unwrap();
-    staging.move_owner("account", "session", "draft").unwrap();
-    staging.move_owner("account", "draft", "draft").unwrap();
+    staging
+        .move_owner(OwnerTransfer {
+            account_id: "account",
+            from: "session",
+            to: "draft",
+        })
+        .unwrap();
+    staging
+        .move_owner(OwnerTransfer {
+            account_id: "account",
+            from: "draft",
+            to: "draft",
+        })
+        .unwrap();
     let moved = staging
-        .part(
-            "account",
-            &["draft"],
-            "part",
-            "note.txt".into(),
-            "text/plain".into(),
-            None,
-        )
+        .part(PartLookup {
+            account_id: "account",
+            owners: &["draft"],
+            id: "part",
+            filename: "note.txt".into(),
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
     assert_eq!(moved.read().unwrap().bytes, b"note");
     assert!(!part.path.exists(), "the session owner was renamed");
@@ -197,14 +248,14 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
     staging.release_owner("account", "draft").unwrap();
     staging.release_owner("account", "missing").unwrap();
     assert!(staging
-        .part(
-            "account",
-            &["draft"],
-            "part",
-            "note.txt".into(),
-            "text/plain".into(),
-            None,
-        )
+        .part(PartLookup {
+            account_id: "account",
+            owners: &["draft"],
+            id: "part",
+            filename: "note.txt".into(),
+            mime_type: "text/plain".into(),
+            content_id: None
+        })
         .is_err());
 }
 
@@ -221,36 +272,56 @@ fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
         size: 0,
     };
     staging
-        .stage_bytes("account", "session", &descriptor("early"), b"early")
+        .stage_bytes(StageBytesRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "session",
+            },
+            descriptor: &descriptor("early"),
+            bytes: b"early",
+        })
         .unwrap();
     staging
-        .stage_bytes("account", "draft", &descriptor("late"), b"late")
+        .stage_bytes(StageBytesRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "draft",
+            },
+            descriptor: &descriptor("late"),
+            bytes: b"late",
+        })
         .unwrap();
 
     let owners = ["draft", "session"];
     let early = staging
-        .part(
-            "account",
-            &owners,
-            "early",
-            "note.txt".into(),
-            "text/plain".into(),
-            None,
-        )
+        .part(PartLookup {
+            account_id: "account",
+            owners: &owners,
+            id: "early",
+            filename: "note.txt".into(),
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
     assert_eq!(early.read().unwrap().bytes, b"early");
 
-    staging.move_owner("account", "session", "draft").unwrap();
+    staging
+        .move_owner(OwnerTransfer {
+            account_id: "account",
+            from: "session",
+            to: "draft",
+        })
+        .unwrap();
     for (id, bytes) in [("early", &b"early"[..]), ("late", &b"late"[..])] {
         let part = staging
-            .part(
-                "account",
-                &owners,
-                id,
-                "note.txt".into(),
-                "text/plain".into(),
-                None,
-            )
+            .part(PartLookup {
+                account_id: "account",
+                owners: &owners,
+                id: id,
+                filename: "note.txt".into(),
+                mime_type: "text/plain".into(),
+                content_id: None,
+            })
             .unwrap();
         assert_eq!(part.read().unwrap().bytes, bytes, "{id} survived the merge");
     }
@@ -259,14 +330,14 @@ fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
         "the session owner is gone once merged"
     );
     assert!(staging
-        .part(
-            "account",
-            &[],
-            "early",
-            "note.txt".into(),
-            "text/plain".into(),
-            None
-        )
+        .part(PartLookup {
+            account_id: "account",
+            owners: &[],
+            id: "early",
+            filename: "note.txt".into(),
+            mime_type: "text/plain".into(),
+            content_id: None
+        })
         .is_err());
 }
 
@@ -287,14 +358,16 @@ fn snapshot_fails_when_a_staged_part_vanishes_before_it_is_copied() {
     fs::write(&source, b"attachment").unwrap();
     let staging = Staging::new(directory.path().join("staged"));
     let part = staging
-        .stage_path(
-            "account",
-            "draft",
-            &source,
-            "part",
-            "text/plain".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "draft",
+            },
+            source: &source,
+            id: "part",
+            mime_type: "text/plain".into(),
+            content_id: None,
+        })
         .unwrap();
     fs::remove_file(&part.path).unwrap();
 
@@ -307,24 +380,26 @@ fn staging_reports_missing_sources_and_unknown_parts() {
     let staging = Staging::new(directory.path().join("staged"));
 
     assert!(staging
-        .stage_path(
-            "account",
-            "draft",
-            &directory.path().join("missing.txt"),
-            "part",
-            "text/plain".into(),
-            None,
-        )
+        .stage_path(StagePathRequest {
+            scope: OwnerScope {
+                account_id: "account",
+                owner: "draft"
+            },
+            source: &directory.path().join("missing.txt"),
+            id: "part",
+            mime_type: "text/plain".into(),
+            content_id: None
+        })
         .is_err());
     assert!(staging
-        .part(
-            "account",
-            &["draft"],
-            "missing",
-            "missing.txt".into(),
-            "text/plain".into(),
-            None,
-        )
+        .part(PartLookup {
+            account_id: "account",
+            owners: &["draft"],
+            id: "missing",
+            filename: "missing.txt".into(),
+            mime_type: "text/plain".into(),
+            content_id: None
+        })
         .is_err());
 }
 
@@ -343,18 +418,22 @@ async fn staging_a_gmail_attachment_surfaces_a_refused_download() {
     assert!(staging
         .stage_attachment(
             &client,
-            "account",
-            "draft",
-            latentmail_lib::compose::staging::GmailAttachmentSource {
-                message_id: "m1",
-                attachment_id: "a1",
-            },
-            latentmail_lib::compose::staging::NewStagedPart {
-                id: "hydrated-1".into(),
-                filename: "photo.png".into(),
-                mime_type: "image/png".into(),
-                content_id: None,
-            },
+            StageAttachmentRequest {
+                scope: OwnerScope {
+                    account_id: "account",
+                    owner: "draft"
+                },
+                source: latentmail_lib::compose::staging::GmailAttachmentSource {
+                    message_id: "m1",
+                    attachment_id: "a1",
+                },
+                descriptor: latentmail_lib::compose::staging::NewStagedPart {
+                    id: "hydrated-1".into(),
+                    filename: "photo.png".into(),
+                    mime_type: "image/png".into(),
+                    content_id: None,
+                }
+            }
         )
         .await
         .is_err());

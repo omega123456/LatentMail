@@ -1,3 +1,5 @@
+use latentmail_lib::ai::chunker::ChunkMessage;
+use latentmail_lib::ai::retrieval::RetrieveContext;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -58,7 +60,21 @@ fn account() -> Account {
     }
 }
 
-fn message(id: &str, sender: &str, body: &str, sent_at: i64) -> Message {
+struct SeedMessage<'a> {
+    id: &'a str,
+    sender: &'a str,
+    body: &'a str,
+    sent_at: i64,
+}
+
+fn message(
+    SeedMessage {
+        id,
+        sender,
+        body,
+        sent_at,
+    }: SeedMessage<'_>,
+) -> Message {
     Message {
         account_id: "account".into(),
         id: id.into(),
@@ -115,21 +131,21 @@ fn build(entries: &[(Message, Vec<f32>)]) -> (tempfile::TempDir, Storage, Vec<i6
 fn near_and_far() -> (tempfile::TempDir, Storage, Vec<i64>) {
     build(&[
         (
-            message(
-                "alice",
-                "Alice Adams <alice@example.com>",
-                BODY,
-                1_700_000_100,
-            ),
+            message(SeedMessage {
+                id: "alice",
+                sender: "Alice Adams <alice@example.com>",
+                body: BODY,
+                sent_at: 1_700_000_100,
+            }),
             vec![1.0, 0.0],
         ),
         (
-            message(
-                "bob",
-                "Bob Brown <bob@example.com>",
-                "Unrelated chatter about lunch plans",
-                1_700_000_200,
-            ),
+            message(SeedMessage {
+                id: "bob",
+                sender: "Bob Brown <bob@example.com>",
+                body: "Unrelated chatter about lunch plans",
+                sent_at: 1_700_000_200,
+            }),
             vec![0.0, 1.0],
         ),
     ])
@@ -138,30 +154,30 @@ fn near_and_far() -> (tempfile::TempDir, Storage, Vec<i64>) {
 fn lexical_only_extra() -> (tempfile::TempDir, Storage, Vec<i64>) {
     build(&[
         (
-            message(
-                "alice",
-                "Alice Adams <alice@example.com>",
-                BODY,
-                1_700_000_100,
-            ),
+            message(SeedMessage {
+                id: "alice",
+                sender: "Alice Adams <alice@example.com>",
+                body: BODY,
+                sent_at: 1_700_000_100,
+            }),
             vec![1.0, 0.0],
         ),
         (
-            message(
-                "bob",
-                "Bob Brown <bob@example.com>",
-                "Unrelated chatter about lunch plans",
-                1_700_000_200,
-            ),
+            message(SeedMessage {
+                id: "bob",
+                sender: "Bob Brown <bob@example.com>",
+                body: "Unrelated chatter about lunch plans",
+                sent_at: 1_700_000_200,
+            }),
             vec![0.0, 1.0],
         ),
         (
-            message(
-                "carol",
-                "Carol Clark <carol@example.com>",
-                "budget spreadsheet attached for review",
-                1_700_000_300,
-            ),
+            message(SeedMessage {
+                id: "carol",
+                sender: "Carol Clark <carol@example.com>",
+                body: "budget spreadsheet attached for review",
+                sent_at: 1_700_000_300,
+            }),
             vec![0.0, 1.0],
         ),
     ])
@@ -170,31 +186,41 @@ fn lexical_only_extra() -> (tempfile::TempDir, Storage, Vec<i64>) {
 fn chronological_corpus() -> (tempfile::TempDir, Storage, Vec<i64>) {
     let mut entries = vec![
         (
-            message("newest", "Ada <ada@example.com>", "budget deadline", 3_000),
+            message(SeedMessage {
+                id: "newest",
+                sender: "Ada <ada@example.com>",
+                body: "budget deadline",
+                sent_at: 3_000,
+            }),
             vec![0.0, 1.0],
         ),
         (
-            message(
-                "middle",
-                "Ben <ben@example.com>",
-                "budget deadline notes and some extra words here to lengthen the document",
-                2_000,
-            ),
+            message(SeedMessage {
+                id: "middle",
+                sender: "Ben <ben@example.com>",
+                body: "budget deadline notes and some extra words here to lengthen the document",
+                sent_at: 2_000,
+            }),
             vec![0.0, 1.0],
         ),
         (
-            message("oldest", "Cy <cy@example.com>", "budget only", 1_000),
+            message(SeedMessage {
+                id: "oldest",
+                sender: "Cy <cy@example.com>",
+                body: "budget only",
+                sent_at: 1_000,
+            }),
             vec![0.0, 1.0],
         ),
     ];
     for index in 0..10 {
         entries.push((
-            message(
-                &format!("pad-{index}"),
-                "Pad <pad@example.com>",
-                "lunch plans",
-                5_000 + index,
-            ),
+            message(SeedMessage {
+                id: &format!("pad-{index}"),
+                sender: "Pad <pad@example.com>",
+                body: "lunch plans",
+                sent_at: 5_000 + index,
+            }),
             vec![0.0, 1.0],
         ));
     }
@@ -203,12 +229,12 @@ fn chronological_corpus() -> (tempfile::TempDir, Storage, Vec<i64>) {
 
 fn attachment_corpus() -> (tempfile::TempDir, Storage, Vec<i64>) {
     let mut entries = vec![(
-        message(
-            "alice",
-            "Alice Adams <alice@example.com>",
-            BODY,
-            1_700_000_100,
-        ),
+        message(SeedMessage {
+            id: "alice",
+            sender: "Alice Adams <alice@example.com>",
+            body: BODY,
+            sent_at: 1_700_000_100,
+        }),
         vec![1.0, 0.0],
     )];
     for (id, sent_at) in [
@@ -216,7 +242,12 @@ fn attachment_corpus() -> (tempfile::TempDir, Storage, Vec<i64>) {
         ("junk-mid", 2_000),
         ("junk-new", 3_000),
     ] {
-        let mut stored = message(id, "Jozsef <jozsef@example.com>", "sdfdf", sent_at);
+        let mut stored = message(SeedMessage {
+            id: id,
+            sender: "Jozsef <jozsef@example.com>",
+            body: "sdfdf",
+            sent_at: sent_at,
+        });
         stored.subject = "asdsdasd".into();
         stored.has_attachments = true;
         entries.push((stored, vec![0.0, 1.0]));
@@ -275,10 +306,12 @@ async fn found(
 ) -> latentmail_lib::ai::retrieval::Retrieved {
     let history = Vec::new();
     let outcome = retrieve(
-        &provider(server),
-        storage,
+        RetrieveContext {
+            provider: &provider(server),
+            storage: storage,
+            cancel: &AtomicBool::new(false),
+        },
         &request(question, &history),
-        &AtomicBool::new(false),
     )
     .await
     .unwrap();
@@ -389,10 +422,12 @@ async fn the_planner_call_and_the_unfiltered_retrieval_pass_are_in_flight_at_the
     let outcome = tokio::time::timeout(
         Duration::from_secs(2),
         retrieve(
-            &provider,
-            &storage,
+            RetrieveContext {
+                provider: &provider,
+                storage: &storage,
+                cancel: &AtomicBool::new(false),
+            },
             &request("budget deadline", &history),
-            &AtomicBool::new(false),
         ),
     )
     .await
@@ -430,14 +465,14 @@ async fn the_pipeline_scores_similarity_as_one_minus_the_returned_distance() {
     assert_eq!(found.passages[0].chunk_index, 0);
     assert_eq!(found.sources.len(), 1);
     assert_eq!(found.sources[0].message_id, "alice");
-    let expected = chunker::chunks(
-        "Alice Adams <alice@example.com>",
-        "me@example.com",
-        "Subject alice",
-        Some(BODY),
-        None,
-        None,
-    );
+    let expected = chunker::chunks(&ChunkMessage {
+        sender: "Alice Adams <alice@example.com>",
+        recipients: "me@example.com",
+        subject: "Subject alice",
+        truncated_body: Some(BODY),
+        plain_body: None,
+        html_body: None,
+    });
     assert!(expected[0].ends_with(&found.passages[0].text));
     assert_eq!(found.passages[0].text, BODY);
     assert!(found
@@ -456,12 +491,12 @@ async fn two_candidates_from_one_message_yield_a_single_passage_from_one_chunkin
         .join(" ");
     let body = format!("budget deadline {words}");
     let (_directory, storage, sequences) = build(&[(
-        message(
-            "alice",
-            "Alice Adams <alice@example.com>",
-            &body,
-            1_700_000_100,
-        ),
+        message(SeedMessage {
+            id: "alice",
+            sender: "Alice Adams <alice@example.com>",
+            body: &body,
+            sent_at: 1_700_000_100,
+        }),
         vec![0.6, 0.8],
     )]);
     storage
@@ -651,30 +686,30 @@ async fn a_planner_filter_that_matches_nothing_falls_back_to_the_unfiltered_arms
 async fn a_contextual_follow_up_searches_the_prior_topic_inside_the_supported_date_filter() {
     let (_directory, storage, _sequences) = build(&[
         (
-            message(
-                "october-ssd",
-                "Raspberry Pi <reports@example.com>",
-                "SSD health SMART drive report passed",
-                day("2025-10-12"),
-            ),
+            message(SeedMessage {
+                id: "october-ssd",
+                sender: "Raspberry Pi <reports@example.com>",
+                body: "SSD health SMART drive report passed",
+                sent_at: day("2025-10-12"),
+            }),
             vec![0.0, 1.0],
         ),
         (
-            message(
-                "older-ssd",
-                "Raspberry Pi <reports@example.com>",
-                "SSD health SMART drive report passed",
-                day("2024-03-22"),
-            ),
+            message(SeedMessage {
+                id: "older-ssd",
+                sender: "Raspberry Pi <reports@example.com>",
+                body: "SSD health SMART drive report passed",
+                sent_at: day("2024-03-22"),
+            }),
             vec![0.0, 1.0],
         ),
         (
-            message(
-                "october-other",
-                "Someone <someone@example.com>",
-                "Unrelated lunch plans",
-                day("2025-10-20"),
-            ),
+            message(SeedMessage {
+                id: "october-other",
+                sender: "Someone <someone@example.com>",
+                body: "Unrelated lunch plans",
+                sent_at: day("2025-10-20"),
+            }),
             vec![1.0, 0.0],
         ),
     ]);
@@ -690,10 +725,12 @@ async fn a_contextual_follow_up_searches_the_prior_topic_inside_the_supported_da
         content: "how is my ssd health?".into(),
     }];
     let outcome = retrieve(
-        &provider(&server),
-        &storage,
+        RetrieveContext {
+            provider: &provider(&server),
+            storage: &storage,
+            cancel: &AtomicBool::new(false),
+        },
         &request("how about in october last year?", &history),
-        &AtomicBool::new(false),
     )
     .await
     .unwrap();
@@ -764,10 +801,12 @@ async fn a_short_embedding_batch_and_a_total_storage_failure_both_surface_as_err
     let history = Vec::new();
     assert_eq!(
         retrieve(
-            &provider(&server),
-            &storage,
-            &request(QUESTION, &history),
-            &AtomicBool::new(false),
+            RetrieveContext {
+                provider: &provider(&server),
+                storage: &storage,
+                cancel: &AtomicBool::new(false)
+            },
+            &request(QUESTION, &history)
         )
         .await
         .unwrap_err(),
@@ -787,10 +826,12 @@ async fn a_short_embedding_batch_and_a_total_storage_failure_both_surface_as_err
     plan_reply(&broken_server, "{}").await;
     embeddings(&broken_server, vec![1.0, 0.0]).await;
     assert!(retrieve(
-        &provider(&broken_server),
-        &broken,
-        &request(QUESTION, &history),
-        &AtomicBool::new(false),
+        RetrieveContext {
+            provider: &provider(&broken_server),
+            storage: &broken,
+            cancel: &AtomicBool::new(false)
+        },
+        &request(QUESTION, &history)
     )
     .await
     .is_err());
@@ -799,12 +840,12 @@ async fn a_short_embedding_batch_and_a_total_storage_failure_both_surface_as_err
 #[tokio::test]
 async fn a_question_no_arm_matches_reports_an_empty_retrieval() {
     let (_directory, storage, _sequences) = build(&[(
-        message(
-            "alice",
-            "Alice Adams <alice@example.com>",
-            BODY,
-            1_700_000_100,
-        ),
+        message(SeedMessage {
+            id: "alice",
+            sender: "Alice Adams <alice@example.com>",
+            body: BODY,
+            sent_at: 1_700_000_100,
+        }),
         vec![1.0, 0.0],
     )]);
     let server = MockServer::start().await;
@@ -813,10 +854,12 @@ async fn a_question_no_arm_matches_reports_an_empty_retrieval() {
     let history = Vec::new();
     assert_eq!(
         retrieve(
-            &provider(&server),
-            &storage,
-            &request("zzzqqq wwwvvv", &history),
-            &AtomicBool::new(false),
+            RetrieveContext {
+                provider: &provider(&server),
+                storage: &storage,
+                cancel: &AtomicBool::new(false)
+            },
+            &request("zzzqqq wwwvvv", &history)
         )
         .await
         .unwrap(),
@@ -831,10 +874,12 @@ async fn cancelling_before_the_planner_and_during_retrieval_both_report_cancelle
     let history = Vec::new();
     assert_eq!(
         retrieve(
-            &unreachable,
-            &storage,
-            &request(QUESTION, &history),
-            &AtomicBool::new(true),
+            RetrieveContext {
+                provider: &unreachable,
+                storage: &storage,
+                cancel: &AtomicBool::new(true)
+            },
+            &request(QUESTION, &history)
         )
         .await
         .unwrap(),
@@ -854,10 +899,12 @@ async fn cancelling_before_the_planner_and_during_retrieval_both_report_cancelle
         .await;
     assert_eq!(
         retrieve(
-            &provider(&server),
-            &storage,
-            &request(QUESTION, &history),
-            &cancel,
+            RetrieveContext {
+                provider: &provider(&server),
+                storage: &storage,
+                cancel: &cancel
+            },
+            &request(QUESTION, &history)
         )
         .await
         .unwrap(),

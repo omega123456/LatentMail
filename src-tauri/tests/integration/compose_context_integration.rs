@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use latentmail_lib::compose::context::ReplyInput;
 use latentmail_lib::{
     compose::context::{display_quote, forward, outgoing_quote, reply, ReplyAttachment},
     storage::{HtmlPresence, Message},
@@ -31,12 +32,14 @@ fn reply_and_forward_preserve_their_distinct_threading_contracts() {
     let original = message("Other <other@example.com>", "re: Hello");
     let reply = reply(
         &original,
-        "me@example.com, other@example.com",
-        "ME@example.com, copy@example.com",
-        "me@example.com",
-        true,
-        Some("<old@example.com>"),
-        Vec::new(),
+        ReplyInput {
+            to: "me@example.com, other@example.com",
+            cc: "ME@example.com, copy@example.com",
+            account_email: "me@example.com",
+            all: true,
+            references: Some("<old@example.com>"),
+            attachments: Vec::new(),
+        },
     );
     assert_eq!(reply.to, vec!["Other <other@example.com>".to_owned()]);
     assert_eq!(reply.cc, vec!["copy@example.com".to_owned()]);
@@ -64,12 +67,14 @@ fn reply_context_normalizes_self_replies_and_display_quotes() {
 
     let reply = reply(
         &original,
-        "ME@example.com, Other <OTHER@example.com>, other@example.com",
-        "copy@example.com",
-        "me@example.com",
-        false,
-        None,
-        Vec::new(),
+        ReplyInput {
+            to: "ME@example.com, Other <OTHER@example.com>, other@example.com",
+            cc: "copy@example.com",
+            account_email: "me@example.com",
+            all: false,
+            references: None,
+            attachments: Vec::new(),
+        },
     );
     assert_eq!(reply.to, vec!["Other <OTHER@example.com>"]);
     assert!(reply.cc.is_empty());
@@ -105,12 +110,14 @@ fn reply_all_keeps_a_quoted_display_name_that_contains_a_comma_whole() {
     let original = message(r#""Doe, John" <john@example.com>"#, "Hello");
     let reply = reply(
         &original,
-        r#""Roe, Jane" <jane@example.com>, me@example.com"#,
-        r#""Poe, Edgar" <edgar@example.com>"#,
-        "me@example.com",
-        true,
-        None,
-        Vec::new(),
+        ReplyInput {
+            to: r#""Roe, Jane" <jane@example.com>, me@example.com"#,
+            cc: r#""Poe, Edgar" <edgar@example.com>"#,
+            account_email: "me@example.com",
+            all: true,
+            references: None,
+            attachments: Vec::new(),
+        },
     );
     assert_eq!(
         reply.to,

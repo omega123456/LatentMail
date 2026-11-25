@@ -1,16 +1,17 @@
-use std::sync::Arc;
-
-use serde::Serialize;
-use tauri::{AppHandle, Runtime, State};
+use serde::{Deserialize, Serialize};
+use tauri::Runtime;
 
 use crate::{
-    auth::AuthService,
     gmail::GmailError,
+    ipc::{AccountMessageRequest, AppServices, CommandPayload},
     storage::{AttachmentRepository, Message, MessageRepository, Storage},
-    sync::{commands::gmail_client_for, to_millis, SyncEngine},
+    sync::to_millis,
 };
 
-use super::{authentication_results, collapse_encoded_bodies, export_document, RecipientRoles};
+use super::{
+    authentication_results, collapse_encoded_bodies, export_document, ExportAttachments,
+    RecipientRoles,
+};
 
 const SOURCE_TOO_LARGE: &str = "This message is too large to show its source here.";
 const MESSAGE_UNAVAILABLE: &str = "Message is unavailable";
@@ -31,11 +32,25 @@ pub struct MessageSourceDto {
     pub display: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveMessageRequest {
+    pub account_id: String,
+    pub message_id: String,
+    pub destination: String,
+}
+
+struct StoredExportMessage {
+    message: Message,
+    to: String,
+    cc: String,
+}
+
 async fn stored_message(
-    storage: &State<'_, Storage>,
+    storage: &Storage,
     account_id: &str,
     message_id: &str,
-) -> Result<(Message, (String, String, String)), String> {
+) -> Result<StoredExportMessage, String> {
     let account = account_id.to_owned();
     let id = message_id.to_owned();
     storage
@@ -44,7 +59,11 @@ async fn stored_message(
                 return Ok(None);
             };
             let roles = MessageRepository::recipient_roles(connection, &account, &id)?;
-            Ok(Some((message, roles)))
+            Ok(Some(StoredExportMessage {
+                message: message,
+                to: roles.to,
+                cc: roles.cc,
+            }))
         })
         .await
         .map_err(|error| error.to_string())?
@@ -52,13 +71,11 @@ async fn stored_message(
 }
 
 async fn raw_source<R: Runtime>(
-    app: &AppHandle<R>,
-    auth: &State<'_, AuthService>,
-    engine: &State<'_, Arc<SyncEngine>>,
+    services: &AppServices<'_, R>,
     account_id: &str,
     message_id: &str,
 ) -> Result<Vec<u8>, String> {
-    let client = gmail_client_for(app, auth, engine, account_id).await?;
+    let client = services.gmail_client(account_id).await?;
     client
         .raw_message(message_id)
         .await
@@ -82,25 +99,25 @@ fn resolve_to_header(to: String, fallback_recipients: String) -> String {
     to
 }
 
-#[tauri::command]
-pub async fn read_message_source<R: Runtime>(
-    app: AppHandle<R>,
-    auth: State<'_, AuthService>,
-    engine: State<'_, Arc<SyncEngine>>,
-    storage: State<'_, Storage>,
-    account_id: String,
-    message_id: String,
+async fn load_source<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: AccountMessageRequest,
 ) -> Result<MessageSourceDto, String> {
-    let (message, (to, cc, _)) = stored_message(&storage, &account_id, &message_id).await?;
-    let bytes = raw_source(&app, &auth, &engine, &account_id, &message_id).await?;
+    let stored = stored_message(
+        services.storage()?.inner(),
+        &request.account_id,
+        &request.message_id,
+    )
+    .await?;
+    let bytes = raw_source(&services, &request.account_id, &request.message_id).await?;
     let raw = String::from_utf8_lossy(&bytes).into_owned();
     Ok(MessageSourceDto {
-        message_id: message.rfc_message_id,
-        sent_at: to_millis(message.sent_at),
-        sender: message.sender,
-        to: resolve_to_header(to, message.recipients),
-        cc: cc,
-        subject: message.subject,
+        message_id: stored.message.rfc_message_id,
+        sent_at: to_millis(stored.message.sent_at),
+        sender: stored.message.sender,
+        to: resolve_to_header(stored.to, stored.message.recipients),
+        cc: stored.cc,
+        subject: stored.message.subject,
         authentication_results: authentication_results(&raw),
         size_bytes: bytes.len() as u64,
         display: collapse_encoded_bodies(&raw),
@@ -108,27 +125,22 @@ pub async fn read_message_source<R: Runtime>(
     })
 }
 
-#[tauri::command]
-pub async fn save_message_source_to_path<R: Runtime>(
-    app: AppHandle<R>,
-    auth: State<'_, AuthService>,
-    engine: State<'_, Arc<SyncEngine>>,
-    account_id: String,
-    message_id: String,
-    destination: String,
+async fn save_source<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: SaveMessageRequest,
 ) -> Result<(), String> {
-    let bytes = raw_source(&app, &auth, &engine, &account_id, &message_id).await?;
-    write_file(destination, bytes).await
+    let bytes = raw_source(&services, &request.account_id, &request.message_id).await?;
+    write_file(request.destination, bytes).await
 }
 
-#[tauri::command]
-pub async fn save_message_html_to_path(
-    storage: State<'_, Storage>,
-    account_id: String,
-    message_id: String,
-    destination: String,
+async fn save_html<R: Runtime>(
+    services: AppServices<'_, R>,
+    request: SaveMessageRequest,
 ) -> Result<(), String> {
-    let (message, (to, cc, _)) = stored_message(&storage, &account_id, &message_id).await?;
+    let storage = services.storage()?;
+    let stored = stored_message(storage.inner(), &request.account_id, &request.message_id).await?;
+    let account_id = request.account_id;
+    let message_id = request.message_id;
     let (attachments, inline_parts) = storage
         .run(move |connection| {
             Ok((
@@ -139,11 +151,40 @@ pub async fn save_message_html_to_path(
         .await
         .map_err(|error| error.to_string())?;
     let document = export_document(
-        &message,
-        &RecipientRoles { to: &to, cc: &cc },
-        &attachments,
-        &inline_parts,
+        &stored.message,
+        &RecipientRoles {
+            to: &stored.to,
+            cc: &stored.cc,
+        },
+        ExportAttachments {
+            attachments: &attachments,
+            inline_parts: &inline_parts,
+        },
     )
     .ok_or_else(|| BODY_NOT_LOADED.to_owned())?;
-    write_file(destination, document.into_bytes()).await
+    write_file(request.destination, document.into_bytes()).await
+}
+
+#[tauri::command]
+pub async fn read_message_source<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountMessageRequest>,
+) -> Result<MessageSourceDto, String> {
+    load_source(services, request).await
+}
+
+#[tauri::command]
+pub async fn save_message_source_to_path<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<SaveMessageRequest>,
+) -> Result<(), String> {
+    save_source(services, request).await
+}
+
+#[tauri::command]
+pub async fn save_message_html_to_path<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<SaveMessageRequest>,
+) -> Result<(), String> {
+    save_html(services, request).await
 }

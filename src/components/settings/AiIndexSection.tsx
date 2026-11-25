@@ -96,12 +96,17 @@ function IndexProgress({
   );
 }
 
-function statusDetail(
-  current: State,
-  started: boolean,
-  indexedMessages: number,
-  indexedPassages: number,
-): string {
+function statusDetail({
+  current,
+  started,
+  indexedMessages,
+  indexedPassages,
+}: {
+  current: State;
+  started: boolean;
+  indexedMessages: number;
+  indexedPassages: number;
+}): string {
   if (current === 'needsRebuild') return REBUILD_MESSAGE;
   if (started) return `${count(indexedMessages)} messages · ${count(indexedPassages)} passages`;
   return 'No indexed messages yet';
@@ -276,12 +281,7 @@ export function AiIndexSection({
             tone={metrics.current === 'complete' ? 'success' : 'neutral'}
             pip={pips[metrics.current]}
             title={labels[metrics.current]}
-            detail={statusDetail(
-              metrics.current,
-              metrics.started,
-              metrics.indexedMessages,
-              metrics.indexedPassages,
-            )}
+            detail={statusDetail(metrics)}
             action={rebuildAction}
           />
         )}

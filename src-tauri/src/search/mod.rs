@@ -2,8 +2,13 @@ pub mod query;
 pub mod scope;
 
 use chrono::Utc;
+use serde::Deserialize;
+use tauri::Runtime;
 
-use crate::storage::{SearchRepository, Storage};
+use crate::ipc::{AppServices, CommandPayload};
+use crate::storage::{
+    SearchCountQuery, SearchPageQuery, SearchRepository, Storage, ThreadPageCursor,
+};
 use crate::sync::{
     ParsedSearchQueryDto, SearchPredicateDto, ThreadCursor, ThreadDto, ThreadPageDirection,
     ThreadSearchPage,
@@ -52,16 +57,37 @@ fn to_dto(parsed: &ParsedQuery) -> ParsedSearchQueryDto {
     }
 }
 
-#[tauri::command]
-pub async fn search_threads(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    query: String,
-    scope: Option<SearchScope>,
-    cursor: Option<ThreadCursor>,
-    direction: Option<ThreadPageDirection>,
-    limit: Option<u32>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchThreadsRequest {
+    pub account_id: String,
+    pub query: String,
+    pub scope: Option<SearchScope>,
+    pub cursor: Option<ThreadCursor>,
+    pub direction: Option<ThreadPageDirection>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTotalRequest {
+    pub account_id: String,
+    pub query: String,
+    pub scope: Option<SearchScope>,
+}
+
+pub async fn run_search_threads(
+    storage: &Storage,
+    request: SearchThreadsRequest,
 ) -> Result<ThreadSearchPage, String> {
+    let SearchThreadsRequest {
+        account_id,
+        query,
+        scope,
+        cursor,
+        direction,
+        limit,
+    } = request;
     let parsed = query::parse(&query, Utc::now()).map_err(|error| error.to_string())?;
     if parsed.is_empty() {
         return Ok(ThreadSearchPage {
@@ -74,7 +100,10 @@ pub async fn search_threads(
     let scope_filter = scope::resolve(&scope.unwrap_or(SearchScope::Default));
     let limit = crate::sync::thread_page_limit(limit);
     let page_size = usize::try_from(limit).unwrap_or(usize::MAX);
-    let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
+    let cursor_pair = cursor.map(|cursor| ThreadPageCursor {
+        latest_at: cursor.latest_at,
+        thread_id: cursor.id,
+    });
     let has_cursor = cursor_pair.is_some();
     let direction = direction.unwrap_or_default();
 
@@ -82,12 +111,14 @@ pub async fn search_threads(
         .run(move |connection| {
             let rows = SearchRepository::search_with_direction(
                 connection,
-                &account_id,
-                &parsed,
-                &scope_filter,
-                cursor_pair,
-                i64::from(limit) + 1,
-                direction,
+                SearchPageQuery {
+                    account_id: &account_id,
+                    parsed: &parsed,
+                    scope: &scope_filter,
+                    cursor: cursor_pair,
+                    limit: i64::from(limit) + 1,
+                    direction: direction,
+                },
             )?;
             Ok(rows)
         })
@@ -114,16 +145,7 @@ pub async fn search_threads(
         || (direction == ThreadPageDirection::Forward && has_cursor))
         .then(|| rows.first().map(cursor_for))
         .flatten();
-    let items = rows
-        .into_iter()
-        .map(|row| {
-            ThreadDto::from(row.thread).with_row_details(
-                row.snippet,
-                row.label_indicators,
-                row.system_label_ids,
-            )
-        })
-        .collect();
+    let items = rows.into_iter().map(ThreadDto::from_row).collect();
     Ok(ThreadSearchPage {
         items,
         next_cursor,
@@ -131,13 +153,15 @@ pub async fn search_threads(
     })
 }
 
-#[tauri::command]
-pub async fn search_total(
-    storage: tauri::State<'_, Storage>,
-    account_id: String,
-    query: String,
-    scope: Option<SearchScope>,
+pub async fn run_search_total(
+    storage: &Storage,
+    request: SearchTotalRequest,
 ) -> Result<i64, String> {
+    let SearchTotalRequest {
+        account_id,
+        query,
+        scope,
+    } = request;
     let parsed = query::parse(&query, Utc::now()).map_err(|error| error.to_string())?;
     if parsed.is_empty() {
         return Ok(0);
@@ -145,14 +169,41 @@ pub async fn search_total(
     let scope_filter = scope::resolve(&scope.unwrap_or(SearchScope::Default));
     storage
         .run(move |connection| {
-            SearchRepository::count(connection, &account_id, &parsed, &scope_filter)
+            SearchRepository::count(
+                connection,
+                SearchCountQuery {
+                    account_id: &account_id,
+                    parsed: &parsed,
+                    scope: &scope_filter,
+                },
+            )
         })
         .await
         .map_err(|error| error.to_string())
 }
 
+pub fn parse_query_dto(query: &str) -> Result<ParsedSearchQueryDto, String> {
+    let parsed = query::parse(query, Utc::now()).map_err(|error| error.to_string())?;
+    Ok(to_dto(&parsed))
+}
+
+#[tauri::command]
+pub async fn search_threads<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<SearchThreadsRequest>,
+) -> Result<ThreadSearchPage, String> {
+    run_search_threads(services.storage()?.inner(), request).await
+}
+
+#[tauri::command]
+pub async fn search_total<R: Runtime>(
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<SearchTotalRequest>,
+) -> Result<i64, String> {
+    run_search_total(services.storage()?.inner(), request).await
+}
+
 #[tauri::command]
 pub fn parse_search_query(query: String) -> Result<ParsedSearchQueryDto, String> {
-    let parsed = query::parse(&query, Utc::now()).map_err(|error| error.to_string())?;
-    Ok(to_dto(&parsed))
+    parse_query_dto(&query)
 }

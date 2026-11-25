@@ -3,7 +3,7 @@ use latentmail_lib::queue::QueueEngine;
 use latentmail_lib::storage::{
     Account, AccountRepository, LabelRepository, MessageRepository, Storage, ThreadRepository,
 };
-use latentmail_lib::sync::{SyncEngine, SyncState, WorkRegistry};
+use latentmail_lib::sync::{SyncEngine, SyncEngineDeps, SyncState, WorkRegistry};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -49,10 +49,14 @@ fn engine_with_recorded_events() -> (
     let events: RecordedEvents = Default::default();
     let recorder = std::sync::Arc::clone(&events);
     let engine = SyncEngine::new_with_clock(
-        storage.clone(),
-        queue,
-        registry,
-        std::sync::Arc::new(move |name, payload| recorder.lock().unwrap().push((name, payload))),
+        SyncEngineDeps {
+            storage: storage.clone(),
+            queue: queue,
+            registry: registry,
+            events: std::sync::Arc::new(move |name, payload| {
+                recorder.lock().unwrap().push((name, payload))
+            }),
+        },
         fixture_now,
     );
     (engine, storage, directory, events)

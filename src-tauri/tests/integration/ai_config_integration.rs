@@ -1,4 +1,7 @@
-use latentmail_lib::storage::{Account, AccountAiConfigRepository, AccountRepository, Storage};
+use latentmail_lib::ai::EmbeddingModelUpdate;
+use latentmail_lib::storage::{
+    Account, AccountAiConfigRepository, AccountRepository, EmbeddingModelSpec, Storage,
+};
 
 #[test]
 fn account_config_is_isolated_and_foreign_keys_remain_valid() {
@@ -21,7 +24,15 @@ fn account_config_is_isolated_and_foreign_keys_remain_valid() {
     }
     AccountAiConfigRepository::set_base_url(&connection, "account-a", "http://localhost/v1/")
         .unwrap();
-    AccountAiConfigRepository::set_embedding_model(&connection, "account-a", "embed", 3).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        &connection,
+        "account-a",
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 3,
+        },
+    )
+    .unwrap();
     assert_eq!(
         AccountAiConfigRepository::get(&connection, "account-a")
             .unwrap()
@@ -75,9 +86,11 @@ async fn setting_an_embedding_model_surfaces_an_unreadable_database() {
     assert!(service
         .set_embedding_model(
             tauri::Manager::app_handle(&app),
-            "account".into(),
-            "embedding".into(),
-            2,
+            EmbeddingModelUpdate {
+                account_id: "account".into(),
+                model: "embedding".into(),
+                dimensions: 2
+            }
         )
         .await
         .is_err());
@@ -123,7 +136,15 @@ fn initializing_ai_surfaces_a_rejected_embedding_table() {
         .unwrap();
     {
         let connection = storage.connection().unwrap();
-        AccountAiConfigRepository::set_embedding_model(&connection, "account", "embed", 0).unwrap();
+        AccountAiConfigRepository::set_embedding_model(
+            &connection,
+            "account",
+            EmbeddingModelSpec {
+                model: "embed",
+                dimensions: 0,
+            },
+        )
+        .unwrap();
     }
 
     assert!(latentmail_lib::ai::initialize(tauri::Manager::app_handle(&app), storage).is_err());

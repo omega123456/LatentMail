@@ -69,47 +69,39 @@ function resolveListState(input: {
   return input.backfillIncomplete ? 'syncing' : 'empty';
 }
 
-function ListStatusContent({
-  state,
-  mailboxId,
-  incompleteStrip,
-  searchQueryText,
-  syncProgress,
-  errorMessage,
-  onRetry,
-}: {
-  state: Exclude<ListState, 'ready'>;
+type ListStatusProps = {
   mailboxId: string;
   incompleteStrip: React.ReactNode;
   searchQueryText?: string;
   syncProgress?: { persistedCount: number; discoveredCount: number };
   errorMessage?: string;
   onRetry?: () => void;
-}) {
-  if (state === 'loading') return <LoadingState>Loading conversations…</LoadingState>;
-  if (state === 'empty') {
-    return <EmptyState>{emptyCopy[mailboxId] ?? 'No conversations in this mailbox.'}</EmptyState>;
-  }
-  if (state === 'searchEmpty') {
-    return (
-      <>
-        {incompleteStrip}
-        <EmptyState variant="search" query={searchQueryText ?? ''} />
-      </>
-    );
-  }
-  if (state === 'syncing') {
-    return (
-      <EmptyState
-        variant="syncing"
-        persistedCount={syncProgress?.persistedCount}
-        discoveredCount={syncProgress?.discoveredCount}
-      >
-        Older mail is still arriving
-      </EmptyState>
-    );
-  }
-  return (
+};
+
+const LIST_STATUS_VIEWS: Record<
+  Exclude<ListState, 'ready'>,
+  (props: ListStatusProps) => React.ReactNode
+> = {
+  loading: () => <LoadingState>Loading conversations…</LoadingState>,
+  empty: ({ mailboxId }) => (
+    <EmptyState>{emptyCopy[mailboxId] ?? 'No conversations in this mailbox.'}</EmptyState>
+  ),
+  searchEmpty: ({ incompleteStrip, searchQueryText }) => (
+    <>
+      {incompleteStrip}
+      <EmptyState variant="search" query={searchQueryText ?? ''} />
+    </>
+  ),
+  syncing: ({ syncProgress }) => (
+    <EmptyState
+      variant="syncing"
+      persistedCount={syncProgress?.persistedCount}
+      discoveredCount={syncProgress?.discoveredCount}
+    >
+      Older mail is still arriving
+    </EmptyState>
+  ),
+  error: ({ errorMessage, onRetry }) => (
     <ErrorState>
       Couldn’t load conversations.{' '}
       <button
@@ -120,7 +112,14 @@ function ListStatusContent({
       </button>
       {errorMessage && <span className="block text-body-sm">{errorMessage}</span>}
     </ErrorState>
-  );
+  ),
+};
+
+function ListStatusContent({
+  state,
+  ...props
+}: ListStatusProps & { state: Exclude<ListState, 'ready'> }) {
+  return LIST_STATUS_VIEWS[state](props);
 }
 
 function hasRowModifier(event: ReactMouseEvent): boolean {

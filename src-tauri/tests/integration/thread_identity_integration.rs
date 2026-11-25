@@ -12,13 +12,24 @@ fn primary_label(sent_label: bool) -> String {
     "INBOX".into()
 }
 
-fn message(
-    id: &str,
-    thread_id: &str,
-    sender: &str,
-    to: &str,
+struct SeedMessage<'a> {
+    id: &'a str,
+    thread_id: &'a str,
+    sender: &'a str,
+    to: &'a str,
     sent_at: i64,
     sent_label: bool,
+}
+
+fn message(
+    SeedMessage {
+        id,
+        thread_id,
+        sender,
+        to,
+        sent_at,
+        sent_label,
+    }: SeedMessage<'_>,
 ) -> GmailMessage {
     GmailMessage {
         id: id.into(),
@@ -130,20 +141,27 @@ fn the_stored_sender_is_the_newest_messages_sender_not_the_first() {
     materialize::persist(
         &connection,
         "a",
-        &message("m1", "t1", "old@example.com", "me@example.com", 100, false),
+        &message(SeedMessage {
+            id: "m1",
+            thread_id: "t1",
+            sender: "old@example.com",
+            to: "me@example.com",
+            sent_at: 100,
+            sent_label: false,
+        }),
     )
     .unwrap();
     materialize::persist(
         &connection,
         "a",
-        &message(
-            "m2",
-            "t1",
-            r#""Kovacs, Jozsef" <j@example.com>"#,
-            "me@example.com",
-            200,
-            false,
-        ),
+        &message(SeedMessage {
+            id: "m2",
+            thread_id: "t1",
+            sender: r#""Kovacs, Jozsef" <j@example.com>"#,
+            to: "me@example.com",
+            sent_at: 200,
+            sent_label: false,
+        }),
     )
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
@@ -166,14 +184,14 @@ fn a_thread_with_no_sent_message_carries_no_recipient_identity() {
     materialize::persist(
         &connection,
         "a",
-        &message(
-            "m1",
-            "t1",
-            "sender@example.com",
-            "me@example.com",
-            100,
-            false,
-        ),
+        &message(SeedMessage {
+            id: "m1",
+            thread_id: "t1",
+            sender: "sender@example.com",
+            to: "me@example.com",
+            sent_at: 100,
+            sent_label: false,
+        }),
     )
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
@@ -191,27 +209,27 @@ fn a_sent_thread_carries_the_newest_sent_messages_first_recipient() {
     materialize::persist(
         &connection,
         "a",
-        &message(
-            "m1",
-            "t1",
-            "me@example.com",
-            "old-recipient@example.com",
-            100,
-            true,
-        ),
+        &message(SeedMessage {
+            id: "m1",
+            thread_id: "t1",
+            sender: "me@example.com",
+            to: "old-recipient@example.com",
+            sent_at: 100,
+            sent_label: true,
+        }),
     )
     .unwrap();
     materialize::persist(
         &connection,
         "a",
-        &message(
-            "m2",
-            "t1",
-            "me@example.com",
-            r#""Doe, Jane" <jane@example.com>, cc@example.com"#,
-            200,
-            true,
-        ),
+        &message(SeedMessage {
+            id: "m2",
+            thread_id: "t1",
+            sender: "me@example.com",
+            to: r#""Doe, Jane" <jane@example.com>, cc@example.com"#,
+            sent_at: 200,
+            sent_label: true,
+        }),
     )
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
@@ -230,7 +248,19 @@ fn a_sent_thread_carries_the_newest_sent_messages_first_recipient() {
 fn missing_sender_and_recipient_data_produce_both_fallback_strings() {
     let connection = Storage::in_memory().unwrap();
     AccountRepository::upsert(&connection, &account_row()).unwrap();
-    materialize::persist(&connection, "a", &message("m1", "t1", "", "", 100, true)).unwrap();
+    materialize::persist(
+        &connection,
+        "a",
+        &message(SeedMessage {
+            id: "m1",
+            thread_id: "t1",
+            sender: "",
+            to: "",
+            sent_at: 100,
+            sent_label: true,
+        }),
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
     let thread = ThreadRepository::get(&connection, "a", "t1")
@@ -252,14 +282,14 @@ fn a_thread_with_malformed_stored_identity_json_falls_back_instead_of_erroring()
     materialize::persist(
         &connection,
         "a",
-        &message(
-            "m1",
-            "t1",
-            "sender@example.com",
-            "me@example.com",
-            100,
-            true,
-        ),
+        &message(SeedMessage {
+            id: "m1",
+            thread_id: "t1",
+            sender: "sender@example.com",
+            to: "me@example.com",
+            sent_at: 100,
+            sent_label: true,
+        }),
     )
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();

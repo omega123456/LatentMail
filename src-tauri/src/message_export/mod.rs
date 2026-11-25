@@ -126,15 +126,20 @@ fn remote_images_notice(blocked: bool) -> String {
     String::new()
 }
 
+pub struct ExportAttachments<'a> {
+    pub attachments: &'a [Attachment],
+    pub inline_parts: &'a [InlinePart],
+}
+
 pub fn export_document(
     message: &Message,
     roles: &RecipientRoles<'_>,
-    attachments: &[Attachment],
-    inline_parts: &[InlinePart],
+    media: ExportAttachments<'_>,
 ) -> Option<String> {
     let (body, remote_images_blocked) = match (&message.html_body, &message.plain_body) {
         (Some(html), _) => {
-            let sanitized = crate::sanitize::sanitize_for_export(html, &inline_sources(inline_parts));
+            let sanitized =
+                crate::sanitize::sanitize_for_export(html, &inline_sources(media.inline_parts));
             (sanitized.html, sanitized.remote_images_blocked)
         }
         (None, Some(plain)) => (
@@ -154,7 +159,8 @@ pub fn export_document(
                 .to_string()
         })
         .unwrap_or_default();
-    let attachment_names = attachments
+    let attachment_names = media
+        .attachments
         .iter()
         .map(|attachment| attachment.filename.as_str())
         .collect::<Vec<_>>()

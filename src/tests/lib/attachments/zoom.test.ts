@@ -56,15 +56,41 @@ describe('zoom', () => {
     const wideViewport = { width: 1000, height: 300 };
     const unevenViewport = { width: UNEVEN_VIEWPORT_WIDTH, height: 300 };
     const emptyViewport = { width: 0, height: 0 };
-    expect(fitZoom('fit-width', content, squareViewport, GENEROUS_FIT_CAP)).toBe(ONE_AND_A_HALF);
-    expect(fitZoom('fit-page', content, squareViewport, GENEROUS_FIT_CAP)).toBe(
-      STEP_BELOW_ACTUAL_SIZE,
-    );
-    expect(fitZoom('fit-width', content, wideViewport, FIT_CAP)).toBe(FIT_CAP);
-    const floored = fitZoom('fit-width', content, unevenViewport, GENEROUS_FIT_CAP);
+    expect(
+      fitZoom({
+        mode: 'fit-width',
+        content: content,
+        viewport: squareViewport,
+        cap: GENEROUS_FIT_CAP,
+      }),
+    ).toBe(ONE_AND_A_HALF);
+    expect(
+      fitZoom({
+        mode: 'fit-page',
+        content: content,
+        viewport: squareViewport,
+        cap: GENEROUS_FIT_CAP,
+      }),
+    ).toBe(STEP_BELOW_ACTUAL_SIZE);
+    expect(
+      fitZoom({ mode: 'fit-width', content: content, viewport: wideViewport, cap: FIT_CAP }),
+    ).toBe(FIT_CAP);
+    const floored = fitZoom({
+      mode: 'fit-width',
+      content: content,
+      viewport: unevenViewport,
+      cap: GENEROUS_FIT_CAP,
+    });
     expect(floored).toBeCloseTo(FLOORED_FIT_ZOOM, FIT_ZOOM_DECIMALS);
     expect(floored * content.width).toBeLessThanOrEqual(UNEVEN_VIEWPORT_WIDTH);
-    expect(fitZoom('fit-width', content, emptyViewport, GENEROUS_FIT_CAP)).toBe(MIN_ZOOM);
+    expect(
+      fitZoom({
+        mode: 'fit-width',
+        content: content,
+        viewport: emptyViewport,
+        cap: GENEROUS_FIT_CAP,
+      }),
+    ).toBe(MIN_ZOOM);
   });
 
   it('zooms smoothly with the wheel and limits a single large delta', () => {

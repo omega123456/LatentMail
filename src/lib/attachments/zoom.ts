@@ -28,7 +28,17 @@ export function stepZoom(zoom: number, direction: 1 | -1): number {
   return next ?? zoom;
 }
 
-export function fitZoom(mode: FitMode, content: Size, viewport: Size, cap: number): number {
+export function fitZoom({
+  mode,
+  content,
+  viewport,
+  cap,
+}: {
+  mode: FitMode;
+  content: Size;
+  viewport: Size;
+  cap: number;
+}): number {
   const byWidth = viewport.width / content.width;
   const fit = mode === 'fit-width' ? byWidth : Math.min(byWidth, viewport.height / content.height);
   return clampZoom(Math.floor(Math.min(cap, fit) * FIT_PRECISION) / FIT_PRECISION);

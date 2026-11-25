@@ -64,7 +64,13 @@ pub async fn resolve_logo(cache: &AvatarCache, sender_domain: &str) -> Option<Ve
             continue;
         };
         let png = image::normalize_to_png(validated);
-        let _ = cache.store_hit(&cache_key, CacheDomain::Sender, &png).await;
+        let _ = cache
+            .store_hit(super::cache::CachedAvatar {
+                cache_key: &cache_key,
+                domain: CacheDomain::Sender,
+                png_bytes: &png,
+            })
+            .await;
         return Some(png);
     }
     None

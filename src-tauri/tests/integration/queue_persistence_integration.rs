@@ -1,7 +1,9 @@
+use latentmail_lib::queue::DurableSubmission;
+use latentmail_lib::storage::TerminalOutcome;
 use latentmail_lib::{
     queue::{
         admit_durable, recover_durable_operations, recovered_queue_operation, Lane, OperationKind,
-        QueueEngine, QueueOperation,
+        QueueEngine, QueueOperation, RecoveredOperations,
     },
     storage::{Account, AccountRepository, Operation, OperationRepository, Storage},
 };
@@ -57,7 +59,10 @@ fn restart_recovers_queued_durable_work_and_marks_active_send_uncertain() {
         )
         .unwrap();
     }
-    let (recovered, uncertain_accounts) = recover_durable_operations(&connection).unwrap();
+    let RecoveredOperations {
+        pending: recovered,
+        uncertain_accounts,
+    } = recover_durable_operations(&connection).unwrap();
     assert_eq!(uncertain_accounts, ["account"]);
     assert_eq!(
         recovered_queue_operation(&recovered[1]).unwrap().kind,
@@ -122,7 +127,10 @@ fn a_draft_interrupted_mid_execution_is_requeued_rather_than_dropped() {
         },
     )
     .unwrap();
-    let (recovered, uncertain_accounts) = recover_durable_operations(&connection).unwrap();
+    let RecoveredOperations {
+        pending: recovered,
+        uncertain_accounts,
+    } = recover_durable_operations(&connection).unwrap();
     assert!(uncertain_accounts.is_empty());
     assert_eq!(recovered[0].id, "active-draft");
     assert_eq!(recovered[0].status, "queued");
@@ -157,17 +165,19 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
     admit_durable(
         &engine,
         &storage,
-        QueueOperation {
-            id: "draft-1".into(),
-            account_id: "account".into(),
-            lane: Lane::Interactive,
-            kind: OperationKind::Draft,
-            entity_key: "draft:draft-1".into(),
-            cost: 0,
-            attempts: 0,
-            description: "test operation".into(),
+        DurableSubmission {
+            operation: QueueOperation {
+                id: "draft-1".into(),
+                account_id: "account".into(),
+                lane: Lane::Interactive,
+                kind: OperationKind::Draft,
+                entity_key: "draft:draft-1".into(),
+                cost: 0,
+                attempts: 0,
+                description: "test operation".into(),
+            },
+            payload: "{\"mode\":\"create\"}".into(),
         },
-        "{\"mode\":\"create\"}".into(),
     )
     .await
     .unwrap();
@@ -195,7 +205,16 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
     );
 
     storage
-        .run(|connection| OperationRepository::mark_terminal(connection, "draft-1", "done", None))
+        .run(|connection| {
+            OperationRepository::mark_terminal(
+                connection,
+                "draft-1",
+                TerminalOutcome {
+                    status: "done",
+                    error: None,
+                },
+            )
+        })
         .await
         .unwrap();
     assert_eq!(

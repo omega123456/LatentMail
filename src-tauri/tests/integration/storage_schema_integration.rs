@@ -5,6 +5,10 @@ use latentmail_lib::storage::{
     OperationRepository, RetrievalRepository, SettingRepository, Storage, Thread, ThreadIdentity,
     ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
+use latentmail_lib::storage::{
+    LabelMembershipChange, LabelNameCheck, MessageBodyUpdate, MessageKey, RecipientRoles,
+    RecipientRolesUpdate,
+};
 
 fn account() -> Account {
     Account {
@@ -129,21 +133,25 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
     assert!(MessageRepository::write_full_state(&connection, &message()).unwrap());
     MessageRepository::set_recipient_roles(
         &connection,
-        "account",
-        "message",
-        "to@example.com",
-        "cc@example.com",
-        "bcc@example.com",
-        Some("<first> <second>"),
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        RecipientRolesUpdate {
+            to: "to@example.com",
+            cc: "cc@example.com",
+            bcc: "bcc@example.com",
+            references: Some("<first> <second>"),
+        },
     )
     .unwrap();
     assert_eq!(
         MessageRepository::recipient_roles(&connection, "account", "message").unwrap(),
-        (
-            "to@example.com".into(),
-            "cc@example.com".into(),
-            "bcc@example.com".into()
-        )
+        RecipientRoles {
+            to: "to@example.com".into(),
+            cc: "cc@example.com".into(),
+            bcc: "bcc@example.com".into(),
+        }
     );
     let metadata = ComposeDraftMetadata {
         account_id: "account".into(),
@@ -165,18 +173,48 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         Some(metadata)
     );
     ComposeDraftMetadataRepository::remove(&connection, "account", "draft").unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "message", "UNREAD", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "message", "STARRED", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "STARRED",
+            present: true,
+        },
+    )
+    .unwrap();
     assert!(
         MessageRepository::get(&connection, "account", "message")
             .unwrap()
             .unwrap()
             .is_unread
     );
-    MessageRepository::set_label_membership(&connection, "account", "message", "UNREAD", false)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: false,
+        },
+    )
+    .unwrap();
     assert!(
         !MessageRepository::get(&connection, "account", "message")
             .unwrap()
@@ -254,11 +292,15 @@ fn html_presence_carries_three_distinguishable_states() {
 
     MessageRepository::set_body(
         &connection,
-        "account",
-        "backfilled",
-        None,
-        Some("hi"),
-        HtmlPresence::Absent,
+        MessageKey {
+            account_id: "account",
+            message_id: "backfilled",
+        },
+        MessageBodyUpdate {
+            html_body: None,
+            plain_body: Some("hi"),
+            presence: HtmlPresence::Absent,
+        },
     )
     .unwrap();
     let absent = MessageRepository::get(&connection, "account", "backfilled")
@@ -269,11 +311,15 @@ fn html_presence_carries_three_distinguishable_states() {
 
     MessageRepository::set_body(
         &connection,
-        "account",
-        "backfilled",
-        Some("<p>hi</p>"),
-        None,
-        HtmlPresence::Present,
+        MessageKey {
+            account_id: "account",
+            message_id: "backfilled",
+        },
+        MessageBodyUpdate {
+            html_body: Some("<p>hi</p>"),
+            plain_body: None,
+            presence: HtmlPresence::Present,
+        },
     )
     .unwrap();
     let present = MessageRepository::get(&connection, "account", "backfilled")
@@ -410,17 +456,49 @@ fn bulk_membership_overwrite_keeps_denormalised_flags_consistent() {
     starting.is_unread = true;
     starting.is_starred = true;
     MessageRepository::write_full_state(&connection, &starting).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "message", "UNREAD", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "message", "STARRED", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "message", "INBOX", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "STARRED",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
 
     MessageRepository::overwrite_membership(
         &connection,
-        "account",
-        "message",
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
         &["TRASH".to_owned()],
     )
     .unwrap();
@@ -464,10 +542,30 @@ fn thread_label_index_tracks_membership_through_recompute() {
     let mut stored = message();
     stored.sent_at = 4_100;
     MessageRepository::write_full_state(&connection, &stored).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "message", "INBOX", true)
-        .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "message", "UNREAD", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "thread").unwrap();
     assert_eq!(
         indexed_labels(&connection, "thread"),
@@ -477,8 +575,10 @@ fn thread_label_index_tracks_membership_through_recompute() {
 
     MessageRepository::overwrite_membership(
         &connection,
-        "account",
-        "message",
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
         &["TRASH".to_owned()],
     )
     .unwrap();
@@ -1281,8 +1381,15 @@ fn set_truncated_body_overwrites_and_clears_the_stored_snippet() {
     AccountRepository::upsert(&connection, &account()).unwrap();
     MessageRepository::write_full_state(&connection, &message()).unwrap();
 
-    MessageRepository::set_truncated_body(&connection, "account", "message", Some("truncated"))
-        .unwrap();
+    MessageRepository::set_truncated_body(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        Some("truncated"),
+    )
+    .unwrap();
     assert_eq!(
         MessageRepository::get(&connection, "account", "message")
             .unwrap()
@@ -1291,7 +1398,15 @@ fn set_truncated_body_overwrites_and_clears_the_stored_snippet() {
         Some("truncated".to_owned())
     );
 
-    MessageRepository::set_truncated_body(&connection, "account", "message", None).unwrap();
+    MessageRepository::set_truncated_body(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        None,
+    )
+    .unwrap();
     assert_eq!(
         MessageRepository::get(&connection, "account", "message")
             .unwrap()
@@ -1341,11 +1456,25 @@ fn validate_name_rejects_every_rule_distinguishably() {
     let connection = Storage::in_memory().unwrap();
     AccountRepository::upsert(&connection, &account()).unwrap();
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "",
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::Empty)
     );
     assert_eq!(
-        LabelRepository::validate_name(&connection, "account", "a\\b", None),
+        LabelRepository::validate_name(
+            &connection,
+            LabelNameCheck {
+                account_id: "account",
+                name: "a\\b",
+                exclude_id: None
+            }
+        ),
         Err(LabelNameError::ForbiddenCharacters)
     );
 }
@@ -1399,8 +1528,15 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
             position: 0,
         },
     ];
-    AttachmentRepository::replace_for_message(&connection, "account", "message", &attachments)
-        .unwrap();
+    AttachmentRepository::replace_for_message(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        &attachments,
+    )
+    .unwrap();
 
     let stored = AttachmentRepository::for_message(&connection, "account", "message").unwrap();
     assert_eq!(
@@ -1412,10 +1548,17 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
         "attachments must read back ordered by sender position, not insertion order"
     );
     assert_eq!(
-        AttachmentRepository::get(&connection, "account", "message", "att-1")
-            .unwrap()
-            .unwrap()
-            .filename,
+        AttachmentRepository::get(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: "message"
+            },
+            "att-1"
+        )
+        .unwrap()
+        .unwrap()
+        .filename,
         "first.pdf"
     );
 

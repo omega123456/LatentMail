@@ -1,5 +1,14 @@
+use latentmail_lib::auth::SaveAccountRequest;
+use latentmail_lib::ipc::{AccountIdRequest, AccountMessageRequest, AppServices, CommandPayload};
+use latentmail_lib::search::SearchTotalRequest;
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey, RecipientRolesUpdate};
+use latentmail_lib::sync::commands::{
+    ListThreadsRequest, LoadConversationRequest, LoadMessageBodyRequest,
+};
+use latentmail_lib::sync::{HtmlPresenceDto, SyncState, ThreadCursor, ThreadPageDirection};
 use std::sync::Arc;
 
+use crate::support::{app, sync_engine as engine};
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::search::search_total;
 use latentmail_lib::storage::{
@@ -10,8 +19,6 @@ use latentmail_lib::sync::commands::{
     fetch_message_body, list_labels, list_threads, load_conversation, load_message_body,
     read_sync_status, trigger_sync,
 };
-use latentmail_lib::sync::{HtmlPresenceDto, SyncState, ThreadCursor, ThreadPageDirection};
-use crate::support::{app, sync_engine as engine};
 use tauri::{Listener, Manager};
 use wiremock::{
     matchers::{method, path},
@@ -55,11 +62,20 @@ fn thread(id: &str, latest_at: i64, has_draft: bool) -> Thread {
     }
 }
 
+struct LabelledMessage<'a> {
+    connection: &'a rusqlite::Connection,
+    id: &'a str,
+    thread_id: &'a str,
+    label_ids: &'a [&'a str],
+}
+
 fn labelled_message(
-    connection: &rusqlite::Connection,
-    id: &str,
-    thread_id: &str,
-    label_ids: &[&str],
+    LabelledMessage {
+        connection,
+        id,
+        thread_id,
+        label_ids,
+    }: LabelledMessage<'_>,
 ) {
     MessageRepository::write_full_state(
         connection,
@@ -86,7 +102,18 @@ fn labelled_message(
     .unwrap();
     for label_id in label_ids {
         LabelRepository::ensure_placeholder(connection, "account", label_id).unwrap();
-        MessageRepository::set_label_membership(connection, "account", id, label_id, true).unwrap();
+        MessageRepository::set_label_membership(
+            connection,
+            MessageKey {
+                account_id: "account",
+                message_id: id,
+            },
+            LabelMembershipChange {
+                label_id: label_id,
+                present: true,
+            },
+        )
+        .unwrap();
     }
     ThreadRepository::recompute(connection, "account", thread_id).unwrap();
 }
@@ -109,17 +136,42 @@ async fn list_labels_counts_unread_threads_per_label() {
         },
     )
     .unwrap();
-    labelled_message(&connection, "m1", "t1", &["INBOX", "UNREAD"]);
-    labelled_message(&connection, "m2", "t2", &["INBOX", "UNREAD"]);
-    labelled_message(&connection, "m3", "t3", &["INBOX"]);
-    labelled_message(&connection, "m4", "t4", &["INBOX", "TRASH", "UNREAD"]);
+    labelled_message(LabelledMessage {
+        connection: &connection,
+        id: "m1",
+        thread_id: "t1",
+        label_ids: &["INBOX", "UNREAD"],
+    });
+    labelled_message(LabelledMessage {
+        connection: &connection,
+        id: "m2",
+        thread_id: "t2",
+        label_ids: &["INBOX", "UNREAD"],
+    });
+    labelled_message(LabelledMessage {
+        connection: &connection,
+        id: "m3",
+        thread_id: "t3",
+        label_ids: &["INBOX"],
+    });
+    labelled_message(LabelledMessage {
+        connection: &connection,
+        id: "m4",
+        thread_id: "t4",
+        label_ids: &["INBOX", "TRASH", "UNREAD"],
+    });
     drop(connection);
     let application = app();
     application.manage(storage);
 
-    let labels = list_labels(application.state(), "account".into())
-        .await
-        .unwrap();
+    let labels = list_labels(
+        AppServices::new(application.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: "account".into(),
+        }),
+    )
+    .await
+    .unwrap();
     let inbox = labels.iter().find(|label| label.id == "INBOX").unwrap();
     assert_eq!(inbox.message_count, 5);
     assert_eq!(inbox.unread_count, 2);
@@ -133,16 +185,37 @@ async fn list_labels_drops_unread_count_when_the_thread_is_read() {
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
     seed_account(&connection);
-    labelled_message(&connection, "m1", "t1", &["INBOX", "UNREAD"]);
-    MessageRepository::set_label_membership(&connection, "account", "m1", "UNREAD", false).unwrap();
+    labelled_message(LabelledMessage {
+        connection: &connection,
+        id: "m1",
+        thread_id: "t1",
+        label_ids: &["INBOX", "UNREAD"],
+    });
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "UNREAD",
+            present: false,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     drop(connection);
     let application = app();
     application.manage(storage);
 
-    let labels = list_labels(application.state(), "account".into())
-        .await
-        .unwrap();
+    let labels = list_labels(
+        AppServices::new(application.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: "account".into(),
+        }),
+    )
+    .await
+    .unwrap();
     let inbox = labels.iter().find(|label| label.id == "INBOX").unwrap();
     assert_eq!(inbox.unread_count, 0);
 }
@@ -161,15 +234,17 @@ async fn list_threads_backward_returns_the_rows_adjacent_to_the_cursor() {
     application.manage(storage);
 
     let backward = list_threads(
-        application.state(),
-        "account".into(),
-        None,
-        Some(ThreadCursor {
-            latest_at: 3,
-            id: "t3".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(ListThreadsRequest {
+            account_id: "account".into(),
+            label_id: None,
+            cursor: Some(ThreadCursor {
+                latest_at: 3,
+                id: "t3".into(),
+            }),
+            direction: Some(ThreadPageDirection::Backward),
+            limit: Some(2),
         }),
-        Some(ThreadPageDirection::Backward),
-        Some(2),
     )
     .await
     .unwrap();
@@ -237,10 +312,14 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
         MessageRepository::write_full_state(&connection, &message).unwrap();
         MessageRepository::set_label_membership(
             &connection,
-            "account",
-            &message.id,
-            "Label_Project",
-            true,
+            MessageKey {
+                account_id: "account",
+                message_id: &message.id,
+            },
+            LabelMembershipChange {
+                label_id: "Label_Project",
+                present: true,
+            },
         )
         .unwrap();
     }
@@ -249,12 +328,14 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     application.manage(storage);
 
     let first_page = list_threads(
-        application.state(),
-        "account".into(),
-        None,
-        None,
-        None,
-        Some(2),
+        AppServices::new(application.handle()),
+        CommandPayload(ListThreadsRequest {
+            account_id: "account".into(),
+            label_id: None,
+            cursor: None,
+            direction: None,
+            limit: Some(2),
+        }),
     )
     .await
     .unwrap();
@@ -268,12 +349,14 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     assert_eq!(cursor.id, "t2");
 
     let second_page = list_threads(
-        application.state(),
-        "account".into(),
-        None,
-        Some(cursor),
-        None,
-        Some(2),
+        AppServices::new(application.handle()),
+        CommandPayload(ListThreadsRequest {
+            account_id: "account".into(),
+            label_id: None,
+            cursor: Some(cursor),
+            direction: None,
+            limit: Some(2),
+        }),
     )
     .await
     .unwrap();
@@ -284,12 +367,14 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
         .previous_cursor
         .expect("a prior page remains available");
     let restored_page = list_threads(
-        application.state(),
-        "account".into(),
-        None,
-        Some(previous),
-        Some(ThreadPageDirection::Backward),
-        Some(2),
+        AppServices::new(application.handle()),
+        CommandPayload(ListThreadsRequest {
+            account_id: "account".into(),
+            label_id: None,
+            cursor: Some(previous),
+            direction: Some(ThreadPageDirection::Backward),
+            limit: Some(2),
+        }),
     )
     .await
     .unwrap();
@@ -303,10 +388,12 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     );
     assert_eq!(
         search_total(
-            application.state(),
-            "account".into(),
-            "subject".into(),
-            None
+            AppServices::new(application.handle()),
+            CommandPayload(SearchTotalRequest {
+                account_id: "account".into(),
+                query: "subject".into(),
+                scope: None
+            })
         )
         .await
         .unwrap(),
@@ -368,22 +455,47 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
-    MessageRepository::set_recipient_roles(
+    MessageRepository::set_label_membership(
         &connection,
-        "account",
-        "m1",
-        "me@example.com",
-        "cc@example.com",
-        "bcc@example.com",
-        None,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
     )
     .unwrap();
-    MessageRepository::set_draft_id(&connection, "account", "m1", "draft-1").unwrap();
+    MessageRepository::set_recipient_roles(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        RecipientRolesUpdate {
+            to: "me@example.com",
+            cc: "cc@example.com",
+            bcc: "bcc@example.com",
+            references: None,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_draft_id(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        "draft-1",
+    )
+    .unwrap();
     MessageRepository::replace_inline_parts(
         &connection,
-        "account",
-        "m1",
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
         &[InlinePart {
             content_id: "img1".into(),
             mime_type: "image/png".into(),
@@ -396,11 +508,13 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     application.manage(storage);
 
     let conversation = load_conversation(
-        application.state(),
-        "account".into(),
-        "t1".into(),
-        None,
-        None,
+        AppServices::new(application.handle()),
+        CommandPayload(LoadConversationRequest {
+            account_id: "account".into(),
+            thread_id: "t1".into(),
+            image_policy: None,
+            entry_scope: None,
+        }),
     )
     .await
     .unwrap();
@@ -466,11 +580,13 @@ async fn conversation_returns_only_the_newest_body_and_cached_reads_target_one_m
     let application = app();
     application.manage(storage);
     let conversation = load_conversation(
-        application.state(),
-        "account".into(),
-        "t1".into(),
-        None,
-        None,
+        AppServices::new(application.handle()),
+        CommandPayload(LoadConversationRequest {
+            account_id: "account".into(),
+            thread_id: "t1".into(),
+            image_policy: None,
+            entry_scope: None,
+        }),
     )
     .await
     .unwrap();
@@ -481,11 +597,13 @@ async fn conversation_returns_only_the_newest_body_and_cached_reads_target_one_m
         Some("<p>Newest</p>")
     );
     let body = load_message_body(
-        application.state(),
-        "account".into(),
-        "m1".into(),
-        None,
-        None,
+        AppServices::new(application.handle()),
+        CommandPayload(LoadMessageBodyRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+            image_policy: None,
+            entry_scope: None,
+        }),
     )
     .await
     .unwrap();
@@ -525,8 +643,10 @@ async fn load_conversation_carries_attachment_metadata_on_the_dto() {
     .unwrap();
     AttachmentRepository::replace_for_message(
         &connection,
-        "account",
-        "m1",
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
         &[Attachment {
             attachment_id: "att-1".into(),
             filename: "report.pdf".into(),
@@ -541,11 +661,13 @@ async fn load_conversation_carries_attachment_metadata_on_the_dto() {
     application.manage(storage);
 
     let conversation = load_conversation(
-        application.state(),
-        "account".into(),
-        "t1".into(),
-        None,
-        None,
+        AppServices::new(application.handle()),
+        CommandPayload(LoadConversationRequest {
+            account_id: "account".into(),
+            thread_id: "t1".into(),
+            image_policy: None,
+            entry_scope: None,
+        }),
     )
     .await
     .unwrap();
@@ -603,17 +725,30 @@ async fn load_conversation_flags_html_sanitized_past_the_size_cap_as_truncated()
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     drop(connection);
     let application = app();
     application.manage(storage);
 
     let conversation = load_conversation(
-        application.state(),
-        "account".into(),
-        "t1".into(),
-        None,
-        None,
+        AppServices::new(application.handle()),
+        CommandPayload(LoadConversationRequest {
+            account_id: "account".into(),
+            thread_id: "t1".into(),
+            image_policy: None,
+            entry_scope: None,
+        }),
     )
     .await
     .unwrap();
@@ -628,7 +763,11 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
     let auth_service = AuthService::new(storage.clone());
     let account_id = {
         auth_service
-            .save_account("me@example.com".into(), "refresh-token".into(), None)
+            .save_account(SaveAccountRequest {
+                email: "me@example.com".into(),
+                refresh_token: "refresh-token".into(),
+                target: None,
+            })
             .await
             .unwrap();
         auth_service.accounts().await.unwrap()[0].id.clone()
@@ -673,19 +812,24 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
     application.manage(sync_engine);
 
     let status = trigger_sync(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        account_id.clone(),
+        AppServices::new(application.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: account_id.clone(),
+        }),
     )
     .await
     .unwrap();
     assert_eq!(status.state, SyncState::Idle);
     assert!(status.last_synced_at.is_some());
 
-    let read_back = read_sync_status(application.state(), account_id)
-        .await
-        .unwrap();
+    let read_back = read_sync_status(
+        AppServices::new(application.handle()),
+        CommandPayload(AccountIdRequest {
+            account_id: account_id,
+        }),
+    )
+    .await
+    .unwrap();
     assert_eq!(read_back.state, SyncState::Idle);
     assert_eq!(read_back, status);
 
@@ -775,28 +919,43 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "m1",
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     drop(connection);
     let application = app();
     application.manage(storage);
 
     let page = list_threads(
-        application.state(),
-        "account".into(),
-        Some("INBOX".into()),
-        None,
-        None,
-        None,
+        AppServices::new(application.handle()),
+        CommandPayload(ListThreadsRequest {
+            account_id: "account".into(),
+            label_id: Some("INBOX".into()),
+            cursor: None,
+            direction: None,
+            limit: None,
+        }),
     )
     .await
     .unwrap();
     let conversation = load_conversation(
-        application.state(),
-        "account".into(),
-        "t1".into(),
-        None,
-        None,
+        AppServices::new(application.handle()),
+        CommandPayload(LoadConversationRequest {
+            account_id: "account".into(),
+            thread_id: "t1".into(),
+            image_policy: None,
+            entry_scope: None,
+        }),
     )
     .await
     .unwrap();
@@ -886,12 +1045,11 @@ async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_dir
         });
 
     fetch_message_body(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        application.state(),
-        "account".into(),
-        "m1".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "m1".into(),
+        }),
     )
     .await
     .unwrap();

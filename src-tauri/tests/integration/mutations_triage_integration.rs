@@ -1,3 +1,10 @@
+use latentmail_lib::ipc::{AccountMessageRequest, AppServices, CommandPayload};
+use latentmail_lib::storage::{LabelMembershipChange, MessageKey};
+use latentmail_lib::sync::commands::MutateThreadsRequest;
+use latentmail_lib::sync::triage::{
+    DeleteMessagesRequest, DeleteThreadsRequest, MoveMessagesRequest, MoveThreadsRequest,
+};
+use latentmail_lib::sync::{LabelDelta, QueueRateConfig, SyncEngineDeps, ThreadMutation};
 use std::{collections::HashSet, sync::Arc};
 
 use latentmail_lib::{
@@ -63,16 +70,37 @@ fn seeded_engine() -> (Arc<SyncEngine>, tempfile::TempDir) {
             },
         )
         .unwrap();
-        MessageRepository::set_label_membership(&connection, "account", message_id, "INBOX", true)
-            .unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            MessageKey {
+                account_id: "account",
+                message_id: message_id,
+            },
+            LabelMembershipChange {
+                label_id: "INBOX",
+                present: true,
+            },
+        )
+        .unwrap();
         ThreadRepository::recompute(&connection, "account", thread_id).unwrap();
     }
     drop(connection);
     let registry = WorkRegistry::new();
-    let queue =
-        create_queue_engine_with_events(1_000, 1_000, Arc::clone(&registry), Arc::new(|_, _| {}));
+    let queue = create_queue_engine_with_events(
+        QueueRateConfig {
+            rate_per_second: 1_000,
+            burst: 1_000,
+        },
+        Arc::clone(&registry),
+        Arc::new(|_, _| {}),
+    );
     (
-        SyncEngine::new(storage, queue, registry, noop_event_sink()),
+        SyncEngine::new(SyncEngineDeps {
+            storage: storage,
+            queue: queue,
+            registry: registry,
+            events: noop_event_sink(),
+        }),
         directory,
     )
 }
@@ -108,33 +136,39 @@ async fn triage_label_deltas_cover_thread_and_bulk_actions() {
         ("thread-1", vec!["Label_1"], vec![]),
     ] {
         engine
-            .mutate(
-                "account",
-                client.clone(),
-                thread.into(),
-                add.into_iter().map(str::to_owned).collect::<HashSet<_>>(),
-                remove
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect::<HashSet<_>>(),
-            )
+            .mutate(ThreadMutation {
+                account_id: "account".to_owned(),
+                client: client.clone(),
+                thread_id: thread.into(),
+                labels: LabelDelta {
+                    additions: add.into_iter().map(str::to_owned).collect::<HashSet<_>>(),
+                    removals: remove
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect::<HashSet<_>>(),
+                },
+            })
             .await
             .unwrap();
     }
-    let first = engine.mutate(
-        "account",
-        client.clone(),
-        "thread-1".into(),
-        HashSet::from(["STARRED".into()]),
-        HashSet::new(),
-    );
-    let second = engine.mutate(
-        "account",
-        client,
-        "thread-2".into(),
-        HashSet::from(["STARRED".into()]),
-        HashSet::new(),
-    );
+    let first = engine.mutate(ThreadMutation {
+        account_id: "account".to_owned(),
+        client: client.clone(),
+        thread_id: "thread-1".into(),
+        labels: LabelDelta {
+            additions: HashSet::from(["STARRED".into()]),
+            removals: HashSet::new(),
+        },
+    });
+    let second = engine.mutate(ThreadMutation {
+        account_id: "account".to_owned(),
+        client: client,
+        thread_id: "thread-2".into(),
+        labels: LabelDelta {
+            additions: HashSet::from(["STARRED".into()]),
+            removals: HashSet::new(),
+        },
+    });
     let _ = tokio::join!(first, second);
     let requests = server.received_requests().await.unwrap();
     let bodies = requests
@@ -216,12 +250,11 @@ async fn draft_deletion_errors_when_gmail_lists_no_draft_for_the_message() {
     app.manage(engine);
 
     let error = delete_draft(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "message-1".into(),
+        AppServices::new(app.handle()),
+        CommandPayload(AccountMessageRequest {
+            account_id: "account".into(),
+            message_id: "message-1".into(),
+        }),
     )
     .await
     .unwrap_err();
@@ -305,10 +338,14 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
         .unwrap();
         MessageRepository::set_label_membership(
             &connection,
-            "account-draft",
-            "message-draft",
-            "DRAFT",
-            true,
+            MessageKey {
+                account_id: "account-draft",
+                message_id: "message-draft",
+            },
+            LabelMembershipChange {
+                label_id: "DRAFT",
+                present: true,
+            },
         )
         .unwrap();
         ThreadRepository::recompute(&connection, "account-draft", "thread-draft").unwrap();
@@ -316,19 +353,24 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
 
         let registry = WorkRegistry::new();
         let queue = latentmail_lib::sync::create_queue_engine(1_000, 1_000, Arc::clone(&registry));
-        let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+        let engine = SyncEngine::new(SyncEngineDeps {
+            storage: storage.clone(),
+            queue: queue,
+            registry: registry,
+            events: noop_event_sink(),
+        });
         let app = app();
         app.manage(storage.clone());
         app.manage(AuthService::new(storage));
         app.manage(engine);
         mutate_threads(
-            app.handle().clone(),
-            app.state(),
-            app.state(),
-            "account-draft".into(),
-            vec!["thread-draft".into()],
-            vec!["TRASH".into()],
-            vec![],
+            AppServices::new(app.handle()),
+            CommandPayload(MutateThreadsRequest {
+                account_id: "account-draft".into(),
+                thread_ids: vec!["thread-draft".into()],
+                add: vec!["TRASH".into()],
+                remove: vec![],
+            }),
         )
         .await
         .unwrap();
@@ -408,8 +450,10 @@ fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
         .unwrap();
         MessageRepository::set_draft_id(
             &connection,
-            "account-cached-draft",
-            "message-cached",
+            MessageKey {
+                account_id: "account-cached-draft",
+                message_id: "message-cached",
+            },
             "cached-draft-id",
         )
         .unwrap();
@@ -417,18 +461,22 @@ fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
 
         let registry = WorkRegistry::new();
         let queue = latentmail_lib::sync::create_queue_engine(1_000, 1_000, Arc::clone(&registry));
-        let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+        let engine = SyncEngine::new(SyncEngineDeps {
+            storage: storage.clone(),
+            queue: queue,
+            registry: registry,
+            events: noop_event_sink(),
+        });
         let app = app();
         app.manage(storage.clone());
         app.manage(AuthService::new(storage));
         app.manage(engine);
         delete_draft(
-            app.handle().clone(),
-            app.state(),
-            app.state(),
-            app.state(),
-            "account-cached-draft".into(),
-            "message-cached".into(),
+            AppServices::new(app.handle()),
+            CommandPayload(AccountMessageRequest {
+                account_id: "account-cached-draft".into(),
+                message_id: "message-cached".into(),
+            }),
         )
         .await
         .unwrap();
@@ -480,12 +528,19 @@ async fn triage_harness(
     )
     .unwrap();
     let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(
-        storage.clone(),
-        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {})),
-        registry,
-        noop_event_sink(),
-    );
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine_with_events(
+            QueueRateConfig {
+                rate_per_second: 250,
+                burst: 250,
+            },
+            Arc::clone(&registry),
+            Arc::new(|_, _| {}),
+        ),
+        registry: registry,
+        events: noop_event_sink(),
+    });
     let application = app();
     application.manage(AuthService::new(storage.clone()));
     application.manage(engine);
@@ -499,21 +554,21 @@ async fn triaging_threads_surfaces_an_unreadable_database() {
     std::fs::write(&database, b"not a database").unwrap();
 
     assert!(latentmail_lib::sync::triage::delete_threads(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        "triage-threads".into(),
-        vec!["thread-1".into()],
+        AppServices::new(application.handle()),
+        CommandPayload(DeleteThreadsRequest {
+            account_id: "triage-threads".into(),
+            thread_ids: vec!["thread-1".into()]
+        })
     )
     .await
     .is_err());
     assert!(latentmail_lib::sync::triage::move_threads(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        "triage-threads".into(),
-        vec!["thread-1".into()],
-        "TRASH".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(MoveThreadsRequest {
+            account_id: "triage-threads".into(),
+            thread_ids: vec!["thread-1".into()],
+            destination: "TRASH".into()
+        })
     )
     .await
     .is_err());
@@ -525,21 +580,21 @@ async fn triaging_messages_surfaces_an_unreadable_database() {
     std::fs::write(&database, b"not a database").unwrap();
 
     assert!(latentmail_lib::sync::triage::delete_messages(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        "triage-messages".into(),
-        vec!["message-1".into()],
+        AppServices::new(application.handle()),
+        CommandPayload(DeleteMessagesRequest {
+            account_id: "triage-messages".into(),
+            message_ids: vec!["message-1".into()]
+        })
     )
     .await
     .is_err());
     assert!(latentmail_lib::sync::triage::move_messages(
-        application.handle().clone(),
-        application.state(),
-        application.state(),
-        "triage-messages".into(),
-        vec!["message-1".into()],
-        "SPAM".into(),
+        AppServices::new(application.handle()),
+        CommandPayload(MoveMessagesRequest {
+            account_id: "triage-messages".into(),
+            message_ids: vec!["message-1".into()],
+            destination: "SPAM".into()
+        })
     )
     .await
     .is_err());

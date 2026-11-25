@@ -4,37 +4,24 @@ import { invoke } from '@/lib/ipc/commands';
 import { hydrateSettings } from '@/lib/settings/hydrate';
 import type { Density, LayoutMode, LogLevel, Settings, UpdateCheckInterval } from '@/lib/types/ipc';
 import { percentToFraction, WHOLE_PERCENT } from '@/lib/format/percent';
-import { clamp, wrapIndex } from '@/lib/collections';
+import {
+  addTrustedImageSender,
+  ASSISTANT_WIDTH_RANGE,
+  clampSize,
+  DEFAULT_PERSISTED_SETTINGS,
+  LIST_WIDTH_RANGE,
+  nextDensityMode,
+  nextLayoutMode,
+  pickPersistedSettings,
+  READER_HEIGHT_PERCENT_RANGE,
+  removeTrustedImageSender,
+  SIDEBAR_WIDTH_RANGE,
+  type PersistedLayoutSettings,
+} from './layout/transitions';
 
 export type Route = 'auth' | 'mail' | 'settings';
 
 export const ASSISTANT_DOCK_MIN_SHELL_WIDTH = 1200;
-
-type PersistedLayoutSettings = Pick<
-  Settings,
-  | 'layout'
-  | 'density'
-  | 'sidebarCollapsed'
-  | 'sidebarWidth'
-  | 'listWidth'
-  | 'readerHeight'
-  | 'assistantWidth'
-  | 'showUnreadCounts'
-  | 'showSenderAvatars'
-  | 'zoomPercent'
-  | 'syncOnStartup'
-  | 'syncIntervalSeconds'
-  | 'alwaysLoadRemoteImages'
-  | 'allowedImageSenders'
-  | 'logLevel'
-  | 'prefetchImageAttachments'
-  | 'startAtLogin'
-  | 'closeToTray'
-  | 'startMinimized'
-  | 'desktopNotifications'
-  | 'updateCheckInterval'
-  | 'installUpdateOnQuit'
->;
 
 type LayoutState = PersistedLayoutSettings & {
   route: Route;
@@ -70,64 +57,12 @@ type LayoutState = PersistedLayoutSettings & {
   untrustImageSender: (address: string) => void;
 };
 
-type SizeRange = { min: number; max: number };
-
-const SIDEBAR_WIDTH_RANGE: SizeRange = { min: 180, max: 400 };
-const LIST_WIDTH_RANGE: SizeRange = { min: 240, max: 600 };
-const READER_HEIGHT_PERCENT_RANGE: SizeRange = { min: 20, max: 80 };
-const ASSISTANT_WIDTH_RANGE: SizeRange = { min: 280, max: 700 };
-
-const LAYOUT_MODES: LayoutMode[] = ['three-column', 'bottom-preview', 'list-only'];
-const DENSITY_MODES: Density[] = ['compact', 'comfortable', 'spacious'];
-
-function clampSize(size: number, range: SizeRange) {
-  return Math.round(clamp(size, range.min, range.max));
-}
-
 export function applyZoom(zoomPercent: number) {
   void dispatchSetZoom(percentToFraction(zoomPercent)).catch(() => undefined);
 }
 
 function persist<Key extends keyof Settings>(key: Key, value: Settings[Key]) {
   void invoke('write_setting', { key: key, value: value }).catch(() => undefined);
-}
-
-const DEFAULT_PERSISTED_SETTINGS: PersistedLayoutSettings = {
-  layout: 'three-column',
-  density: 'comfortable',
-  sidebarCollapsed: false,
-  sidebarWidth: 260,
-  listWidth: 350,
-  readerHeight: 40,
-  assistantWidth: 360,
-  showUnreadCounts: true,
-  showSenderAvatars: true,
-  zoomPercent: 100,
-  syncOnStartup: true,
-  syncIntervalSeconds: 300,
-  alwaysLoadRemoteImages: false,
-  allowedImageSenders: [],
-  logLevel: 'info',
-  prefetchImageAttachments: false,
-  startAtLogin: false,
-  closeToTray: true,
-  startMinimized: false,
-  desktopNotifications: true,
-  updateCheckInterval: '1d',
-  installUpdateOnQuit: true,
-};
-
-const PERSISTED_KEYS = Object.keys(DEFAULT_PERSISTED_SETTINGS) as Array<
-  keyof PersistedLayoutSettings
->;
-
-function pickPersistedSettings(settings: Settings): PersistedLayoutSettings {
-  const result = { ...DEFAULT_PERSISTED_SETTINGS };
-  for (const key of PERSISTED_KEYS) {
-    Object.assign(result, { [key]: settings[key] });
-  }
-  result.assistantWidth = clampSize(settings.assistantWidth, ASSISTANT_WIDTH_RANGE);
-  return result;
 }
 
 export const useLayoutStore = create<LayoutState>((set, get) => {
@@ -158,15 +93,9 @@ export const useLayoutStore = create<LayoutState>((set, get) => {
       }),
     setRoute: (route) => set({ route }),
     setLayout: setLayout,
-    cycleLayout: () => {
-      const currentIndex = LAYOUT_MODES.indexOf(get().layout);
-      setLayout(LAYOUT_MODES[wrapIndex(currentIndex, 1, LAYOUT_MODES.length)]);
-    },
+    cycleLayout: () => setLayout(nextLayoutMode(get().layout)),
     setDensity: setDensity,
-    cycleDensity: () => {
-      const currentIndex = DENSITY_MODES.indexOf(get().density);
-      setDensity(DENSITY_MODES[wrapIndex(currentIndex, 1, DENSITY_MODES.length)]);
-    },
+    cycleDensity: () => setDensity(nextDensityMode(get().density)),
     setSidebarCollapsed: persistedSetter('sidebarCollapsed'),
     setSidebarWidth: persistedSetter('sidebarWidth', (size) =>
       clampSize(size, SIDEBAR_WIDTH_RANGE),
@@ -198,15 +127,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => {
     setUpdateCheckInterval: persistedSetter('updateCheckInterval'),
     setInstallUpdateOnQuit: persistedSetter('installUpdateOnQuit'),
     trustImageSender: (address) => {
-      const normalized = address.trim().toLowerCase();
-      const current = get().allowedImageSenders;
-      if (!normalized || current.includes(normalized)) return;
-      setAllowedImageSenders([...current, normalized]);
+      const next = addTrustedImageSender(get().allowedImageSenders, address);
+      if (next) setAllowedImageSenders(next);
     },
-    untrustImageSender: (address) => {
-      const normalized = address.trim().toLowerCase();
-      setAllowedImageSenders(get().allowedImageSenders.filter((entry) => entry !== normalized));
-    },
+    untrustImageSender: (address) =>
+      setAllowedImageSenders(removeTrustedImageSender(get().allowedImageSenders, address)),
   };
 });
 

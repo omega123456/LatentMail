@@ -6,13 +6,14 @@ pub mod resolver;
 
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use cache::{hash_key, AvatarCache, CacheAnswer, CacheDomain};
+use cache::{hash_key, AvatarCache, CacheAnswer, CacheDomain, CachedAvatar};
 use resolver::Scheduler;
 
 use crate::{
+    ipc::{AccountIdRequest, AppServices, CommandPayload},
     settings::SettingsService,
     storage::{AccountRepository, Storage},
 };
@@ -56,6 +57,23 @@ struct AvatarTarget {
     key: String,
 }
 
+struct ResolutionRequest {
+    app: Arc<dyn AvatarEmitter>,
+    target: AvatarTarget,
+}
+
+struct ScheduledResolution {
+    app: Arc<dyn AvatarEmitter>,
+    target: AvatarTarget,
+    cache_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SenderAvatarRequest {
+    pub domain: String,
+}
+
 impl AvatarService {
     pub fn new(cache: AvatarCache, storage: Storage, settings: SettingsService) -> Self {
         Self {
@@ -88,9 +106,13 @@ impl AvatarService {
             domain: CacheDomain::Sender,
             key: domain,
         };
-        self.read_or_schedule(app, target, |cache, domain| async move {
-            bimi::resolve_logo(&cache, &domain).await
-        })
+        self.read_or_schedule(
+            ResolutionRequest {
+                app: app,
+                target: target,
+            },
+            |cache, domain| async move { bimi::resolve_logo(&cache, &domain).await },
+        )
         .await
     }
 
@@ -109,42 +131,54 @@ impl AvatarService {
             domain: CacheDomain::Account,
             key: account_id,
         };
-        self.read_or_schedule(app, target, move |_cache, account_id| async move {
-            resolve_account_photo(&storage, account_id).await
-        })
+        self.read_or_schedule(
+            ResolutionRequest {
+                app: app,
+                target: target,
+            },
+            move |_cache, account_id| async move {
+                resolve_account_photo(&storage, account_id).await
+            },
+        )
         .await
     }
 
     async fn read_or_schedule<Resolve, Output>(
         &self,
-        app: Arc<dyn AvatarEmitter>,
-        target: AvatarTarget,
+        request: ResolutionRequest,
         resolve: Resolve,
     ) -> Result<Option<String>, String>
     where
         Resolve: FnOnce(AvatarCache, String) -> Output + Send + 'static,
         Output: std::future::Future<Output = Option<Vec<u8>>> + Send + 'static,
     {
-        let cache_key = hash_key(&target.key);
-        match self.cache.answer(&cache_key, target.domain).await {
+        let cache_key = hash_key(&request.target.key);
+        match self.cache.answer(&cache_key, request.target.domain).await {
             CacheAnswer::Fresh(path) => Ok(path.map(path_to_string)),
             CacheAnswer::Stale => {
-                self.schedule_resolution(app, target, cache_key, resolve);
+                self.schedule_resolution(
+                    ScheduledResolution {
+                        app: request.app,
+                        target: request.target,
+                        cache_key: cache_key,
+                    },
+                    resolve,
+                );
                 Ok(None)
             }
         }
     }
 
-    fn schedule_resolution<Resolve, Output>(
-        &self,
-        app: Arc<dyn AvatarEmitter>,
-        target: AvatarTarget,
-        cache_key: String,
-        resolve: Resolve,
-    ) where
+    fn schedule_resolution<Resolve, Output>(&self, request: ScheduledResolution, resolve: Resolve)
+    where
         Resolve: FnOnce(AvatarCache, String) -> Output + Send + 'static,
         Output: std::future::Future<Output = Option<Vec<u8>>> + Send + 'static,
     {
+        let ScheduledResolution {
+            app,
+            target,
+            cache_key,
+        } = request;
         let cache = self.cache.clone();
         let scheduler = Arc::clone(&self.scheduler);
         tokio::spawn(async move {
@@ -158,7 +192,11 @@ impl AvatarService {
             let _permit = scheduler.acquire_permit().await;
             let resolved = match resolve(cache.clone(), target.key.clone()).await {
                 Some(png) => cache
-                    .store_hit(&cache_key, target.domain, &png)
+                    .store_hit(CachedAvatar {
+                        cache_key: &cache_key,
+                        domain: target.domain,
+                        png_bytes: &png,
+                    })
                     .await
                     .is_ok(),
                 None => {
@@ -203,22 +241,22 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<()
 
 #[tauri::command]
 pub async fn read_sender_avatar<R: Runtime>(
-    app: AppHandle<R>,
-    service: tauri::State<'_, AvatarService>,
-    domain: String,
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<SenderAvatarRequest>,
 ) -> Result<Option<String>, String> {
-    service
-        .read_sender_avatar(Arc::new(app) as Arc<dyn AvatarEmitter>, domain)
+    services
+        .avatars()?
+        .read_sender_avatar(Arc::new(services.app().clone()), request.domain)
         .await
 }
 
 #[tauri::command]
 pub async fn read_account_avatar<R: Runtime>(
-    app: AppHandle<R>,
-    service: tauri::State<'_, AvatarService>,
-    account_id: String,
+    services: AppServices<'_, R>,
+    CommandPayload(request): CommandPayload<AccountIdRequest>,
 ) -> Result<Option<String>, String> {
-    service
-        .read_account_avatar(Arc::new(app) as Arc<dyn AvatarEmitter>, account_id)
+    services
+        .avatars()?
+        .read_account_avatar(Arc::new(services.app().clone()), request.account_id)
         .await
 }

@@ -50,25 +50,45 @@ describe('messageExportFilename', () => {
   const sentAt = parseISO('2026-10-23T09:14:00');
 
   it('prefixes the subject with the sent date and appends the format', () => {
-    expect(messageExportFilename('Your invoice is ready', sentAt, 'a@example.com', 'eml')).toBe(
-      '2026-10-23 Your invoice is ready.eml',
-    );
+    expect(
+      messageExportFilename({
+        subject: 'Your invoice is ready',
+        sentAt: sentAt,
+        sender: 'a@example.com',
+        extension: 'eml',
+      }),
+    ).toBe('2026-10-23 Your invoice is ready.eml');
   });
 
   it('keeps every part of a subject that contains path and reserved characters', () => {
-    expect(messageExportFilename('Re: Q3 review / action items?', sentAt, '', 'html')).toBe(
-      '2026-10-23 Re Q3 review action items.html',
-    );
+    expect(
+      messageExportFilename({
+        subject: 'Re: Q3 review / action items?',
+        sentAt: sentAt,
+        sender: '',
+        extension: 'html',
+      }),
+    ).toBe('2026-10-23 Re Q3 review action items.html');
   });
 
   it('names a subjectless message after its sender', () => {
-    expect(messageExportFilename('  ', sentAt, 'billing@northwind.example', 'eml')).toBe(
-      '2026-10-23 Message from billing@northwind.example.eml',
-    );
+    expect(
+      messageExportFilename({
+        subject: '  ',
+        sentAt: sentAt,
+        sender: 'billing@northwind.example',
+        extension: 'eml',
+      }),
+    ).toBe('2026-10-23 Message from billing@northwind.example.eml');
   });
 
   it('caps a very long subject', () => {
-    const filename = messageExportFilename('x'.repeat(OVERLONG_SUBJECT_LENGTH), sentAt, '', 'eml');
+    const filename = messageExportFilename({
+      subject: 'x'.repeat(OVERLONG_SUBJECT_LENGTH),
+      sentAt: sentAt,
+      sender: '',
+      extension: 'eml',
+    });
     expect(filename).toHaveLength(CAPPED_FILENAME_LENGTH);
     expect(filename.endsWith('x.eml')).toBe(true);
   });

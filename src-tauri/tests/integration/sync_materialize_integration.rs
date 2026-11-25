@@ -1,3 +1,4 @@
+use latentmail_lib::sync::materialize::DraftReplacement;
 use latentmail_lib::{
     gmail::GmailMessage,
     storage::{Account, AccountRepository, MessageRepository, Storage},
@@ -47,8 +48,26 @@ fn draft_replacement_tracks_the_stable_draft_id_across_gmail_message_ids() {
     )
     .unwrap();
 
-    materialize::replace_draft(&connection, "a", "d1", &message("m1", "t1"), false).unwrap();
-    materialize::replace_draft(&connection, "a", "d1", &message("m2", "t2"), false).unwrap();
+    materialize::replace_draft(
+        &connection,
+        DraftReplacement {
+            account_id: "a",
+            draft_id: "d1",
+            replacement: &message("m1", "t1"),
+            consumed: false,
+        },
+    )
+    .unwrap();
+    materialize::replace_draft(
+        &connection,
+        DraftReplacement {
+            account_id: "a",
+            draft_id: "d1",
+            replacement: &message("m2", "t2"),
+            consumed: false,
+        },
+    )
+    .unwrap();
 
     assert!(MessageRepository::get(&connection, "a", "m1")
         .unwrap()
@@ -59,7 +78,16 @@ fn draft_replacement_tracks_the_stable_draft_id_across_gmail_message_ids() {
             .as_deref(),
         Some("d1")
     );
-    materialize::replace_draft(&connection, "a", "d1", &message("sent", "t2"), true).unwrap();
+    materialize::replace_draft(
+        &connection,
+        DraftReplacement {
+            account_id: "a",
+            draft_id: "d1",
+            replacement: &message("sent", "t2"),
+            consumed: true,
+        },
+    )
+    .unwrap();
     assert!(MessageRepository::get(&connection, "a", "m2")
         .unwrap()
         .is_none());
