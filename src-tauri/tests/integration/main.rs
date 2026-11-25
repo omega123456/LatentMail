@@ -16,6 +16,7 @@ mod ai_provider_client_integration;
 mod ai_retrieval_filters_integration;
 mod ai_retrieval_orchestration_integration;
 mod ai_vector_metric_integration;
+mod app_runtime_lifecycle_integration;
 mod attachments_cache_integration;
 mod attachments_classification_integration;
 mod attachments_fetch_integration;
