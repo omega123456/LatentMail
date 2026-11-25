@@ -5,7 +5,7 @@ const PRIVATE_SUBJECT: &str = "Quarterly salary review";
 const PRIVATE_SNIPPET: &str = "Your new salary is";
 
 #[test]
-fn emitted_events_are_logged_by_name_and_size_without_their_mail_content() {
+fn emitted_events_are_logged_by_name_without_their_mail_content() {
     let application = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -33,7 +33,6 @@ fn emitted_events_are_logged_by_name_and_size_without_their_mail_content() {
         .path();
     let log = std::fs::read_to_string(log_path).unwrap();
     assert!(log.contains(latentmail_lib::events::MAIL_NEW), "{log}");
-    assert!(log.contains("bytes"), "{log}");
     assert!(!log.contains(PRIVATE_SUBJECT), "{log}");
     assert!(!log.contains(PRIVATE_SNIPPET), "{log}");
     assert!(!log.contains("boss@example.com"), "{log}");

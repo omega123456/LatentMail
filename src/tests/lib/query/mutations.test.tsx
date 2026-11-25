@@ -70,7 +70,7 @@ it('rolls a failed star back and shows an error toast', async () => {
   expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
   expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
   error.mockRestore();
-  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
+  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed');
 });
 
 it('invalidates every open conversation for the account once Rust announces the triage', async () => {
@@ -104,7 +104,7 @@ it('invalidates every open conversation for the account once Rust announces the 
       client.getQueryState(queryKeys.conversationThread('account', 'thread-9'))?.isInvalidated,
     ).toBe(true),
   );
-  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
+  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed');
 });
 
 it('clears the open conversation when it is deleted', async () => {

@@ -69,8 +69,7 @@ pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
 pub fn emitting_event_sink<R: Runtime>(handle: AppHandle<R>) -> EventSink {
     Arc::new(move |event, payload| {
         if event != crate::events::QUEUE_SUMMARY {
-            let payload_bytes = payload.to_string().len();
-            tracing::info!(target: "events", "emit {event} ({payload_bytes} bytes)");
+            tracing::info!(target: "events", "emit {event}");
         }
         if let Err(error) = handle.emit(event, payload) {
             tracing::error!(target: "events", "emit {event} failed: {error}");

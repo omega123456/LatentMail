@@ -69,5 +69,5 @@ it('renames and deletes a label through the real IPC commands', async () => {
   await waitFor(() =>
     expect(deleted).toMatchObject({ accountId: 'account-1', labelId: 'Label_1' }),
   );
-  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account-1"}');
+  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed');
 });

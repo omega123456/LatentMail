@@ -111,9 +111,7 @@ it('renders a never-fetched body once the fetch event refreshes the cached body'
   act(() => ipc.emit('message://body-fetched', { accountId: 'account-1', messageId: 'message-1' }));
   await screen.findByLabelText('Message body');
   expect(screen.queryByText('Loading message…')).not.toBeInTheDocument();
-  expect(consoleInfo).toHaveBeenCalledWith(
-    'event message://body-fetched {"accountId":"account-1","messageId":"message-1"}',
-  );
+  expect(consoleInfo).toHaveBeenCalledWith('event message://body-fetched');
 });
 
 const marketingLabel = {
@@ -297,5 +295,5 @@ it('wires per-message spam and delete actions to the message-scoped intent comma
     expect.objectContaining({ messageIds: ['message-1'], destination: 'SPAM' }),
   ]);
   expect(deleteMessageChanges).toEqual([expect.objectContaining({ messageIds: ['message-1'] })]);
-  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account-1"}');
+  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed');
 });

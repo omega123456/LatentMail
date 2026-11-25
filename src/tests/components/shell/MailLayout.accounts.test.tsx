@@ -26,9 +26,7 @@ it('promotes the first remaining account when the active account disappears from
   act(() => ipc.emit('account://state', accountTwo));
 
   await waitFor(() => expect(useSelectionStore.getState().activeAccountId).toBe('account-2'));
-  expect(consoleInfo).toHaveBeenCalledWith(
-    'event account://state {"id":"account-2","email":"sam@example.com","displayName":"Sam Rivera","avatarUrl":null,"needsReauthentication":false}',
-  );
+  expect(consoleInfo).toHaveBeenCalledWith('event account://state');
 });
 
 it('still promotes the first account when the active id is null, as it always has', async () => {

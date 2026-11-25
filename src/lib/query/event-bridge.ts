@@ -45,7 +45,7 @@ function on<Event extends keyof IpcEventMap>(
 ): BridgeSubscription {
   return () =>
     listenUntilDisposed(event, (payload) => {
-      if (event !== 'queue://summary') appLog.info(`event ${event} ${JSON.stringify(payload)}`);
+      if (event !== 'queue://summary') appLog.info(`event ${event}`);
       handler(payload);
     });
 }

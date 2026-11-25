@@ -10,6 +10,7 @@ import type { useThreadsQuery } from '@/lib/query/hooks';
 import { queryKeys } from '@/lib/query/keys';
 import { QueryProvider } from '@/providers/QueryProvider';
 import { useSyncStore } from '@/stores/sync';
+import { captureConsole } from '@/tests/console';
 import { ipc } from '@/tests/ipc-mock';
 import {
   RUST_COMPLETED_AT,
@@ -111,6 +112,32 @@ it('coalesces completion and new-mail invalidations for one account', async () =
     ).toHaveLength(1);
   }
   vi.useRealTimers();
+});
+
+it('logs a bridged event by name without its mail content', async () => {
+  const privateSubject = 'Quarterly salary review';
+  const consoleInfo = captureConsole('info');
+  renderEventBridge();
+  await waitFor(() =>
+    expect(ipc.tauriListen).toHaveBeenCalledWith('mail://new', expect.any(Function)),
+  );
+  act(() => {
+    ipc.emit('mail://new', {
+      accountId: 'account-1',
+      threadIds: ['thread-1'],
+      arrivals: [
+        {
+          threadId: 'thread-1',
+          sender: 'boss@example.com',
+          subject: privateSubject,
+          snippet: 'Your new salary is',
+        },
+      ],
+    });
+  });
+  const loggedLines = consoleInfo.mock.calls.map((call) => String(call[0]));
+  expect(loggedLines).toContain('event mail://new');
+  expect(loggedLines.some((line) => line.includes(privateSubject))).toBe(false);
 });
 
 it('invalidates mailbox data for new mail without a completion event', async () => {
