@@ -31,6 +31,14 @@ function invalidateMailboxQueries(queryClient: QueryClient, accountId: string) {
   void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
 }
 
+export function invalidateLocalMailChange(queryClient: QueryClient, accountId: string) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.conversationsForAccount(accountId) });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId) });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.searchTotalsForAccount(accountId) });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+}
+
 function invalidateTraversalQueries(queryClient: QueryClient, accountId: string) {
   void queryClient.invalidateQueries({
     queryKey: queryKeys.threadsForAccount(accountId),
@@ -196,19 +204,7 @@ function createSyncAndMailSubscriptions(
     on('mail://new', (event) => {
       debouncers.mailboxInvalidation.add(event.accountId);
     }),
-    on('mail://changed', (event) => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.threadsForAccount(event.accountId),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.conversationsForAccount(event.accountId),
-      });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(event.accountId) });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.searchTotalsForAccount(event.accountId),
-      });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
-    }),
+    on('mail://changed', (event) => invalidateLocalMailChange(queryClient, event.accountId)),
     on('message://body-fetched', (event) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.messageBodiesForMessage(event.accountId, event.messageId),

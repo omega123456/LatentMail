@@ -12,6 +12,7 @@ import type {
   ThreadPage,
   ThreadSearchPage,
 } from '@/lib/types/ipc';
+import { invalidateLocalMailChange } from './event-bridge';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useSelectionStore } from '@/stores/selection';
@@ -49,6 +50,15 @@ export type {
   TriageIntent,
 };
 
+function useMutationFailureReporter(accountId: string | null) {
+  const queryClient = useQueryClient();
+  const showError = useToastStore((toaster) => toaster.showError);
+  return (message: string) => {
+    invalidateLocalMailChange(queryClient, accountId ?? '');
+    showError(message);
+  };
+}
+
 function useLabelLifecycleMutation<Request>({
   accountId,
   mutationFn,
@@ -57,7 +67,7 @@ function useLabelLifecycleMutation<Request>({
 }: LabelLifecycleMutationOptions<Request>) {
   const queryClient = useQueryClient();
   const showSuccess = useToastStore((toaster) => toaster.showSuccess);
-  const showError = useToastStore((toaster) => toaster.showError);
+  const reportFailure = useMutationFailureReporter(accountId);
   return useMutation({
     mutationFn: mutationFn,
     onMutate: async (request: Request) => {
@@ -68,7 +78,7 @@ function useLabelLifecycleMutation<Request>({
       );
     },
     onSuccess: () => showSuccess(copy.done),
-    onError: () => showError(copy.failed),
+    onError: () => reportFailure(copy.failed),
   });
 }
 
@@ -200,13 +210,13 @@ async function applyOptimisticThreadTriage(
 
 export function useTriageMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((toaster) => toaster.showError);
+  const reportFailure = useMutationFailureReporter(accountId);
   return useMutation({
     mutationFn: (change: TriageChange) =>
       invoke('mutate_threads', { accountId: accountId as string, ...change }),
     onMutate: (change) => applyOptimisticThreadTriage(queryClient, accountId, change),
     onError: (_error, { threadIds }) =>
-      showError(formatFailureCopy('update', threadIds.length, 'conversation')),
+      reportFailure(formatFailureCopy('update', threadIds.length, 'conversation')),
   });
 }
 
@@ -218,7 +228,7 @@ function useThreadTransferMutation<Change extends { threadIds: string[] }>({
   clearActiveSelection,
 }: ThreadTransferMutationOptions<Change>) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((toaster) => toaster.showError);
+  const reportFailure = useMutationFailureReporter(accountId);
   return useMutation({
     mutationFn: mutationFn,
     onMutate: async (change: Change) => {
@@ -239,7 +249,7 @@ function useThreadTransferMutation<Change extends { threadIds: string[] }>({
       });
     },
     onError: (_error, { threadIds }) =>
-      showError(formatFailureCopy(verb, threadIds.length, 'conversation')),
+      reportFailure(formatFailureCopy(verb, threadIds.length, 'conversation')),
   });
 }
 
@@ -285,7 +295,7 @@ export function useThreadTriageIntentMutation(accountId: string | null) {
 
 export function useMessageTriageMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((toaster) => toaster.showError);
+  const reportFailure = useMutationFailureReporter(accountId);
   return useMutation({
     mutationFn: (change: MessageTriageChange) =>
       invoke('mutate_messages', { accountId: accountId as string, ...change }),
@@ -300,7 +310,7 @@ export function useMessageTriageMutation(accountId: string | null) {
       });
     },
     onError: (_error, { messageIds }) =>
-      showError(formatFailureCopy('update', messageIds.length, 'message')),
+      reportFailure(formatFailureCopy('update', messageIds.length, 'message')),
   });
 }
 
@@ -310,7 +320,7 @@ function useMessageTransferMutation<Change extends { threadId: string; messageId
   mutationFn: (change: Change) => Promise<unknown>,
 ) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((toaster) => toaster.showError);
+  const reportFailure = useMutationFailureReporter(accountId);
   return useMutation({
     mutationFn: mutationFn,
     onMutate: async ({ threadId, messageIds }: Change) => {
@@ -324,7 +334,7 @@ function useMessageTransferMutation<Change extends { threadId: string; messageId
       });
     },
     onError: (_error, { messageIds }) =>
-      showError(formatFailureCopy(verb, messageIds.length, 'message')),
+      reportFailure(formatFailureCopy(verb, messageIds.length, 'message')),
   });
 }
 

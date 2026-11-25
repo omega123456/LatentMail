@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import { ipc } from '@/tests/ipc-mock';
 import { useToastStore } from '@/stores/toast';
 import { queryKeys } from '@/lib/query/keys';
 import { EventBridge } from '@/lib/query/event-bridge';
+import { useRenameLabelMutation } from '@/lib/query/mutations';
 import { captureConsole } from '@/tests/console';
 
 const thread = {
@@ -71,6 +72,55 @@ it('rolls a failed star back and shows an error toast', async () => {
   expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
   error.mockRestore();
   expect(consoleInfo).toHaveBeenCalledWith('event mail://changed');
+});
+
+function listThreadsCallCount() {
+  return ipc.tauriInvoke.mock.calls.filter(([command]) => command === 'list_threads').length;
+}
+
+it('rolls a star back when the command is rejected before Rust announces anything', async () => {
+  const user = userEvent.setup();
+  const error = captureConsole('error');
+  ipc.override('mutate_threads', () =>
+    Promise.reject(new Error('command mutate_threads not allowed')),
+  );
+  renderList();
+  const starButton = await screen.findByLabelText('Star Mutation');
+  const fetchesBeforeRollback = listThreadsCallCount();
+  await user.click(starButton);
+  await waitFor(() => expect(listThreadsCallCount()).toBeGreaterThan(fetchesBeforeRollback));
+  expect(await screen.findByLabelText('Star Mutation')).toBeInTheDocument();
+  expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
+  expect(error).toHaveBeenCalledWith(
+    'ipc mutate_threads failed: command mutate_threads not allowed',
+  );
+});
+
+it('re-reads labels when a label command is rejected before Rust announces anything', async () => {
+  captureConsole('error');
+  ipc.override('rename_label', () => Promise.reject(new Error('forbidden')));
+  const client = new QueryClient();
+  client.setQueryData(queryKeys.labels('account'), [
+    {
+      id: 'Label_1',
+      name: 'Old name',
+      kind: 'user',
+      color: null,
+      messageCount: 0,
+      unreadCount: 0,
+    },
+  ]);
+  const { result } = renderHook(() => useRenameLabelMutation('account'), {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  });
+  await act(async () => {
+    await result.current
+      .mutateAsync({ labelId: 'Label_1', name: 'New name' })
+      .catch(() => undefined);
+  });
+  expect(client.getQueryState(queryKeys.labels('account'))?.isInvalidated).toBe(true);
 });
 
 it('invalidates every open conversation for the account once Rust announces the triage', async () => {
