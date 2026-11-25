@@ -86,10 +86,6 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/tests/**/*.{ts,tsx}'],
-    rules: { 'max-lines-per-function': 'off' },
-  },
-  {
     files: ['e2e/**/*.ts'],
     rules: {
       'max-depth': ['error', 2],

@@ -24,6 +24,35 @@ function snapshot(overrides: Partial<AccountQueueSnapshot>): AccountQueueSnapsho
   };
 }
 
+type QueueOperation = AccountQueueSnapshot['lanes'][number]['operations'][number];
+type FailedOperationTraits = Pick<
+  QueueOperation,
+  'kind' | 'description' | 'attempts' | 'retryable'
+>;
+
+function snapshotWithOneFailedInteractiveOperation(
+  traits: FailedOperationTraits,
+): AccountQueueSnapshot {
+  const failedOperation: QueueOperation = {
+    id: 'op-1',
+    accountId: 'account-1',
+    lane: 'interactive',
+    status: 'failed',
+    error: 'boom',
+    nextAttemptAt: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...traits,
+  };
+  return snapshot({
+    lanes: [
+      { ...emptyLane('interactive', 'idle'), operations: [failedOperation] },
+      emptyLane('background', 'idle'),
+      emptyLane('traversal', 'idle'),
+    ],
+  });
+}
+
 describe('describeAccountBar', () => {
   it('reports idle when nothing is running or paused', () => {
     const bar = describeAccountBar(snapshot({}));
@@ -91,67 +120,21 @@ describe('hasRetryableFailure', () => {
   });
 
   it('is false when every failure is non-retryable', () => {
-    const withNonRetryableFailure = snapshot({
-      lanes: [
-        {
-          lane: 'interactive',
-          capacity: 4,
-          active: 0,
-          backlog: 0,
-          state: 'idle',
-          operations: [
-            {
-              id: 'op-1',
-              accountId: 'account-1',
-              lane: 'interactive',
-              kind: 'sync',
-              description: 'Sync',
-              status: 'failed',
-              attempts: 1,
-              error: 'boom',
-              retryable: false,
-              nextAttemptAt: null,
-              createdAt: 0,
-              updatedAt: 0,
-            },
-          ],
-        },
-        emptyLane('background', 'idle'),
-        emptyLane('traversal', 'idle'),
-      ],
+    const withNonRetryableFailure = snapshotWithOneFailedInteractiveOperation({
+      kind: 'sync',
+      description: 'Sync',
+      attempts: 1,
+      retryable: false,
     });
     expect(hasRetryableFailure([withNonRetryableFailure])).toBe(false);
   });
 
   it('is true when at least one retryable failed operation exists anywhere', () => {
-    const withRetryableFailure = snapshot({
-      lanes: [
-        {
-          lane: 'interactive',
-          capacity: 4,
-          active: 0,
-          backlog: 0,
-          state: 'idle',
-          operations: [
-            {
-              id: 'op-1',
-              accountId: 'account-1',
-              lane: 'interactive',
-              kind: 'send',
-              description: 'Send',
-              status: 'failed',
-              attempts: 3,
-              error: 'boom',
-              retryable: true,
-              nextAttemptAt: null,
-              createdAt: 0,
-              updatedAt: 0,
-            },
-          ],
-        },
-        emptyLane('background', 'idle'),
-        emptyLane('traversal', 'idle'),
-      ],
+    const withRetryableFailure = snapshotWithOneFailedInteractiveOperation({
+      kind: 'send',
+      description: 'Send',
+      attempts: 3,
+      retryable: true,
     });
     expect(hasRetryableFailure([snapshot({}), withRetryableFailure])).toBe(true);
   });

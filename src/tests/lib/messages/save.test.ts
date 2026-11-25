@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, expect, it } from 'vitest';
 import { saveMessageAs, type MessageExportTarget } from '@/lib/messages/save';
 import { ipc } from '@/tests/ipc-mock';
 import { useToastStore } from '@/stores/toast';
@@ -17,70 +17,68 @@ beforeEach(() => {
   useToastStore.setState({ toasts: [] });
 });
 
-describe('saveMessageAs', () => {
-  it('does nothing when the save dialog is cancelled', async () => {
-    const written: string[] = [];
-    ipc.override('plugin:dialog|save', null);
-    ipc.override('save_message_html_to_path', ({ destination }) => {
-      written.push(destination);
-    });
-
-    await saveMessageAs('html', target);
-
-    expect(written).toEqual([]);
-    expect(useToastStore.getState().toasts).toEqual([]);
+it('does nothing when the save dialog is cancelled', async () => {
+  const written: string[] = [];
+  ipc.override('plugin:dialog|save', null);
+  ipc.override('save_message_html_to_path', ({ destination }) => {
+    written.push(destination);
   });
 
-  it('offers a web page filter and writes the html export to the chosen path', async () => {
-    const filters: string[][] = [];
-    const written: string[] = [];
-    ipc.override('plugin:dialog|save', ({ options }) => {
-      filters.push(options.filters?.[0]?.extensions ?? []);
-      return 'C:\\Users\\me\\Invoice copy.html';
-    });
-    ipc.override('save_message_html_to_path', ({ destination }) => {
-      written.push(destination);
-    });
+  await saveMessageAs('html', target);
 
-    await saveMessageAs('html', target);
+  expect(written).toEqual([]);
+  expect(useToastStore.getState().toasts).toEqual([]);
+});
 
-    expect(filters).toEqual([['html']]);
-    expect(written).toEqual(['C:\\Users\\me\\Invoice copy.html']);
-    expect(useToastStore.getState().toasts.at(-1)).toMatchObject({
-      severity: 'success',
-      message: 'Saved "Invoice copy.html"',
-    });
+it('offers a web page filter and writes the html export to the chosen path', async () => {
+  const filters: string[][] = [];
+  const written: string[] = [];
+  ipc.override('plugin:dialog|save', ({ options }) => {
+    filters.push(options.filters?.[0]?.extensions ?? []);
+    return 'C:\\Users\\me\\Invoice copy.html';
+  });
+  ipc.override('save_message_html_to_path', ({ destination }) => {
+    written.push(destination);
   });
 
-  it('passes the reason from Rust on to the error toast', async () => {
-    const consoleError = captureConsole('error');
-    ipc.override('plugin:dialog|save', '/tmp/Invoice.html');
-    ipc.override('save_message_html_to_path', () =>
-      Promise.reject('Open the message so its content loads, then try again.'),
-    );
+  await saveMessageAs('html', target);
 
-    await saveMessageAs('html', target);
-
-    expect(useToastStore.getState().toasts.at(-1)).toMatchObject({
-      severity: 'error',
-      message: "Couldn't save the message. Open the message so its content loads, then try again.",
-    });
-    expect(consoleError).toHaveBeenCalledWith(
-      'ipc save_message_html_to_path failed: Open the message so its content loads, then try again.',
-    );
+  expect(filters).toEqual([['html']]);
+  expect(written).toEqual(['C:\\Users\\me\\Invoice copy.html']);
+  expect(useToastStore.getState().toasts.at(-1)).toMatchObject({
+    severity: 'success',
+    message: 'Saved "Invoice copy.html"',
   });
+});
 
-  it('falls back to a generic error toast for an unexpected failure', async () => {
-    const consoleError = captureConsole('error');
-    ipc.override('plugin:dialog|save', '/tmp/Invoice.eml');
-    ipc.override('save_message_source_to_path', () => Promise.reject(new Error('disk full')));
+it('passes the reason from Rust on to the error toast', async () => {
+  const consoleError = captureConsole('error');
+  ipc.override('plugin:dialog|save', '/tmp/Invoice.html');
+  ipc.override('save_message_html_to_path', () =>
+    Promise.reject('Open the message so its content loads, then try again.'),
+  );
 
-    await saveMessageAs('eml', target);
+  await saveMessageAs('html', target);
 
-    expect(useToastStore.getState().toasts.at(-1)).toMatchObject({
-      severity: 'error',
-      message: "Couldn't save the message.",
-    });
-    expect(consoleError).toHaveBeenCalledWith('ipc save_message_source_to_path failed: disk full');
+  expect(useToastStore.getState().toasts.at(-1)).toMatchObject({
+    severity: 'error',
+    message: "Couldn't save the message. Open the message so its content loads, then try again.",
   });
+  expect(consoleError).toHaveBeenCalledWith(
+    'ipc save_message_html_to_path failed: Open the message so its content loads, then try again.',
+  );
+});
+
+it('falls back to a generic error toast for an unexpected failure', async () => {
+  const consoleError = captureConsole('error');
+  ipc.override('plugin:dialog|save', '/tmp/Invoice.eml');
+  ipc.override('save_message_source_to_path', () => Promise.reject(new Error('disk full')));
+
+  await saveMessageAs('eml', target);
+
+  expect(useToastStore.getState().toasts.at(-1)).toMatchObject({
+    severity: 'error',
+    message: "Couldn't save the message.",
+  });
+  expect(consoleError).toHaveBeenCalledWith('ipc save_message_source_to_path failed: disk full');
 });

@@ -1,6 +1,6 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, expect, it } from 'vitest';
 import App from '@/App';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
@@ -29,111 +29,109 @@ async function openUpdates() {
   return user;
 }
 
-describe('UpdatesSection', () => {
-  beforeEach(() => {
-    act(() => {
-      useLayoutStore.setState({ route: 'mail', hydrated: false });
-      useSettingsUiStore.setState({ activeSection: 'general' });
-    });
+beforeEach(() => {
+  act(() => {
+    useLayoutStore.setState({ route: 'mail', hydrated: false });
+    useSettingsUiStore.setState({ activeSection: 'general' });
   });
+});
 
-  it('shows the running version as up to date when no update is available', async () => {
-    ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
-    await openUpdates();
+it('shows the running version as up to date when no update is available', async () => {
+  ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
+  await openUpdates();
 
-    const status = await screen.findByTestId('updates-status');
-    expect(status).toHaveTextContent('LatentMail 0.1.0');
-    expect(screen.getByRole('button', { name: 'Check now' })).toBeInTheDocument();
-    expect(screen.getByText('0.1.0', { selector: 'dd' })).toBeInTheDocument();
+  const status = await screen.findByTestId('updates-status');
+  expect(status).toHaveTextContent('LatentMail 0.1.0');
+  expect(screen.getByRole('button', { name: 'Check now' })).toBeInTheDocument();
+  expect(screen.getByText('0.1.0', { selector: 'dd' })).toBeInTheDocument();
+});
+
+it('offers to install an available update and shows its release notes', async () => {
+  ipc.override('check_for_update', {
+    currentVersion: '0.1.0',
+    available: {
+      version: '0.1.1',
+      notes: 'Fixes a crash.\nImproves attachment previews.',
+      dateMillis: null,
+    },
   });
+  await openUpdates();
 
-  it('offers to install an available update and shows its release notes', async () => {
-    ipc.override('check_for_update', {
-      currentVersion: '0.1.0',
-      available: {
-        version: '0.1.1',
-        notes: 'Fixes a crash.\nImproves attachment previews.',
-        dateMillis: null,
-      },
-    });
-    await openUpdates();
+  const section = await screen.findByTestId('settings-updates-section');
+  const status = within(section).getByTestId('updates-status');
+  expect(status).toHaveTextContent('LatentMail 0.1.1 is available');
+  expect(within(status).getByRole('button', { name: 'Install and restart' })).toBeInTheDocument();
+  const notes = within(section).getByTestId('updates-notes');
+  expect(notes).toHaveTextContent('Fixes a crash.');
+  expect(notes).toHaveTextContent('Improves attachment previews.');
+});
 
-    const section = await screen.findByTestId('settings-updates-section');
-    const status = within(section).getByTestId('updates-status');
-    expect(status).toHaveTextContent('LatentMail 0.1.1 is available');
-    expect(within(status).getByRole('button', { name: 'Install and restart' })).toBeInTheDocument();
-    const notes = within(section).getByTestId('updates-notes');
-    expect(notes).toHaveTextContent('Fixes a crash.');
-    expect(notes).toHaveTextContent('Improves attachment previews.');
+it('offers hourly/5-hour/daily/weekly/off check intervals and persists the change', async () => {
+  ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
+  const writes: Array<{ key: string; value: unknown }> = [];
+  ipc.override('write_setting', (request) => {
+    writes.push(request as { key: string; value: unknown });
   });
+  const user = await openUpdates();
 
-  it('offers hourly/5-hour/daily/weekly/off check intervals and persists the change', async () => {
-    ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
-    const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (request) => {
-      writes.push(request as { key: string; value: unknown });
-    });
-    const user = await openUpdates();
+  const select = screen.getByRole('combobox', { name: 'Check for updates' });
+  expect(select).toHaveTextContent('Every day');
 
-    const select = screen.getByRole('combobox', { name: 'Check for updates' });
-    expect(select).toHaveTextContent('Every day');
+  await user.click(select);
+  expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+    'Every hour',
+    'Every 5 hours',
+    'Every day',
+    'Every 7 days',
+    'Off',
+  ]);
+  await user.click(screen.getByRole('option', { name: 'Off' }));
 
-    await user.click(select);
-    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
-      'Every hour',
-      'Every 5 hours',
-      'Every day',
-      'Every 7 days',
-      'Off',
-    ]);
-    await user.click(screen.getByRole('option', { name: 'Off' }));
+  expect(writes).toContainEqual({ key: 'updateCheckInterval', value: 'off' });
+});
 
-    expect(writes).toContainEqual({ key: 'updateCheckInterval', value: 'off' });
+it('confirms with a toast when a manual check finds no update', async () => {
+  let checks = 0;
+  ipc.override('check_for_update', () => {
+    checks += 1;
+    return { currentVersion: '0.1.0', available: null };
   });
+  const user = await openUpdates();
+  const checksBeforeClick = checks;
 
-  it('confirms with a toast when a manual check finds no update', async () => {
-    let checks = 0;
-    ipc.override('check_for_update', () => {
-      checks += 1;
-      return { currentVersion: '0.1.0', available: null };
-    });
-    const user = await openUpdates();
-    const checksBeforeClick = checks;
+  await user.click(screen.getByRole('button', { name: 'Check now' }));
 
-    await user.click(screen.getByRole('button', { name: 'Check now' }));
+  expect(await screen.findByText('LatentMail 0.1.0 is up to date.')).toBeInTheDocument();
+  expect(checks).toBeGreaterThan(checksBeforeClick);
+});
 
-    expect(await screen.findByText('LatentMail 0.1.0 is up to date.')).toBeInTheDocument();
-    expect(checks).toBeGreaterThan(checksBeforeClick);
+it('reports a failed manual check with an error toast', async () => {
+  const consoleError = captureConsole('error');
+  let shouldFail = false;
+  ipc.override('check_for_update', () => {
+    if (shouldFail) throw new Error('network down');
+    return { currentVersion: '0.1.0', available: null };
   });
+  const user = await openUpdates();
+  shouldFail = true;
 
-  it('reports a failed manual check with an error toast', async () => {
-    const consoleError = captureConsole('error');
-    let shouldFail = false;
-    ipc.override('check_for_update', () => {
-      if (shouldFail) throw new Error('network down');
-      return { currentVersion: '0.1.0', available: null };
-    });
-    const user = await openUpdates();
-    shouldFail = true;
+  await user.click(screen.getByRole('button', { name: 'Check now' }));
 
-    await user.click(screen.getByRole('button', { name: 'Check now' }));
+  expect(await screen.findByText('Couldn’t check for updates.')).toBeInTheDocument();
+  expect(consoleError).toHaveBeenCalledWith('ipc check_for_update failed: network down');
+});
 
-    expect(await screen.findByText('Couldn’t check for updates.')).toBeInTheDocument();
-    expect(consoleError).toHaveBeenCalledWith('ipc check_for_update failed: network down');
+it('toggles install on quit and persists the change', async () => {
+  ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
+  const writes: Array<{ key: string; value: unknown }> = [];
+  ipc.override('write_setting', (request) => {
+    writes.push(request as { key: string; value: unknown });
   });
+  const user = await openUpdates();
 
-  it('toggles install on quit and persists the change', async () => {
-    ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
-    const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (request) => {
-      writes.push(request as { key: string; value: unknown });
-    });
-    const user = await openUpdates();
+  const toggle = screen.getByRole('switch', { name: 'Install on quit' });
+  expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await user.click(toggle);
 
-    const toggle = screen.getByRole('switch', { name: 'Install on quit' });
-    expect(toggle).toHaveAttribute('aria-checked', 'true');
-    await user.click(toggle);
-
-    expect(writes).toContainEqual({ key: 'installUpdateOnQuit', value: false });
-  });
+  expect(writes).toContainEqual({ key: 'installUpdateOnQuit', value: false });
 });

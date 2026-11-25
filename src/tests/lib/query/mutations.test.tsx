@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { ConversationListContainer } from '@/components/list/ConversationList';
 import { useSelectionStore } from '@/stores/selection';
 import { ipc } from '@/tests/ipc-mock';
@@ -38,84 +38,82 @@ function renderList() {
   );
 }
 
-describe('thread mutations', () => {
-  it('optimistically stars a conversation', async () => {
-    const user = userEvent.setup();
-    let resolve!: () => void;
-    ipc.override(
-      'mutate_threads',
-      () =>
-        new Promise((done) => {
-          resolve = () => done([]);
-        }),
-    );
-    renderList();
-    await user.click(await screen.findByLabelText('Star Mutation'));
-    expect(screen.getByLabelText('Unstar Mutation')).toBeInTheDocument();
-    await act(async () => {
-      resolve();
-    });
+it('optimistically stars a conversation', async () => {
+  const user = userEvent.setup();
+  let resolve!: () => void;
+  ipc.override(
+    'mutate_threads',
+    () =>
+      new Promise((done) => {
+        resolve = () => done([]);
+      }),
+  );
+  renderList();
+  await user.click(await screen.findByLabelText('Star Mutation'));
+  expect(screen.getByLabelText('Unstar Mutation')).toBeInTheDocument();
+  await act(async () => {
+    resolve();
   });
+});
 
-  it('rolls a failed star back and shows an error toast', async () => {
-    const consoleInfo = captureConsole('info');
-    const user = userEvent.setup();
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    ipc.override('mutate_threads', () => {
-      ipc.emit('mail://changed', { accountId: 'account' });
-      return Promise.reject(new Error('offline'));
-    });
-    renderList();
-    await user.click(await screen.findByLabelText('Star Mutation'));
-    await waitFor(() => expect(screen.getByLabelText('Star Mutation')).toBeInTheDocument());
-    expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
-    expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
-    error.mockRestore();
-    expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
+it('rolls a failed star back and shows an error toast', async () => {
+  const consoleInfo = captureConsole('info');
+  const user = userEvent.setup();
+  const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  ipc.override('mutate_threads', () => {
+    ipc.emit('mail://changed', { accountId: 'account' });
+    return Promise.reject(new Error('offline'));
   });
+  renderList();
+  await user.click(await screen.findByLabelText('Star Mutation'));
+  await waitFor(() => expect(screen.getByLabelText('Star Mutation')).toBeInTheDocument());
+  expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
+  expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
+  error.mockRestore();
+  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
+});
 
-  it('invalidates every open conversation for the account once Rust announces the triage', async () => {
-    const consoleInfo = captureConsole('info');
-    const user = userEvent.setup();
-    ipc.override('mutate_threads', () => {
-      ipc.emit('mail://changed', { accountId: 'account' });
-      return [];
-    });
-    ipc.override('load_conversation', {
-      threadId: 'thread-9',
-      subject: 'A different open conversation',
-      messages: [],
-    });
-    const client = new QueryClient();
-
-    await client.fetchQuery({
-      queryKey: queryKeys.conversationThread('account', 'thread-9'),
-      queryFn: () =>
-        ipc.tauriInvoke('load_conversation', { accountId: 'account', threadId: 'thread-9' }),
-    });
-    render(
-      <QueryClientProvider client={client}>
-        <EventBridge />
-        <ConversationListContainer />
-      </QueryClientProvider>,
-    );
-    await user.click(await screen.findByLabelText('Star Mutation'));
-    await waitFor(() =>
-      expect(
-        client.getQueryState(queryKeys.conversationThread('account', 'thread-9'))?.isInvalidated,
-      ).toBe(true),
-    );
-    expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
+it('invalidates every open conversation for the account once Rust announces the triage', async () => {
+  const consoleInfo = captureConsole('info');
+  const user = userEvent.setup();
+  ipc.override('mutate_threads', () => {
+    ipc.emit('mail://changed', { accountId: 'account' });
+    return [];
   });
-
-  it('clears the open conversation when it is deleted', async () => {
-    const user = userEvent.setup();
-    renderList();
-    await user.click(await screen.findByLabelText('Open Mutation'));
-    expect(useSelectionStore.getState().activeThreadId).toBe('thread-1');
-
-    await user.keyboard('{Delete}');
-
-    await waitFor(() => expect(useSelectionStore.getState().activeThreadId).toBeNull());
+  ipc.override('load_conversation', {
+    threadId: 'thread-9',
+    subject: 'A different open conversation',
+    messages: [],
   });
+  const client = new QueryClient();
+
+  await client.fetchQuery({
+    queryKey: queryKeys.conversationThread('account', 'thread-9'),
+    queryFn: () =>
+      ipc.tauriInvoke('load_conversation', { accountId: 'account', threadId: 'thread-9' }),
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <EventBridge />
+      <ConversationListContainer />
+    </QueryClientProvider>,
+  );
+  await user.click(await screen.findByLabelText('Star Mutation'));
+  await waitFor(() =>
+    expect(
+      client.getQueryState(queryKeys.conversationThread('account', 'thread-9'))?.isInvalidated,
+    ).toBe(true),
+  );
+  expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
+});
+
+it('clears the open conversation when it is deleted', async () => {
+  const user = userEvent.setup();
+  renderList();
+  await user.click(await screen.findByLabelText('Open Mutation'));
+  expect(useSelectionStore.getState().activeThreadId).toBe('thread-1');
+
+  await user.keyboard('{Delete}');
+
+  await waitFor(() => expect(useSelectionStore.getState().activeThreadId).toBeNull());
 });

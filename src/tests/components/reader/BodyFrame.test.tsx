@@ -1,103 +1,101 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { waitForBodyFramesToSettle } from '@/tests/body-frame';
 import { BodyFrame } from '@/components/reader/BodyFrame';
 import { ipc } from '@/tests/ipc-mock';
 
-describe('BodyFrame', () => {
-  it('renders empty and plain alternatives without an iframe', () => {
-    const { rerender } = render(<BodyFrame html={null} text={null} />);
-    expect(screen.getByText('This message has no content.')).toBeInTheDocument();
-    rerender(<BodyFrame html={null} text={'Plain body'} />);
-    expect(screen.getByText('Plain body')).toBeInTheDocument();
+it('renders empty and plain alternatives without an iframe', () => {
+  const { rerender } = render(<BodyFrame html={null} text={null} />);
+  expect(screen.getByText('This message has no content.')).toBeInTheDocument();
+  rerender(<BodyFrame html={null} text={'Plain body'} />);
+  expect(screen.getByText('Plain body')).toBeInTheDocument();
+});
+
+it('sanitizes HTML and opens clicked links through centralized IPC', async () => {
+  const openExternal = vi.fn();
+  ipc.override('open_external_url', openExternal);
+  render(
+    <BodyFrame
+      html={'<a href="https://example.com">Safe link</a><script>bad()</script>'}
+      text={null}
+    />,
+  );
+  const frame = screen.getByTitle('Message body') as HTMLIFrameElement;
+  expect(frame).not.toHaveAttribute('sandbox');
+  expect(frame.getAttribute('srcdoc')).toContain("default-src 'none'");
+  expect(frame.getAttribute('srcdoc')).toContain("form-action 'none'");
+  expect(frame.getAttribute('srcdoc')).not.toContain('<script>');
+  expect(frame.getAttribute('srcdoc')).toContain('overflow-wrap:break-word');
+  expect(frame.getAttribute('srcdoc')).not.toContain('word-break');
+  frame.contentDocument?.write('<a href="https://example.com">Safe link</a>');
+  await act(async () => {
+    fireEvent.load(frame);
+    await Promise.resolve();
   });
+  const link = frame.contentDocument?.querySelector('a');
+  expect(link).not.toBeNull();
+  link?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  expect(openExternal).toHaveBeenCalledWith({ url: 'https://example.com' });
+});
 
-  it('sanitizes HTML and opens clicked links through centralized IPC', async () => {
-    const openExternal = vi.fn();
-    ipc.override('open_external_url', openExternal);
-    render(
-      <BodyFrame
-        html={'<a href="https://example.com">Safe link</a><script>bad()</script>'}
-        text={null}
-      />,
-    );
-    const frame = screen.getByTitle('Message body') as HTMLIFrameElement;
-    expect(frame).not.toHaveAttribute('sandbox');
-    expect(frame.getAttribute('srcdoc')).toContain("default-src 'none'");
-    expect(frame.getAttribute('srcdoc')).toContain("form-action 'none'");
-    expect(frame.getAttribute('srcdoc')).not.toContain('<script>');
-    expect(frame.getAttribute('srcdoc')).toContain('overflow-wrap:break-word');
-    expect(frame.getAttribute('srcdoc')).not.toContain('word-break');
-    frame.contentDocument?.write('<a href="https://example.com">Safe link</a>');
-    await act(async () => {
-      fireEvent.load(frame);
-      await Promise.resolve();
-    });
-    const link = frame.contentDocument?.querySelector('a');
-    expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    expect(openExternal).toHaveBeenCalledWith({ url: 'https://example.com' });
+it('keeps proxied image sources and still drops executable ones', async () => {
+  const proxied = 'remoteimg://localhost/?url=https%3A%2F%2Fclaude.ai%2Fa.gif';
+  render(
+    <BodyFrame
+      html={`<img src="${proxied}"><img src="javascript:bad()"><div style="background:url(${proxied})"></div>`}
+      text={null}
+      allowRemoteImages
+    />,
+  );
+  const srcdoc = screen.getByTitle('Message body').getAttribute('srcdoc') ?? '';
+  expect(srcdoc).toContain(`<img src="${proxied}">`);
+  expect(srcdoc).toContain(`background:url(${proxied})`);
+  expect(srcdoc).not.toContain('javascript:');
+  await waitForBodyFramesToSettle();
+});
+
+it('keeps inline image sources even when remote images stay blocked', async () => {
+  const inline = 'inlineimg://localhost/?account=a&message=m&cid=logo';
+  render(<BodyFrame html={`<img src="${inline}">`} text={null} />);
+  const srcdoc = screen.getByTitle('Message body').getAttribute('srcdoc') ?? '';
+  expect(srcdoc).toContain(`<img src="${inline.replaceAll('&', '&amp;')}">`);
+  await waitForBodyFramesToSettle();
+});
+
+it('cancels the native right-click menu and forwards it to the reader menu', async () => {
+  render(<BodyFrame html={'<p>Body</p>'} text={null} />);
+  const frame = screen.getByTitle('Message body') as HTMLIFrameElement;
+  frame.contentDocument?.write('<p>Body</p><a href="https://example.com">Safe link</a>');
+  await act(async () => {
+    fireEvent.load(frame);
+    await Promise.resolve();
   });
+  const forwarded = vi.fn();
+  frame.addEventListener('contextmenu', forwarded);
+  const paragraph = frame.contentDocument?.querySelector('p');
+  const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+  paragraph?.dispatchEvent(menu);
 
-  it('keeps proxied image sources and still drops executable ones', async () => {
-    const proxied = 'remoteimg://localhost/?url=https%3A%2F%2Fclaude.ai%2Fa.gif';
-    render(
-      <BodyFrame
-        html={`<img src="${proxied}"><img src="javascript:bad()"><div style="background:url(${proxied})"></div>`}
-        text={null}
-        allowRemoteImages
-      />,
-    );
-    const srcdoc = screen.getByTitle('Message body').getAttribute('srcdoc') ?? '';
-    expect(srcdoc).toContain(`<img src="${proxied}">`);
-    expect(srcdoc).toContain(`background:url(${proxied})`);
-    expect(srcdoc).not.toContain('javascript:');
-    await waitForBodyFramesToSettle();
-  });
+  expect(menu.defaultPrevented).toBe(true);
+  expect(forwarded).toHaveBeenCalled();
+  expect(frame.dataset.contextHref).toBe('');
 
-  it('keeps inline image sources even when remote images stay blocked', async () => {
-    const inline = 'inlineimg://localhost/?account=a&message=m&cid=logo';
-    render(<BodyFrame html={`<img src="${inline}">`} text={null} />);
-    const srcdoc = screen.getByTitle('Message body').getAttribute('srcdoc') ?? '';
-    expect(srcdoc).toContain(`<img src="${inline.replaceAll('&', '&amp;')}">`);
-    await waitForBodyFramesToSettle();
-  });
+  frame.contentDocument
+    ?.querySelector('a')
+    ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
 
-  it('cancels the native right-click menu and forwards it to the reader menu', async () => {
-    render(<BodyFrame html={'<p>Body</p>'} text={null} />);
-    const frame = screen.getByTitle('Message body') as HTMLIFrameElement;
-    frame.contentDocument?.write('<p>Body</p><a href="https://example.com">Safe link</a>');
-    await act(async () => {
-      fireEvent.load(frame);
-      await Promise.resolve();
-    });
-    const forwarded = vi.fn();
-    frame.addEventListener('contextmenu', forwarded);
-    const paragraph = frame.contentDocument?.querySelector('p');
-    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
-    paragraph?.dispatchEvent(menu);
+  expect(frame.dataset.contextHref).toBe('https://example.com');
+});
 
-    expect(menu.defaultPrevented).toBe(true);
-    expect(forwarded).toHaveBeenCalled();
-    expect(frame.dataset.contextHref).toBe('');
-
-    frame.contentDocument
-      ?.querySelector('a')
-      ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-
-    expect(frame.dataset.contextHref).toBe('https://example.com');
-  });
-
-  it('schedules one frame-wiring loop per document rather than one per render', async () => {
-    const scheduled = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
-    const { rerender } = render(<BodyFrame html="<p>Hello</p>" text={null} />);
-    const afterMount = scheduled.mock.calls.length;
-    rerender(<BodyFrame html="<p>Hello</p>" text={null} />);
-    rerender(<BodyFrame html="<p>Hello</p>" text={null} />);
-    expect(scheduled.mock.calls.length).toBe(afterMount);
-    rerender(<BodyFrame html="<p>Changed</p>" text={null} />);
-    expect(scheduled.mock.calls.length).toBe(afterMount + 1);
-    scheduled.mockRestore();
-    await waitForBodyFramesToSettle();
-  });
+it('schedules one frame-wiring loop per document rather than one per render', async () => {
+  const scheduled = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
+  const { rerender } = render(<BodyFrame html="<p>Hello</p>" text={null} />);
+  const afterMount = scheduled.mock.calls.length;
+  rerender(<BodyFrame html="<p>Hello</p>" text={null} />);
+  rerender(<BodyFrame html="<p>Hello</p>" text={null} />);
+  expect(scheduled.mock.calls.length).toBe(afterMount);
+  rerender(<BodyFrame html="<p>Changed</p>" text={null} />);
+  expect(scheduled.mock.calls.length).toBe(afterMount + 1);
+  scheduled.mockRestore();
+  await waitForBodyFramesToSettle();
 });

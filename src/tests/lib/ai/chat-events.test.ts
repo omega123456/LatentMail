@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, expect, it } from 'vitest';
 import { act, render, waitFor } from '@testing-library/react';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -63,113 +63,109 @@ beforeEach(() => {
   });
 });
 
-describe('assistant chat events', () => {
-  it('writes deltas, sources and the terminal state into the session', () => {
-    handleAssistantChatEvent({ ...identity(), kind: 'started' });
-    handleAssistantChatEvent({ ...identity(), kind: 'delta', text: 'The deadline ' });
-    handleAssistantChatEvent({ ...identity(), kind: 'delta', text: 'is Friday [4].' });
-    handleAssistantChatEvent({
+it('writes deltas, sources and the terminal state into the session', () => {
+  handleAssistantChatEvent({ ...identity(), kind: 'started' });
+  handleAssistantChatEvent({ ...identity(), kind: 'delta', text: 'The deadline ' });
+  handleAssistantChatEvent({ ...identity(), kind: 'delta', text: 'is Friday [4].' });
+  handleAssistantChatEvent({
+    ...identity(),
+    kind: 'sources',
+    sources: [source],
+    answer: 'The deadline is Friday [1].',
+  });
+  handleAssistantChatEvent({ ...identity(), kind: 'done', cancelled: false, error: null });
+  const message = useAssistantStore.getState().messages[1];
+  expect(message.text).toBe('The deadline is Friday [1].');
+  expect(message.sources).toEqual([source]);
+  expect(message.streaming).toBe(false);
+  expect(useAssistantStore.getState().activeRequestId).toBeNull();
+});
+
+it('adopts the request identity from the first event when the command has not returned yet', () => {
+  useAssistantStore.setState({ activeRequestId: null });
+  handleAssistantChatEvent({ ...identity(), kind: 'started' });
+  expect(useAssistantStore.getState().activeRequestId).toBe('request-1');
+});
+
+it('rejects an event from a stale request', () => {
+  handleAssistantChatEvent({
+    ...identity({ requestId: 'request-old' }),
+    kind: 'delta',
+    text: 'stale',
+  });
+  expect(useAssistantStore.getState().messages[1].text).toBe('');
+});
+
+it('rejects an event from another session', () => {
+  handleAssistantChatEvent({
+    ...identity({ sessionId: 'session-old' }),
+    kind: 'delta',
+    text: 'stale',
+  });
+  expect(useAssistantStore.getState().messages[1].text).toBe('');
+});
+
+it('rejects an event from another account', () => {
+  handleAssistantChatEvent({
+    ...identity({ accountId: 'account-2' }),
+    kind: 'delta',
+    text: 'stale',
+  });
+  expect(useAssistantStore.getState().messages[1].text).toBe('');
+});
+
+it('rejects a completion that arrives after the request was cancelled', () => {
+  useAssistantStore.getState().finish({ cancelled: true, error: null });
+  handleAssistantChatEvent({ ...identity(), kind: 'delta', text: 'late text' });
+  handleAssistantChatEvent({
+    ...identity(),
+    kind: 'sources',
+    sources: [source],
+    answer: 'late text [1]',
+  });
+  handleAssistantChatEvent({
+    ...identity(),
+    kind: 'done',
+    cancelled: false,
+    error: 'late failure',
+  });
+  const message = useAssistantStore.getState().messages[1];
+  expect(message.text).toBe('');
+  expect(message.sources).toEqual([]);
+  expect(message.error).toBeNull();
+});
+
+it('subscribes while mounted and stops on unmount', async () => {
+  const { unmount } = render(createElement(AssistantChatEvents));
+  await waitFor(() =>
+    expect(ipc.tauriListen).toHaveBeenCalledWith('ai-chat://event', expect.any(Function)),
+  );
+  act(() => {
+    ipc.emit('ai-chat://event', { ...identity(), kind: 'delta', text: 'through the listener' });
+  });
+  expect(useAssistantStore.getState().messages[1].text).toBe('through the listener');
+  unmount();
+  act(() => {
+    ipc.emit('ai-chat://event', { ...identity(), kind: 'delta', text: ' more' });
+  });
+  expect(useAssistantStore.getState().messages[1].text).toBe('through the listener');
+});
+
+it('keeps chat content out of the application log because the bridge never subscribes to it', async () => {
+  const client = new QueryClient();
+  render(createElement(QueryClientProvider, { client }, createElement(EventBridge)));
+  await waitFor(() => expect(ipc.tauriListen).toHaveBeenCalled());
+  act(() => {
+    ipc.emit('ai-chat://event', {
       ...identity(),
-      kind: 'sources',
-      sources: [source],
-      answer: 'The deadline is Friday [1].',
-    });
-    handleAssistantChatEvent({ ...identity(), kind: 'done', cancelled: false, error: null });
-    const message = useAssistantStore.getState().messages[1];
-    expect(message.text).toBe('The deadline is Friday [1].');
-    expect(message.sources).toEqual([source]);
-    expect(message.streaming).toBe(false);
-    expect(useAssistantStore.getState().activeRequestId).toBeNull();
-  });
-
-  it('adopts the request identity from the first event when the command has not returned yet', () => {
-    useAssistantStore.setState({ activeRequestId: null });
-    handleAssistantChatEvent({ ...identity(), kind: 'started' });
-    expect(useAssistantStore.getState().activeRequestId).toBe('request-1');
-  });
-
-  it('rejects an event from a stale request', () => {
-    handleAssistantChatEvent({
-      ...identity({ requestId: 'request-old' }),
       kind: 'delta',
-      text: 'stale',
+      text: 'secret answer text',
     });
-    expect(useAssistantStore.getState().messages[1].text).toBe('');
   });
-
-  it('rejects an event from another session', () => {
-    handleAssistantChatEvent({
-      ...identity({ sessionId: 'session-old' }),
-      kind: 'delta',
-      text: 'stale',
-    });
-    expect(useAssistantStore.getState().messages[1].text).toBe('');
-  });
-
-  it('rejects an event from another account', () => {
-    handleAssistantChatEvent({
-      ...identity({ accountId: 'account-2' }),
-      kind: 'delta',
-      text: 'stale',
-    });
-    expect(useAssistantStore.getState().messages[1].text).toBe('');
-  });
-
-  it('rejects a completion that arrives after the request was cancelled', () => {
-    useAssistantStore.getState().finish({ cancelled: true, error: null });
-    handleAssistantChatEvent({ ...identity(), kind: 'delta', text: 'late text' });
-    handleAssistantChatEvent({
-      ...identity(),
-      kind: 'sources',
-      sources: [source],
-      answer: 'late text [1]',
-    });
-    handleAssistantChatEvent({
-      ...identity(),
-      kind: 'done',
-      cancelled: false,
-      error: 'late failure',
-    });
-    const message = useAssistantStore.getState().messages[1];
-    expect(message.text).toBe('');
-    expect(message.sources).toEqual([]);
-    expect(message.error).toBeNull();
-  });
-
-  it('subscribes while mounted and stops on unmount', async () => {
-    const { unmount } = render(createElement(AssistantChatEvents));
-    await waitFor(() =>
-      expect(ipc.tauriListen).toHaveBeenCalledWith('ai-chat://event', expect.any(Function)),
-    );
-    act(() => {
-      ipc.emit('ai-chat://event', { ...identity(), kind: 'delta', text: 'through the listener' });
-    });
-    expect(useAssistantStore.getState().messages[1].text).toBe('through the listener');
-    unmount();
-    act(() => {
-      ipc.emit('ai-chat://event', { ...identity(), kind: 'delta', text: ' more' });
-    });
-    expect(useAssistantStore.getState().messages[1].text).toBe('through the listener');
-  });
-
-  it('keeps chat content out of the application log because the bridge never subscribes to it', async () => {
-    const client = new QueryClient();
-    render(createElement(QueryClientProvider, { client }, createElement(EventBridge)));
-    await waitFor(() => expect(ipc.tauriListen).toHaveBeenCalled());
-    act(() => {
-      ipc.emit('ai-chat://event', {
-        ...identity(),
-        kind: 'delta',
-        text: 'secret answer text',
-      });
-    });
-    const logged = ipc.tauriInvoke.mock.calls.filter(
-      ([command]) => command === 'write_frontend_log',
-    );
-    expect(
-      logged.some(([, request]) => JSON.stringify(request).includes('secret answer text')),
-    ).toBe(false);
-    expect(ipc.tauriListen.mock.calls.some(([event]) => event === 'ai-chat://event')).toBe(false);
-    client.clear();
-  });
+  const logged = ipc.tauriInvoke.mock.calls.filter(([command]) => command === 'write_frontend_log');
+  expect(logged.some(([, request]) => JSON.stringify(request).includes('secret answer text'))).toBe(
+    false,
+  );
+  expect(ipc.tauriListen.mock.calls.some(([event]) => event === 'ai-chat://event')).toBe(false);
+  client.clear();
 });

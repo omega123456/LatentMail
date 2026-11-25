@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, expect, it } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
 
 const SIDEBAR_WIDTH = 300;
@@ -28,146 +28,144 @@ async function loadStore() {
   return module.useLayoutStore;
 }
 
-describe('layout store', () => {
-  beforeEach(() => ipc.reset());
+beforeEach(() => ipc.reset());
 
-  it('hydrates persisted layout preferences but keeps the fresh-launch route', async () => {
-    ipc.override('read_settings', {
-      theme: 'dark',
-      layout: 'bottom-preview',
-      density: 'compact',
-      sidebarCollapsed: true,
-      sidebarWidth: 300,
-      listWidth: 420,
-      readerHeight: 60,
-      syncOnStartup: false,
-      showUnreadCounts: false,
-      syncIntervalSeconds: 120,
-      showSenderAvatars: false,
-      zoomPercent: 100,
-      alwaysLoadRemoteImages: false,
-      allowedImageSenders: [],
-      commandOverrides: {},
-      logLevel: 'info',
-      prefetchImageAttachments: false,
-    });
-    const store = await loadStore();
-    store.getState().setRoute('settings');
+it('hydrates persisted layout preferences but keeps the fresh-launch route', async () => {
+  ipc.override('read_settings', {
+    theme: 'dark',
+    layout: 'bottom-preview',
+    density: 'compact',
+    sidebarCollapsed: true,
+    sidebarWidth: 300,
+    listWidth: 420,
+    readerHeight: 60,
+    syncOnStartup: false,
+    showUnreadCounts: false,
+    syncIntervalSeconds: 120,
+    showSenderAvatars: false,
+    zoomPercent: 100,
+    alwaysLoadRemoteImages: false,
+    allowedImageSenders: [],
+    commandOverrides: {},
+    logLevel: 'info',
+    prefetchImageAttachments: false,
+  });
+  const store = await loadStore();
+  store.getState().setRoute('settings');
 
-    await store.getState().hydrate();
+  await store.getState().hydrate();
 
-    expect(store.getState()).toMatchObject({
-      layout: 'bottom-preview',
-      density: 'compact',
-      sidebarCollapsed: true,
-      sidebarWidth: 300,
-      listWidth: 420,
-      readerHeight: 60,
-      route: 'settings',
-      hydrated: true,
-      showSenderAvatars: false,
-      zoomPercent: 100,
-      alwaysLoadRemoteImages: false,
-      allowedImageSenders: [],
-      showUnreadCounts: false,
-      syncOnStartup: false,
-      syncIntervalSeconds: 120,
-    });
+  expect(store.getState()).toMatchObject({
+    layout: 'bottom-preview',
+    density: 'compact',
+    sidebarCollapsed: true,
+    sidebarWidth: 300,
+    listWidth: 420,
+    readerHeight: 60,
+    route: 'settings',
+    hydrated: true,
+    showSenderAvatars: false,
+    zoomPercent: 100,
+    alwaysLoadRemoteImages: false,
+    allowedImageSenders: [],
+    showUnreadCounts: false,
+    syncOnStartup: false,
+    syncIntervalSeconds: 120,
+  });
+});
+
+it('writes each changed pane preference immediately', async () => {
+  const store = await loadStore();
+  const writes: Array<{ key: string; value: unknown }> = [];
+  ipc.override('write_setting', (request) => {
+    writes.push(request);
   });
 
-  it('writes each changed pane preference immediately', async () => {
-    const store = await loadStore();
-    const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (request) => {
-      writes.push(request);
-    });
+  store.getState().setLayout('list-only');
+  store.getState().setDensity('spacious');
+  store.getState().setSidebarCollapsed(true);
+  store.getState().setSidebarWidth(SIDEBAR_WIDTH);
+  store.getState().setListWidth(LIST_WIDTH);
+  store.getState().setReaderHeight(READER_HEIGHT_PERCENT);
+  store.getState().setShowUnreadCounts(false);
+  store.getState().setShowSenderAvatars(false);
+  store.getState().setSyncOnStartup(false);
+  store.getState().setSyncIntervalSeconds(SYNC_INTERVAL_SECONDS);
+  await Promise.resolve();
 
-    store.getState().setLayout('list-only');
-    store.getState().setDensity('spacious');
-    store.getState().setSidebarCollapsed(true);
-    store.getState().setSidebarWidth(SIDEBAR_WIDTH);
-    store.getState().setListWidth(LIST_WIDTH);
-    store.getState().setReaderHeight(READER_HEIGHT_PERCENT);
-    store.getState().setShowUnreadCounts(false);
-    store.getState().setShowSenderAvatars(false);
-    store.getState().setSyncOnStartup(false);
-    store.getState().setSyncIntervalSeconds(SYNC_INTERVAL_SECONDS);
-    await Promise.resolve();
+  expect(writes).toEqual([
+    { key: 'layout', value: 'list-only' },
+    { key: 'density', value: 'spacious' },
+    { key: 'sidebarCollapsed', value: true },
+    { key: 'sidebarWidth', value: 300 },
+    { key: 'listWidth', value: 420 },
+    { key: 'readerHeight', value: 60 },
+    { key: 'showUnreadCounts', value: false },
+    { key: 'showSenderAvatars', value: false },
+    { key: 'syncOnStartup', value: false },
+    { key: 'syncIntervalSeconds', value: 600 },
+  ]);
+  expect(store.getState()).toMatchObject({
+    showUnreadCounts: false,
+    showSenderAvatars: false,
+    zoomPercent: 100,
+    alwaysLoadRemoteImages: false,
+    allowedImageSenders: [],
+    syncOnStartup: false,
+    syncIntervalSeconds: 600,
+  });
+});
 
-    expect(writes).toEqual([
-      { key: 'layout', value: 'list-only' },
-      { key: 'density', value: 'spacious' },
-      { key: 'sidebarCollapsed', value: true },
-      { key: 'sidebarWidth', value: 300 },
-      { key: 'listWidth', value: 420 },
-      { key: 'readerHeight', value: 60 },
-      { key: 'showUnreadCounts', value: false },
-      { key: 'showSenderAvatars', value: false },
-      { key: 'syncOnStartup', value: false },
-      { key: 'syncIntervalSeconds', value: 600 },
-    ]);
-    expect(store.getState()).toMatchObject({
-      showUnreadCounts: false,
-      showSenderAvatars: false,
-      zoomPercent: 100,
-      alwaysLoadRemoteImages: false,
-      allowedImageSenders: [],
-      syncOnStartup: false,
-      syncIntervalSeconds: 600,
-    });
+it('persists whole-pixel pane sizes from fractional drag offsets', async () => {
+  const store = await loadStore();
+  const writes: Array<{ key: string; value: unknown }> = [];
+  ipc.override('write_setting', (request) => {
+    writes.push(request);
   });
 
-  it('persists whole-pixel pane sizes from fractional drag offsets', async () => {
-    const store = await loadStore();
-    const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (request) => {
-      writes.push(request);
-    });
+  store.getState().setSidebarWidth(SIDEBAR_WIDTH + FRACTION_ROUNDED_DOWN);
+  store.getState().setListWidth(LIST_WIDTH + FRACTION_ROUNDED_UP);
+  store.getState().setReaderHeight(READER_HEIGHT_PERCENT + HALF_ROUNDED_UP);
+  await Promise.resolve();
 
-    store.getState().setSidebarWidth(SIDEBAR_WIDTH + FRACTION_ROUNDED_DOWN);
-    store.getState().setListWidth(LIST_WIDTH + FRACTION_ROUNDED_UP);
-    store.getState().setReaderHeight(READER_HEIGHT_PERCENT + HALF_ROUNDED_UP);
-    await Promise.resolve();
+  expect(writes).toEqual([
+    { key: 'sidebarWidth', value: 300 },
+    { key: 'listWidth', value: 421 },
+    { key: 'readerHeight', value: 61 },
+  ]);
+  expect(store.getState()).toMatchObject({ sidebarWidth: 300, listWidth: 421, readerHeight: 61 });
+});
 
-    expect(writes).toEqual([
-      { key: 'sidebarWidth', value: 300 },
-      { key: 'listWidth', value: 421 },
-      { key: 'readerHeight', value: 61 },
-    ]);
-    expect(store.getState()).toMatchObject({ sidebarWidth: 300, listWidth: 421, readerHeight: 61 });
+it('normalises trusted senders, ignores a duplicate, and persists each whole list', async () => {
+  const store = await loadStore();
+  const writes: Array<{ key: string; value: unknown }> = [];
+  ipc.override('write_setting', (request) => {
+    writes.push(request);
   });
 
-  it('normalises trusted senders, ignores a duplicate, and persists each whole list', async () => {
-    const store = await loadStore();
-    const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (request) => {
-      writes.push(request);
-    });
+  store.getState().setAlwaysLoadRemoteImages(true);
+  store.getState().trustImageSender('  Receipts@Stripe.com ');
+  store.getState().trustImageSender('receipts@stripe.com');
+  store.getState().trustImageSender('team@linear.app');
+  store.getState().untrustImageSender('Receipts@Stripe.com');
+  await Promise.resolve();
 
-    store.getState().setAlwaysLoadRemoteImages(true);
-    store.getState().trustImageSender('  Receipts@Stripe.com ');
-    store.getState().trustImageSender('receipts@stripe.com');
-    store.getState().trustImageSender('team@linear.app');
-    store.getState().untrustImageSender('Receipts@Stripe.com');
-    await Promise.resolve();
-
-    expect(writes).toEqual([
-      { key: 'alwaysLoadRemoteImages', value: true },
-      { key: 'allowedImageSenders', value: ['receipts@stripe.com'] },
-      { key: 'allowedImageSenders', value: ['receipts@stripe.com', 'team@linear.app'] },
-      { key: 'allowedImageSenders', value: ['team@linear.app'] },
-    ]);
-    expect(store.getState()).toMatchObject({
-      alwaysLoadRemoteImages: true,
-      allowedImageSenders: ['team@linear.app'],
-    });
+  expect(writes).toEqual([
+    { key: 'alwaysLoadRemoteImages', value: true },
+    { key: 'allowedImageSenders', value: ['receipts@stripe.com'] },
+    { key: 'allowedImageSenders', value: ['receipts@stripe.com', 'team@linear.app'] },
+    { key: 'allowedImageSenders', value: ['team@linear.app'] },
+  ]);
+  expect(store.getState()).toMatchObject({
+    alwaysLoadRemoteImages: true,
+    allowedImageSenders: ['team@linear.app'],
   });
+});
 
-  it('zooms the webview itself instead of the document', async () => {
-    const useLayoutStore = await loadStore();
-    useLayoutStore.getState().setZoomPercent(ZOOM_PERCENT);
+it('zooms the webview itself instead of the document', async () => {
+  const useLayoutStore = await loadStore();
+  useLayoutStore.getState().setZoomPercent(ZOOM_PERCENT);
 
-    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(ZOOM_FACTOR);
-    expect(document.body.style.zoom).toBe('');
-  });
+  expect(ipc.tauriSetZoom).toHaveBeenCalledWith(ZOOM_FACTOR);
+  expect(document.body.style.zoom).toBe('');
 });
