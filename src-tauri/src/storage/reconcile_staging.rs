@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Result, Statement};
+use rusqlite::{params, CachedStatement, Connection, Result, Statement};
 
 use super::{TraversalCursor, TraversalCursorRepository, TraversalKind};
 
@@ -154,10 +154,14 @@ impl ReconcileStagingRepository {
         account_id: &str,
         message_id: &str,
     ) -> Result<Vec<String>> {
-        let mut statement = connection.prepare_cached(
-            "SELECT label_id FROM reconcile_remote_labels WHERE account_id=?1 AND message_id=?2 ORDER BY label_id",
-        )?;
+        let mut statement = Self::prepare_labels_for_message(connection)?;
         Self::labels_for_message_with(&mut statement, account_id, message_id)
+    }
+
+    pub fn prepare_labels_for_message(connection: &Connection) -> Result<CachedStatement<'_>> {
+        connection.prepare_cached(
+            "SELECT label_id FROM reconcile_remote_labels WHERE account_id=?1 AND message_id=?2 ORDER BY label_id",
+        )
     }
 
     pub fn labels_for_message_with(

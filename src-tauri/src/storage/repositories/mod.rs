@@ -24,7 +24,9 @@ pub use message::{
     MessageBodyUpdate, MessageKey, MutationHistoryUpdate, RecipientRoles, RecipientRolesUpdate,
     ReconciliationMessage, ThreadKey,
 };
-pub use message_repository::{MembershipStatements, MessageRepository, ReconciliationStatements};
+pub use message_repository::{
+    LabelRowStatements, MembershipStatements, MessageRepository, ReconciliationStatements,
+};
 pub use operation::{Operation, OperationRepository, TerminalOutcome};
 pub use search::{SearchCountQuery, SearchPageQuery, SearchRepository};
 pub use setting::{SettingEntry, SettingRepository};

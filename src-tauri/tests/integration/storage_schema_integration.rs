@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::support::ensure_placeholder_labels;
 use latentmail_lib::storage::{
     truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
@@ -488,6 +490,63 @@ fn bulk_membership_overwrite_keeps_denormalised_flags_consistent() {
         .unwrap();
     assert!(!thread.is_unread);
     assert!(!thread.is_starred);
+}
+
+#[test]
+fn label_row_replacement_rewrites_membership_and_leaves_the_row_flags_to_its_writer() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    ensure_placeholder_labels(&connection, "account", &["UNREAD", "INBOX", "TRASH"]);
+    let mut unread = message();
+    unread.is_unread = true;
+    MessageRepository::write_full_state(&connection, &unread).unwrap();
+    for label_id in ["UNREAD", "INBOX"] {
+        set_message_label(&connection, label_id, true);
+    }
+
+    MessageRepository::replace_label_rows(
+        &connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        &["INBOX".to_owned(), "TRASH".to_owned()],
+    )
+    .unwrap();
+
+    let labels = MessageRepository::label_ids(&connection, "account", "message").unwrap();
+    assert_eq!(labels, vec!["INBOX".to_owned(), "TRASH".to_owned()]);
+    let stored = MessageRepository::get(&connection, "account", "message")
+        .unwrap()
+        .unwrap();
+    assert!(stored.is_unread);
+}
+
+#[test]
+fn deleting_many_messages_reports_each_touched_thread_once() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    let placements = [
+        ("first", "thread-a"),
+        ("second", "thread-a"),
+        ("third", "thread-b"),
+    ];
+    for (message_id, thread_id) in placements {
+        let mut placed = message();
+        placed.id = message_id.into();
+        placed.thread_id = thread_id.into();
+        MessageRepository::write_full_state(&connection, &placed).unwrap();
+    }
+    let doomed = ["first", "second", "third", "absent"].map(String::from);
+
+    let threads = MessageRepository::delete_many(&connection, "account", &doomed).unwrap();
+
+    let expected: HashSet<String> = ["thread-a", "thread-b"].map(String::from).into();
+    assert_eq!(threads, expected);
+    for message_id in ["first", "second", "third"] {
+        let remaining = MessageRepository::get(&connection, "account", message_id).unwrap();
+        assert!(remaining.is_none());
+    }
 }
 
 fn indexed_labels(connection: &rusqlite::Connection, thread_id: &str) -> Vec<(String, i64)> {

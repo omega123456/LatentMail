@@ -8,17 +8,39 @@ use crate::storage::{
     LabelMembershipChange, MessageKey, MutationHistoryUpdate, ReconciliationMessage,
 };
 
-pub struct MembershipStatements<'a> {
+pub struct LabelRowStatements<'a> {
     pub delete: CachedStatement<'a>,
     pub insert: CachedStatement<'a>,
+}
+
+impl<'a> LabelRowStatements<'a> {
+    pub fn prepare(connection: &'a Connection) -> Result<Self> {
+        Ok(Self {
+            delete: connection.prepare_cached(DELETE_MESSAGE_MEMBERSHIP)?,
+            insert: connection.prepare_cached(INSERT_MESSAGE_LABEL)?,
+        })
+    }
+
+    pub fn replace(&mut self, message: MessageKey<'_>, label_ids: &[String]) -> Result<()> {
+        self.delete
+            .execute(params![message.account_id, message.message_id])?;
+        for label_id in label_ids {
+            self.insert
+                .execute(params![message.account_id, message.message_id, label_id])?;
+        }
+        Ok(())
+    }
+}
+
+pub struct MembershipStatements<'a> {
+    pub label_rows: LabelRowStatements<'a>,
     pub flags: CachedStatement<'a>,
 }
 
 impl<'a> MembershipStatements<'a> {
     pub fn prepare(connection: &'a Connection) -> Result<Self> {
         Ok(Self {
-            delete: connection.prepare_cached(DELETE_MESSAGE_MEMBERSHIP)?,
-            insert: connection.prepare_cached(INSERT_MESSAGE_LABEL)?,
+            label_rows: LabelRowStatements::prepare(connection)?,
             flags: connection.prepare_cached(UPDATE_MESSAGE_LABEL_FLAGS)?,
         })
     }
@@ -151,19 +173,20 @@ impl MessageRepository {
         Self::overwrite_membership_with(&mut statements, message, label_ids)
     }
 
+    pub fn replace_label_rows(
+        connection: &Connection,
+        message: MessageKey<'_>,
+        label_ids: &[String],
+    ) -> Result<()> {
+        LabelRowStatements::prepare(connection)?.replace(message, label_ids)
+    }
+
     pub fn overwrite_membership_with(
         statements: &mut MembershipStatements<'_>,
         message: MessageKey<'_>,
         label_ids: &[String],
     ) -> Result<()> {
-        statements
-            .delete
-            .execute(params![message.account_id, message.message_id])?;
-        for label_id in label_ids {
-            statements
-                .insert
-                .execute(params![message.account_id, message.message_id, label_id])?;
-        }
+        statements.label_rows.replace(message, label_ids)?;
         statements.flags.execute(params![
             label_ids.iter().any(|id| id == "UNREAD"),
             label_ids.iter().any(|id| id == "STARRED"),

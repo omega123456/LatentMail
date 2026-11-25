@@ -1,12 +1,17 @@
+use std::collections::HashSet;
+
+use rusqlite::CachedStatement;
+
 use crate::{
     attachments::AttachmentCache,
     contacts,
     gmail::{GmailClient, GmailLabel, ListOptions, MessageListQuery, MAX_PAGE_SIZE},
     queue::QueueEngine,
     storage::{
-        addresses::split_addresses, reconcile_staging::ReconcileStagingRepository, MessageKey,
-        MessageRepository, StagedIds, StagedLabelIds, Storage, ThreadRepository, TraversalCursor,
-        TraversalCursorRepository, TraversalKind,
+        addresses::split_addresses, reconcile_staging::ReconcileStagingRepository,
+        MembershipStatements, MessageKey, MessageRepository, ReconciliationStatements, StagedIds,
+        StagedLabelIds, Storage, ThreadRepository, TraversalCursor, TraversalCursorRepository,
+        TraversalKind,
     },
 };
 
@@ -471,12 +476,7 @@ fn delete_absent_in_tx(
     ids: &[String],
 ) -> rusqlite::Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    let mut threads = std::collections::HashSet::new();
-    for id in ids {
-        if let Some(thread_id) = MessageRepository::delete(&transaction, account_id, id)? {
-            threads.insert(thread_id);
-        }
-    }
+    let threads = MessageRepository::delete_many(&transaction, account_id, ids)?;
     ThreadRepository::recompute_many(&transaction, account_id, &threads)?;
     transaction.commit()
 }
@@ -512,25 +512,57 @@ async fn next_membership_batch(
     Ok((!ids.is_empty()).then_some(ids))
 }
 
+struct StagedMembershipStatements<'a> {
+    current: ReconciliationStatements<'a>,
+    staged_labels: CachedStatement<'a>,
+    membership: MembershipStatements<'a>,
+}
+
+impl<'a> StagedMembershipStatements<'a> {
+    fn prepare(connection: &'a rusqlite::Connection) -> rusqlite::Result<Self> {
+        Ok(Self {
+            current: ReconciliationStatements::prepare(connection)?,
+            staged_labels: ReconcileStagingRepository::prepare_labels_for_message(connection)?,
+            membership: MembershipStatements::prepare(connection)?,
+        })
+    }
+}
+
 fn overwrite_single_membership(
-    transaction: &rusqlite::Connection,
-    account_id: &str,
-    id: &str,
+    statements: &mut StagedMembershipStatements<'_>,
+    message: MessageKey<'_>,
 ) -> rusqlite::Result<Option<String>> {
-    let Some(message) = MessageRepository::reconciliation_message(transaction, account_id, id)?
+    let Some(current) =
+        MessageRepository::reconciliation_message_with(&mut statements.current, message)?
     else {
         return Ok(None);
     };
-    let labels = ReconcileStagingRepository::labels_for_message(transaction, account_id, id)?;
-    MessageRepository::overwrite_membership(
-        transaction,
-        MessageKey {
+    let labels = ReconcileStagingRepository::labels_for_message_with(
+        &mut statements.staged_labels,
+        message.account_id,
+        message.message_id,
+    )?;
+    MessageRepository::overwrite_membership_with(&mut statements.membership, message, &labels)?;
+    Ok(Some(current.thread_id))
+}
+
+fn overwrite_staged_memberships(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    ids: &[String],
+) -> rusqlite::Result<HashSet<String>> {
+    let mut statements = StagedMembershipStatements::prepare(connection)?;
+    let mut threads = HashSet::new();
+    for id in ids {
+        let message = MessageKey {
             account_id: account_id,
             message_id: id,
-        },
-        &labels,
-    )?;
-    Ok(Some(message.thread_id))
+        };
+        if let Some(thread_id) = overwrite_single_membership(&mut statements, message)? {
+            threads.insert(thread_id);
+        }
+    }
+    Ok(threads)
 }
 
 fn apply_memberships_in_tx(
@@ -539,12 +571,7 @@ fn apply_memberships_in_tx(
     ids: &[String],
 ) -> rusqlite::Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    let mut threads = std::collections::HashSet::new();
-    for id in ids {
-        if let Some(thread_id) = overwrite_single_membership(&transaction, account_id, id)? {
-            threads.insert(thread_id);
-        }
-    }
+    let threads = overwrite_staged_memberships(&transaction, account_id, ids)?;
     ThreadRepository::recompute_many(&transaction, account_id, &threads)?;
     transaction.commit()
 }
@@ -597,20 +624,33 @@ fn collect_message_contact_observations(
     }
 }
 
+fn contact_observations(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    ids: &[String],
+) -> rusqlite::Result<Vec<(String, i64)>> {
+    let mut statements = ReconciliationStatements::prepare(connection)?;
+    let mut observations = Vec::new();
+    for id in ids {
+        let key = MessageKey {
+            account_id: account_id,
+            message_id: id,
+        };
+        if let Some(message) = MessageRepository::reconciliation_message_with(&mut statements, key)?
+        {
+            collect_message_contact_observations(message, &mut observations);
+        }
+    }
+    Ok(observations)
+}
+
 fn observe_contacts_in_tx(
     connection: &rusqlite::Connection,
     account_id: &str,
     ids: &[String],
 ) -> rusqlite::Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    let mut observations = Vec::new();
-    for id in ids {
-        if let Some(message) =
-            MessageRepository::reconciliation_message(&transaction, account_id, id)?
-        {
-            collect_message_contact_observations(message, &mut observations);
-        }
-    }
+    let observations = contact_observations(&transaction, account_id, ids)?;
     contacts::observe_many(&transaction, account_id, &observations)?;
     transaction.commit()
 }

@@ -11,7 +11,7 @@ mod compose;
 mod conversation;
 mod membership;
 
-pub use membership::{MembershipStatements, ReconciliationStatements};
+pub use membership::{LabelRowStatements, MembershipStatements, ReconciliationStatements};
 
 const DELETE_MESSAGE_RETURNING_THREAD: &str =
     "DELETE FROM messages WHERE account_id=?1 AND id=?2 RETURNING thread_id";
@@ -225,6 +225,19 @@ impl MessageRepository {
     pub fn delete(connection: &Connection, account_id: &str, id: &str) -> Result<Option<String>> {
         let mut statement = connection.prepare_cached(DELETE_MESSAGE_RETURNING_THREAD)?;
         Self::delete_with(&mut statement, account_id, id)
+    }
+    pub fn delete_many(
+        connection: &Connection,
+        account_id: &str,
+        ids: &[String],
+    ) -> Result<HashSet<String>> {
+        let mut statement = connection.prepare_cached(DELETE_MESSAGE_RETURNING_THREAD)?;
+        let mut threads = HashSet::new();
+        for id in ids {
+            let deleted_from_thread = Self::delete_with(&mut statement, account_id, id)?;
+            threads.extend(deleted_from_thread);
+        }
+        Ok(threads)
     }
     pub fn delete_with(
         statement: &mut Statement<'_>,

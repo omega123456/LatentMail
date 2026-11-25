@@ -17,12 +17,12 @@ pub use repositories::{
     ComposeDraftMetadataRepository, ComposeMessageContext, ConversationBody,
     ConversationEntryScope, ConversationMessage, HtmlPresence, InlinePart, InlinePartData, Label,
     LabelColor, LabelKey, LabelMembershipChange, LabelNameCheck, LabelNameError, LabelRepository,
-    MembershipStatements, Message, MessageBodyUpdate, MessageKey, MessageRepository,
-    MutationHistoryUpdate, Operation, OperationRepository, RecipientRoles, RecipientRolesUpdate,
-    ReconciliationMessage, ReconciliationStatements, SearchCountQuery, SearchPageQuery,
-    SearchRepository, SettingEntry, SettingRepository, TerminalOutcome, Thread, ThreadIdentity,
-    ThreadKey, ThreadListRow, ThreadPageCursor, ThreadPageQuery, ThreadRepository, TraversalCursor,
-    TraversalCursorRepository, TraversalKind,
+    LabelRowStatements, MembershipStatements, Message, MessageBodyUpdate, MessageKey,
+    MessageRepository, MutationHistoryUpdate, Operation, OperationRepository, RecipientRoles,
+    RecipientRolesUpdate, ReconciliationMessage, ReconciliationStatements, SearchCountQuery,
+    SearchPageQuery, SearchRepository, SettingEntry, SettingRepository, TerminalOutcome, Thread,
+    ThreadIdentity, ThreadKey, ThreadListRow, ThreadPageCursor, ThreadPageQuery, ThreadRepository,
+    TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 pub use retrieval::{
     CandidatePassage, CandidateQuery, LexicalQuery, PassageSource, RecencyQuery, RetrievalFilters,

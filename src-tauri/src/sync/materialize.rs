@@ -98,7 +98,7 @@ pub(crate) fn write_label_membership(
     for label_id in label_ids {
         LabelRepository::ensure_placeholder(connection, message.account_id, label_id)?;
     }
-    MessageRepository::overwrite_membership(connection, message, label_ids)
+    MessageRepository::replace_label_rows(connection, message, label_ids)
 }
 
 pub fn replace_draft(

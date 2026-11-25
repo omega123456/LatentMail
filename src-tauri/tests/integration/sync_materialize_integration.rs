@@ -139,3 +139,30 @@ fn a_newer_full_snapshot_removes_labels_the_message_lost_upstream() {
             .is_unread
     );
 }
+
+#[test]
+fn a_newer_full_snapshot_flags_the_labels_the_message_gained_upstream() {
+    let connection = connection_with_account();
+    let mut read = message("m1", "t1");
+    read.label_ids = vec!["INBOX".into()];
+    materialize::persist(&connection, "a", &read).unwrap();
+
+    let mut unread_starred = message("m1", "t1");
+    unread_starred.history_id = 2;
+    unread_starred.label_ids = vec!["INBOX".into(), "STARRED".into(), "UNREAD".into()];
+    materialize::persist(&connection, "a", &unread_starred).unwrap();
+
+    let stored = MessageRepository::get(&connection, "a", "m1")
+        .unwrap()
+        .unwrap();
+    assert!(stored.is_unread);
+    assert!(stored.is_starred);
+    assert_eq!(
+        MessageRepository::label_ids(&connection, "a", "m1").unwrap(),
+        vec![
+            "INBOX".to_owned(),
+            "STARRED".to_owned(),
+            "UNREAD".to_owned()
+        ]
+    );
+}
