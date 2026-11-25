@@ -190,79 +190,86 @@ pub fn enqueue<R: Runtime>(
     Box::pin(enqueue_inner(context, account_id))
 }
 
-async fn enqueue_inner<R: Runtime>(
+async fn run_embedding_job<R: Runtime>(
     context: IndexContext<R>,
     account_id: String,
 ) -> Result<(), String> {
     let IndexContext { app, service, sync } = context;
-    let is_account_busy =
-        service.is_removing(&account_id)? || service.is_reconfiguring(&account_id)?;
-    if is_account_busy {
-        return stall(&app, &service, account_id).await;
+    if !service.index_ready(&account_id).await? {
+        service.set_index_state(&account_id, IndexState::Unavailable)?;
+        emit_status(&app, &service, account_id).await?;
+        return Ok(());
     }
-    let config = service.config_for(&account_id).await?;
+    if service.index_state(&account_id)? != Some(IndexState::Building) {
+        service.set_index_state(&account_id, IndexState::Building)?;
+        emit_status(&app, &service, account_id.clone()).await?;
+    }
+    if let Err(error) = build(&app, &service, account_id.clone()).await {
+        service.set_index_error(&account_id, error)?;
+        service.set_index_state(&account_id, IndexState::Interrupted)?;
+        emit_status(&app, &service, account_id).await?;
+        return Ok(());
+    }
+    service.clear_index_error(&account_id)?;
+    if !service.index_ready(&account_id).await? {
+        service.set_index_state(&account_id, IndexState::Unavailable)?;
+        emit_status(&app, &service, account_id).await?;
+        return Ok(());
+    }
+    let current = status(&service, account_id.clone()).await?;
+    if current.paused {
+        service.set_index_state(&account_id, IndexState::Paused)?;
+        return emit_status(&app, &service, account_id).await;
+    }
+    if current.indexed < current.total {
+        return enqueue(
+            IndexContext {
+                app: app,
+                service: service,
+                sync: sync,
+            },
+            account_id,
+        )
+        .await;
+    }
+    service.set_index_state(&account_id, IndexState::Complete)?;
+    emit_status(&app, &service, account_id).await
+}
+
+async fn enqueue_inner<R: Runtime>(
+    context: IndexContext<R>,
+    account_id: String,
+) -> Result<(), String> {
+    let is_account_busy = context.service.is_removing(&account_id)?
+        || context.service.is_reconfiguring(&account_id)?;
+    if is_account_busy {
+        return stall(&context.app, &context.service, account_id).await;
+    }
+    let config = context.service.config_for(&account_id).await?;
     let is_indexing_disabled =
         !config.enabled || config.index_paused || config.embedding_model.is_none();
     if is_indexing_disabled {
-        return stall(&app, &service, account_id).await;
+        return stall(&context.app, &context.service, account_id).await;
     }
-    if !running(&service, &account_id)? {
-        service.set_index_state(&account_id, IndexState::Preparing)?;
-        emit_status(&app, &service, account_id.clone()).await?;
+    if !running(&context.service, &account_id)? {
+        context
+            .service
+            .set_index_state(&account_id, IndexState::Preparing)?;
+        emit_status(&context.app, &context.service, account_id.clone()).await?;
     }
-    let queued_account = account_id.clone();
-    let queued_service = service.clone();
-    let queued_sync = sync.clone();
+    let queued_context = context.clone();
     let job_account = account_id.clone();
-    sync.enqueue_embedding(
-        crate::sync::EmbeddingJob {
-            account_id: &job_account,
-            description: "Build semantic index".to_owned(),
-        },
-        async move {
-            if !service.index_ready(&account_id).await? {
-                service.set_index_state(&account_id, IndexState::Unavailable)?;
-                emit_status(&app, &service, account_id).await?;
-                return Ok(());
-            }
-            if service.index_state(&account_id)? != Some(IndexState::Building) {
-                service.set_index_state(&account_id, IndexState::Building)?;
-                emit_status(&app, &service, account_id.clone()).await?;
-            }
-            if let Err(error) = build(&app, &service, account_id.clone()).await {
-                service.set_index_error(&account_id, error)?;
-                service.set_index_state(&account_id, IndexState::Interrupted)?;
-                emit_status(&app, &service, account_id).await?;
-                return Ok(());
-            }
-            service.clear_index_error(&account_id)?;
-            if !service.index_ready(&account_id).await? {
-                service.set_index_state(&account_id, IndexState::Unavailable)?;
-                emit_status(&app, &service, account_id).await?;
-                return Ok(());
-            }
-            let current = status(&service, account_id.clone()).await?;
-            if current.paused {
-                service.set_index_state(&account_id, IndexState::Paused)?;
-                return emit_status(&app, &service, account_id).await;
-            }
-            if current.indexed < current.total {
-                return enqueue(
-                    IndexContext {
-                        app: app,
-                        service: queued_service,
-                        sync: queued_sync,
-                    },
-                    queued_account,
-                )
-                .await;
-            }
-            service.set_index_state(&account_id, IndexState::Complete)?;
-            emit_status(&app, &service, account_id).await
-        },
-    )
-    .await
-    .map_err(|error| error.to_string())
+    context
+        .sync
+        .enqueue_embedding(
+            crate::sync::EmbeddingJob {
+                account_id: &job_account,
+                description: "Build semantic index".to_owned(),
+            },
+            async move { run_embedding_job(queued_context, account_id).await },
+        )
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub async fn start<R: Runtime>(context: IndexContext<R>, account_id: String) -> Result<(), String> {
@@ -299,17 +306,33 @@ pub async fn request_rebuild<R: Runtime>(
         .map_err(|error| error.to_string())
 }
 
-pub async fn build<R: Runtime>(
-    app: &AppHandle<R>,
+struct BuildConfig {
+    model: String,
+    dimensions: i64,
+    base_url: String,
+}
+
+struct ChunkedBatch {
+    groups: Vec<(i64, Vec<String>)>,
+    chunk_count: usize,
+}
+
+struct BatchEmbedRequest<'a> {
+    model: &'a str,
+    account_id: &'a str,
+    batch: &'a ChunkedBatch,
+}
+
+async fn load_build_config(
     service: &AiService,
-    account_id: String,
-) -> Result<(), String> {
-    if service.is_removing(&account_id)? || service.is_reconfiguring(&account_id)? {
-        return Ok(());
+    account_id: &str,
+) -> Result<Option<BuildConfig>, String> {
+    if service.is_removing(account_id)? || service.is_reconfiguring(account_id)? {
+        return Ok(None);
     }
-    let config = service.config_for(&account_id).await?;
+    let config = service.config_for(account_id).await?;
     if !config.enabled || config.index_paused {
-        return Ok(());
+        return Ok(None);
     }
     let model = config
         .embedding_model
@@ -320,22 +343,14 @@ pub async fn build<R: Runtime>(
     let base_url = config
         .base_url
         .ok_or_else(|| "Save an API root first".to_owned())?;
-    let storage = service.storage();
-    let id = account_id.clone();
-    storage
-        .run(move |connection| EmbeddingRepository::create(connection, &id, dimensions))
-        .await
-        .map_err(|error| error.to_string())?;
-    let id = account_id.clone();
-    let batch = storage
-        .run(move |connection| {
-            EmbeddingRepository::backlog(connection, &id, MAX_CHUNKS_PER_OPERATION as i64)
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-    if batch.is_empty() {
-        return Ok(());
-    }
+    Ok(Some(BuildConfig {
+        model: model,
+        dimensions: dimensions,
+        base_url: base_url,
+    }))
+}
+
+fn group_backlog_chunks(batch: Vec<crate::storage::EmbeddingBacklog>) -> ChunkedBatch {
     let mut groups: Vec<(i64, Vec<String>)> = Vec::new();
     let mut chunk_count = 0;
     for message in batch {
@@ -353,18 +368,26 @@ pub async fn build<R: Runtime>(
         chunk_count += chunks.len();
         groups.push((message.message_seq, chunks));
     }
-    if groups.is_empty() {
-        return Ok(());
+    ChunkedBatch {
+        groups: groups,
+        chunk_count: chunk_count,
     }
-    let provider = Provider::new(&base_url, credentials::load(&account_id)?)?;
-    let texts: Vec<String> = groups
+}
+
+async fn embed_batch_or_fallback(
+    provider: &Provider,
+    request: BatchEmbedRequest<'_>,
+) -> Result<MessageBatchOutcome, String> {
+    let texts: Vec<String> = request
+        .batch
+        .groups
         .iter()
         .flat_map(|(_, chunks)| chunks.iter().cloned())
         .collect();
     let batched = embed_with_retry(
-        &provider,
+        provider,
         RetryEmbeddingRequest {
-            model: &model,
+            model: request.model,
             input: texts,
             attempts: EMBED_ATTEMPTS,
             backoff: |attempt| {
@@ -373,35 +396,73 @@ pub async fn build<R: Runtime>(
         },
     )
     .await;
-    let outcome = match batched {
-        Ok(vectors) if vectors.len() == chunk_count => {
+    match batched {
+        Ok(vectors) if vectors.len() == request.batch.chunk_count => {
             let mut remaining = vectors.into_iter();
             let mut entries = Vec::new();
-            for (message_seq, chunks) in &groups {
+            for (message_seq, chunks) in &request.batch.groups {
                 entries.extend(message_entries(
                     *message_seq,
                     remaining.by_ref().take(chunks.len()).collect(),
                 )?);
             }
-            MessageBatchOutcome {
+            Ok(MessageBatchOutcome {
                 entries: entries,
                 skipped: Vec::new(),
-            }
+            })
         }
-        Ok(_) => return Err("Provider returned an incomplete embedding batch".to_owned()),
+        Ok(_) => Err("Provider returned an incomplete embedding batch".to_owned()),
         Err(error) => {
             embed_one_message_at_a_time(
-                &provider,
+                provider,
                 SingleMessageFallback {
-                    model: &model,
-                    groups: &groups,
-                    account_id: &account_id,
+                    model: request.model,
+                    groups: &request.batch.groups,
+                    account_id: request.account_id,
                     batch_error: &error,
                 },
             )
-            .await?
+            .await
         }
+    }
+}
+
+pub async fn build<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &AiService,
+    account_id: String,
+) -> Result<(), String> {
+    let Some(config) = load_build_config(service, &account_id).await? else {
+        return Ok(());
     };
+    let storage = service.storage();
+    let id = account_id.clone();
+    let dimensions = config.dimensions;
+    storage
+        .run(move |connection| EmbeddingRepository::create(connection, &id, dimensions))
+        .await
+        .map_err(|error| error.to_string())?;
+    let id = account_id.clone();
+    let batch = storage
+        .run(move |connection| {
+            EmbeddingRepository::backlog(connection, &id, MAX_CHUNKS_PER_OPERATION as i64)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    let chunked = group_backlog_chunks(batch);
+    if chunked.groups.is_empty() {
+        return Ok(());
+    }
+    let provider = Provider::new(&config.base_url, credentials::load(&account_id)?)?;
+    let outcome = embed_batch_or_fallback(
+        &provider,
+        BatchEmbedRequest {
+            model: &config.model,
+            account_id: &account_id,
+            batch: &chunked,
+        },
+    )
+    .await?;
     let id = account_id.clone();
     storage
         .run(move |connection| {

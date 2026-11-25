@@ -93,11 +93,8 @@ async fn startup_preferences_persist_through_the_service_and_test_autostart() {
     assert!(service.start_minimized());
 }
 
-#[tokio::test]
-async fn every_persisted_setting_accepts_its_wire_value() {
-    let (app, _directory) = app_with_service();
-
-    for (key, value) in [
+fn persisted_setting_cases() -> Vec<(&'static str, serde_json::Value)> {
+    vec![
         ("theme", serde_json::json!("light")),
         ("layout", serde_json::json!("bottom-preview")),
         ("density", serde_json::json!("spacious")),
@@ -117,7 +114,14 @@ async fn every_persisted_setting_accepts_its_wire_value() {
         ),
         ("prefetchImageAttachments", serde_json::json!(true)),
         ("updateCheckInterval", serde_json::json!("7d")),
-    ] {
+    ]
+}
+
+#[tokio::test]
+async fn every_persisted_setting_accepts_its_wire_value() {
+    let (app, _directory) = app_with_service();
+
+    for (key, value) in persisted_setting_cases() {
         write_setting(
             AppServices::new(app.handle()),
             CommandPayload(WriteSettingRequest {

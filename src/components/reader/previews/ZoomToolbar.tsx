@@ -45,6 +45,54 @@ function zoomAnnouncement(percent: string, atMin: boolean, atMax: boolean): stri
   return `Zoom ${percent}`;
 }
 
+function ZoomPresetMenu({
+  zoom,
+  mode,
+  percent,
+  onSelectPreset,
+}: {
+  zoom: number;
+  mode: ZoomMode;
+  percent: string;
+  onSelectPreset: (preset: ZoomPreset) => void;
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`Zoom level ${percent}`}
+          className="flex w-zoom-readout cursor-pointer items-center justify-center gap-1 rounded-chip py-1 font-medium tabular-nums text-on-surface hover:bg-surface-container focus-visible:outline-2 focus-visible:outline-primary data-[state=open]:bg-surface-container dark:text-dark-on-surface dark:hover:bg-dark-surface-container dark:data-[state=open]:bg-dark-surface-container"
+        >
+          {percent}
+          <ChevronDown size={ICON_SIZE.xxs} aria-hidden="true" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal container={portalTarget()}>
+        <DropdownMenu.Content
+          side="top"
+          align="center"
+          sideOffset={POPOVER_SIDE_OFFSET_PX}
+          className={contentClass}
+        >
+          <DropdownMenu.RadioGroup
+            value={mode === 'custom' ? String(zoom) : mode}
+            onValueChange={(presetName) => onSelectPreset(presetOf(presetName))}
+          >
+            {FIT_PRESETS.map(({ value: presetName, label }) => (
+              <RadioItem key={presetName} value={presetName} label={label} />
+            ))}
+            <DropdownMenu.Separator className="mx-1 my-1 h-px bg-outline-variant/40 dark:bg-dark-outline-variant" />
+            {ZOOM_STEPS.map((step) => (
+              <RadioItem key={step} value={String(step)} label={formatZoom(step)} />
+            ))}
+          </DropdownMenu.RadioGroup>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 export function ZoomToolbar({
   zoom,
   mode,
@@ -82,39 +130,7 @@ export function ZoomToolbar({
         >
           <Minus size={ICON_SIZE.base} aria-hidden="true" />
         </button>
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
-            <button
-              type="button"
-              aria-label={`Zoom level ${percent}`}
-              className="flex w-zoom-readout cursor-pointer items-center justify-center gap-1 rounded-chip py-1 font-medium tabular-nums text-on-surface hover:bg-surface-container focus-visible:outline-2 focus-visible:outline-primary data-[state=open]:bg-surface-container dark:text-dark-on-surface dark:hover:bg-dark-surface-container dark:data-[state=open]:bg-dark-surface-container"
-            >
-              {percent}
-              <ChevronDown size={ICON_SIZE.xxs} aria-hidden="true" />
-            </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal container={portalTarget()}>
-            <DropdownMenu.Content
-              side="top"
-              align="center"
-              sideOffset={POPOVER_SIDE_OFFSET_PX}
-              className={contentClass}
-            >
-              <DropdownMenu.RadioGroup
-                value={mode === 'custom' ? String(zoom) : mode}
-                onValueChange={(presetName) => onSelectPreset(presetOf(presetName))}
-              >
-                {FIT_PRESETS.map(({ value: presetName, label }) => (
-                  <RadioItem key={presetName} value={presetName} label={label} />
-                ))}
-                <DropdownMenu.Separator className="mx-1 my-1 h-px bg-outline-variant/40 dark:bg-dark-outline-variant" />
-                {ZOOM_STEPS.map((step) => (
-                  <RadioItem key={step} value={String(step)} label={formatZoom(step)} />
-                ))}
-              </DropdownMenu.RadioGroup>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+        <ZoomPresetMenu zoom={zoom} mode={mode} percent={percent} onSelectPreset={onSelectPreset} />
         <button
           type="button"
           aria-label="Zoom in"

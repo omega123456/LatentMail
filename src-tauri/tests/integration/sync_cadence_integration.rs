@@ -42,18 +42,9 @@ fn seed_message(id: &str, thread_id: &str, sent_at: i64) -> Message {
 
 type FiredEvents = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
 
-fn engine_with_seed() -> (
-    Arc<SyncEngine>,
-    Arc<latentmail_lib::queue::QueueEngine>,
-    Storage,
-    tempfile::TempDir,
-    FiredEvents,
-) {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let connection = storage.connection().unwrap();
+fn seed_cadence_database(connection: &rusqlite::Connection) {
     AccountRepository::upsert(
-        &connection,
+        connection,
         &Account {
             id: "account".into(),
             email: "me@example.com".into(),
@@ -68,7 +59,7 @@ fn engine_with_seed() -> (
     .unwrap();
     for label_id in ["INBOX", "UNREAD"] {
         LabelRepository::upsert(
-            &connection,
+            connection,
             &Label {
                 account_id: "account".into(),
                 id: label_id.into(),
@@ -80,9 +71,9 @@ fn engine_with_seed() -> (
         )
         .unwrap();
     }
-    MessageRepository::write_full_state(&connection, &seed_message("existing1", "t1", 1)).unwrap();
+    MessageRepository::write_full_state(connection, &seed_message("existing1", "t1", 1)).unwrap();
     MessageRepository::set_label_membership(
-        &connection,
+        connection,
         MessageKey {
             account_id: "account",
             message_id: "existing1",
@@ -93,7 +84,20 @@ fn engine_with_seed() -> (
         },
     )
     .unwrap();
-    ThreadRepository::recompute(&connection, "account", "t1").unwrap();
+    ThreadRepository::recompute(connection, "account", "t1").unwrap();
+}
+
+fn engine_with_seed() -> (
+    Arc<SyncEngine>,
+    Arc<latentmail_lib::queue::QueueEngine>,
+    Storage,
+    tempfile::TempDir,
+    FiredEvents,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_cadence_database(&connection);
     drop(connection);
 
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -206,27 +210,27 @@ async fn run_sync_advances_the_checkpoint_through_the_full_incremental_path() {
     );
 }
 
-#[tokio::test(start_paused = true)]
-async fn the_fast_and_periodic_cadences_tick_independently_and_only_the_periodic_one_retimes() {
-    let (fast_sender, mut fast_receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let fast = SyncScheduler::start(
-        Duration::from_secs(latentmail_lib::sync::FAST_PROBE_INTERVAL_SECS),
-        true,
-        move || {
-            let fast_sender = fast_sender.clone();
-            async move {
-                let _ = fast_sender.send(());
-            }
-        },
-    );
-
-    let (periodic_sender, mut periodic_receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let periodic = SyncScheduler::start(Duration::from_secs(300), false, move || {
-        let periodic_sender = periodic_sender.clone();
+fn channel_scheduler(
+    interval: Duration,
+    immediate: bool,
+) -> (Arc<SyncScheduler>, tokio::sync::mpsc::UnboundedReceiver<()>) {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let scheduler = SyncScheduler::start(interval, immediate, move || {
+        let sender = sender.clone();
         async move {
-            let _ = periodic_sender.send(());
+            let _ = sender.send(());
         }
     });
+    (scheduler, receiver)
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_fast_and_periodic_cadences_tick_independently_and_only_the_periodic_one_retimes() {
+    let (fast, mut fast_receiver) = channel_scheduler(
+        Duration::from_secs(latentmail_lib::sync::FAST_PROBE_INTERVAL_SECS),
+        true,
+    );
+    let (periodic, mut periodic_receiver) = channel_scheduler(Duration::from_secs(300), false);
 
     assert!(
         fast_receiver.recv().await.is_some(),

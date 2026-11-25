@@ -276,17 +276,18 @@ fn initialize_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(
 }
 
 #[cfg(all(windows, not(feature = "test-utils")))]
-fn apply_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &IndicatorState) {
+fn build_tray_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &IndicatorState,
+) -> Option<tauri::menu::Menu<R>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
-    let Some(tray) = app.tray_by_id("mail") else {
-        return;
-    };
-    let status = MenuItem::with_id(app, "status", state.status_row(), false, None::<&str>);
-    let compose = MenuItem::with_id(app, "compose", "Compose New Email", true, None::<&str>);
-    let sync = MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>);
-    let show = MenuItem::with_id(app, "show", "Show window", true, None::<&str>);
-    let quit = MenuItem::with_id(app, "quit", "Quit LatentMail", true, None::<&str>);
+    let status = MenuItem::with_id(app, "status", state.status_row(), false, None::<&str>).ok()?;
+    let compose =
+        MenuItem::with_id(app, "compose", "Compose New Email", true, None::<&str>).ok()?;
+    let sync = MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>).ok()?;
+    let show = MenuItem::with_id(app, "show", "Show window", true, None::<&str>).ok()?;
+    let quit = MenuItem::with_id(app, "quit", "Quit LatentMail", true, None::<&str>).ok()?;
     let reauthenticate = state.needs_reauthentication.then(|| {
         MenuItem::with_id(
             app,
@@ -296,40 +297,41 @@ fn apply_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &Indicato
             None::<&str>,
         )
     });
-    let (Ok(status), Ok(compose), Ok(sync), Ok(show), Ok(quit)) =
-        (status, compose, sync, show, quit)
-    else {
-        return;
-    };
-    let first_separator = PredefinedMenuItem::separator(app);
-    let second_separator = PredefinedMenuItem::separator(app);
-    let third_separator = PredefinedMenuItem::separator(app);
-    let (Ok(first_separator), Ok(second_separator), Ok(third_separator)) =
-        (first_separator, second_separator, third_separator)
-    else {
-        return;
-    };
+    let first_separator = PredefinedMenuItem::separator(app).ok()?;
+    let second_separator = PredefinedMenuItem::separator(app).ok()?;
+    let third_separator = PredefinedMenuItem::separator(app).ok()?;
     let mut items: Vec<&dyn tauri::menu::IsMenuItem<R>> = vec![&status, &first_separator];
     if let Some(Ok(item)) = reauthenticate.as_ref() {
         items.push(item);
     }
-    items.push(&compose);
-    items.push(&sync);
-    items.push(&second_separator);
-    items.push(&show);
-    items.push(&third_separator);
-    items.push(&quit);
-    if let Ok(menu) = Menu::with_items(app, &items) {
-        if let Ok(icon) = super::icon::tray_icon(state.unread_count, state.needs_reauthentication) {
-            let _ = tray.set_icon(Some(tauri::image::Image::new_owned(
-                icon.rgba,
-                icon.width,
-                icon.height,
-            )));
-        }
-        let _ = tray.set_menu(Some(menu));
-        let _ = tray.set_tooltip(Some(state.tooltip()));
+    items.extend([
+        &compose as &dyn tauri::menu::IsMenuItem<R>,
+        &sync,
+        &second_separator,
+        &show,
+        &third_separator,
+        &quit,
+    ]);
+    Menu::with_items(app, &items).ok()
+}
+
+#[cfg(all(windows, not(feature = "test-utils")))]
+fn apply_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &IndicatorState) {
+    let Some(tray) = app.tray_by_id("mail") else {
+        return;
+    };
+    let Some(menu) = build_tray_menu(app, state) else {
+        return;
+    };
+    if let Ok(icon) = super::icon::tray_icon(state.unread_count, state.needs_reauthentication) {
+        let _ = tray.set_icon(Some(tauri::image::Image::new_owned(
+            icon.rgba,
+            icon.width,
+            icon.height,
+        )));
     }
+    let _ = tray.set_menu(Some(menu));
+    let _ = tray.set_tooltip(Some(state.tooltip()));
 }
 
 #[cfg(all(not(windows), not(feature = "test-utils")))]

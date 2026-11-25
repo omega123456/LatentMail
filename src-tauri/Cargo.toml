@@ -91,6 +91,8 @@ test-utils = []
 [lints.clippy]
 too_many_arguments = "deny"
 min_ident_chars = "deny"
+excessive_nesting = "deny"
+too_many_lines = "deny"
 redundant_field_names = "allow"
 
 [profile.dev]

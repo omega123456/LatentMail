@@ -34,28 +34,29 @@ fn row(id: &str, thread_id: &str) -> Message {
     }
 }
 
-#[tokio::test]
-async fn reconciliation_deletes_only_absent_messages_and_fetches_new_ones() {
-    let server = MockServer::start().await;
+async fn mount_diff_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/history"))
         .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "emailAddress":"me@example.com", "messagesTotal":2, "threadsTotal":2, "historyId":"50"
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels":[]})))
-        .mount(&server)
+        .mount(server)
         .await;
-    Mock::given(method("GET")).and(path("/users/me/messages")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages":[{"id":"kept","threadId":"kept-thread"},{"id":"new","threadId":"new-thread"}]}))).mount(&server).await;
-    Mock::given(method("GET")).and(path("/users/me/messages/new")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"new","threadId":"new-thread","historyId":"50","labelIds":[],"internalDate":"1000","payload":{"headers":[]}}))).mount(&server).await;
+    Mock::given(method("GET")).and(path("/users/me/messages")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages":[{"id":"kept","threadId":"kept-thread"},{"id":"new","threadId":"new-thread"}]}))).mount(server).await;
+    Mock::given(method("GET")).and(path("/users/me/messages/new")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"new","threadId":"new-thread","historyId":"50","labelIds":[],"internalDate":"1000","payload":{"headers":[]}}))).mount(server).await;
+}
+
+fn seed_storage() -> (Storage, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
@@ -78,6 +79,14 @@ async fn reconciliation_deletes_only_absent_messages_and_fetches_new_ones() {
         ThreadRepository::recompute(&connection, "account", thread).unwrap();
     }
     drop(connection);
+    (storage, dir)
+}
+
+#[tokio::test]
+async fn reconciliation_deletes_only_absent_messages_and_fetches_new_ones() {
+    let server = MockServer::start().await;
+    mount_diff_mocks(&server).await;
+    let (storage, _dir) = seed_storage();
     let registry = WorkRegistry::new();
     let engine = SyncEngine::new(SyncEngineDeps {
         storage: storage.clone(),

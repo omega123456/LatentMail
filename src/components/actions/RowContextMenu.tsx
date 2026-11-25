@@ -265,88 +265,109 @@ function DeleteMenuItem({
   );
 }
 
-export function RowContextMenu({
-  children,
-  systemLabelIds,
-  unread,
-  starred,
-  labels,
-  selectionCount = 1,
-  onOpen,
-  onToggleRead,
-  onToggleStar,
-  onMoveTo,
-  onToggleLabel,
+function RowContextDestructiveItems({
+  visibility,
+  countSuffix,
   onToggleSpam,
   onDelete,
-  onReply,
-  onReplyAll,
-  onForward,
-  onEditDraft,
-}: RowContextMenuProps) {
-  const [open, setOpen] = useState(false);
-  const visibility = computeRibbonVisibility(systemLabelIds);
+}: {
+  visibility: ReturnType<typeof computeRibbonVisibility>;
+  countSuffix: string;
+  onToggleSpam: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <>
+      <SpamMenuItem
+        visible={visibility.showSpamToggle}
+        spamMode={visibility.spamMode}
+        countSuffix={countSuffix}
+        onToggleSpam={onToggleSpam}
+      />
+      <DeleteMenuItem
+        visible={visibility.showDelete}
+        countSuffix={countSuffix}
+        onDelete={onDelete}
+      />
+    </>
+  );
+}
+
+function RowContextMenuItems({
+  props,
+  onSelectMoveTo,
+}: {
+  props: RowContextMenuProps;
+  onSelectMoveTo: (destination: MoveDestinationId) => void;
+}) {
+  const selectionCount = props.selectionCount ?? 1;
+  const visibility = computeRibbonVisibility(props.systemLabelIds);
   const multi = selectionCount > 1;
   const countSuffix = multi ? ` ${selectionCount}` : '';
 
+  return (
+    <>
+      <SingleSelectionMenuItems
+        multi={multi}
+        onOpen={props.onOpen}
+        onReply={props.onReply}
+        onReplyAll={props.onReplyAll}
+        onForward={props.onForward}
+        onEditDraft={props.onEditDraft}
+      />
+      <ReadToggleMenuItem
+        visible={visibility.showReadToggle}
+        unread={props.unread}
+        countSuffix={countSuffix}
+        onToggleRead={props.onToggleRead}
+      />
+      <StarMenuItem
+        visible={visibility.showStar}
+        starred={props.starred}
+        countSuffix={countSuffix}
+        onToggleStar={props.onToggleStar}
+      />
+      <MoveToSubMenu
+        visible={visibility.showMoveTo}
+        multi={multi}
+        countSuffix={countSuffix}
+        systemLabelIds={props.systemLabelIds}
+        onSelect={onSelectMoveTo}
+      />
+      <LabelsSubMenu
+        visible={visibility.showLabels}
+        multi={multi}
+        selectionCount={selectionCount}
+        labels={props.labels}
+        onToggleLabel={props.onToggleLabel}
+      />
+      <RowContextDestructiveItems
+        visibility={visibility}
+        countSuffix={countSuffix}
+        onToggleSpam={props.onToggleSpam}
+        onDelete={props.onDelete}
+      />
+    </>
+  );
+}
+
+export function RowContextMenu(props: RowContextMenuProps) {
+  const [open, setOpen] = useState(false);
+
   const handleMoveTo = (destination: MoveDestinationId) => {
     setOpen(false);
-    onMoveTo(destination);
+    props.onMoveTo(destination);
   };
 
   return (
     <ContextMenu.Root open={open} onOpenChange={setOpen}>
-      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
+      <ContextMenu.Trigger asChild>{props.children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content
           className={menuContentClass}
           collisionPadding={MENU_COLLISION_PADDING_PX}
         >
-          <SingleSelectionMenuItems
-            multi={multi}
-            onOpen={onOpen}
-            onReply={onReply}
-            onReplyAll={onReplyAll}
-            onForward={onForward}
-            onEditDraft={onEditDraft}
-          />
-          <ReadToggleMenuItem
-            visible={visibility.showReadToggle}
-            unread={unread}
-            countSuffix={countSuffix}
-            onToggleRead={onToggleRead}
-          />
-          <StarMenuItem
-            visible={visibility.showStar}
-            starred={starred}
-            countSuffix={countSuffix}
-            onToggleStar={onToggleStar}
-          />
-          <MoveToSubMenu
-            visible={visibility.showMoveTo}
-            multi={multi}
-            countSuffix={countSuffix}
-            systemLabelIds={systemLabelIds}
-            onSelect={handleMoveTo}
-          />
-          <LabelsSubMenu
-            visible={visibility.showLabels}
-            multi={multi}
-            selectionCount={selectionCount}
-            labels={labels}
-            onToggleLabel={onToggleLabel}
-          />
-          <SpamMenuItem
-            visible={visibility.showSpamToggle}
-            spamMode={visibility.spamMode}
-            countSuffix={countSuffix}
-            onToggleSpam={onToggleSpam}
-          />
-          <DeleteMenuItem
-            visible={visibility.showDelete}
-            countSuffix={countSuffix}
-            onDelete={onDelete}
-          />
+          <RowContextMenuItems props={props} onSelectMoveTo={handleMoveTo} />
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>

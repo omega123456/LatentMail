@@ -66,19 +66,14 @@ function buildFrameSrcDoc(html: string, allowRemoteImages: boolean, dark: boolea
   return `${frameCsp}<style>${selawikFontFaceCss}body{margin:0;color:${textColor};font-family:${uiFontStack};font-size:16px;line-height:1.625;overflow-wrap:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${markerColor}}</style>${sanitized}`;
 }
 
-export function BodyFrame({
-  html,
-  text,
-  allowRemoteImages = false,
-  heightConstrained = false,
-}: {
+function useFrameWiring(input: {
+  frameRef: React.RefObject<HTMLIFrameElement | null>;
   html: string | null;
-  text: string | null;
-  allowRemoteImages?: boolean;
-  heightConstrained?: boolean;
+  allowRemoteImages: boolean;
+  heightConstrained: boolean;
+  setHeight: (height: number) => void;
 }) {
-  const [height, setHeight] = useState(1);
-  const frameRef = useRef<HTMLIFrameElement>(null);
+  const { frameRef, html, allowRemoteImages, heightConstrained, setHeight } = input;
   useEffect(() => {
     let watching = true;
     const tick = () => {
@@ -99,7 +94,23 @@ export function BodyFrame({
     return () => {
       watching = false;
     };
-  }, [html, allowRemoteImages, heightConstrained]);
+  }, [frameRef, html, allowRemoteImages, heightConstrained, setHeight]);
+}
+
+export function BodyFrame({
+  html,
+  text,
+  allowRemoteImages = false,
+  heightConstrained = false,
+}: {
+  html: string | null;
+  text: string | null;
+  allowRemoteImages?: boolean;
+  heightConstrained?: boolean;
+}) {
+  const [height, setHeight] = useState(1);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  useFrameWiring({ frameRef, html, allowRemoteImages, heightConstrained, setHeight });
   if (!html && !text)
     return (
       <p className="text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">

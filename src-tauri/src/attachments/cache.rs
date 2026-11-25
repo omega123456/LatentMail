@@ -137,76 +137,91 @@ impl AttachmentCache {
         client: &GmailClient,
         descriptor: AttachmentDescriptor<'_>,
     ) -> Result<CachedAttachment, String> {
-        let cache = self.clone();
-        let account_id = descriptor.target.account_id.to_owned();
-        let message_id = descriptor.target.message_id.to_owned();
-        let attachment_id = descriptor.target.attachment_id.to_owned();
-        let filename = descriptor.filename.to_owned();
-        let mime_type = descriptor.mime_type.to_owned();
-        if let Some(cached) = tokio::task::spawn_blocking({
-            let cache = cache.clone();
-            let account_id = account_id.clone();
-            let message_id = message_id.clone();
-            let attachment_id = attachment_id.clone();
-            let filename = filename.clone();
-            let mime_type = mime_type.clone();
-            move || {
-                cache.lookup(AttachmentDescriptor {
-                    target: AttachmentRef {
-                        account_id: &account_id,
-                        message_id: &message_id,
-                        attachment_id: &attachment_id,
-                    },
-                    filename: &filename,
-                    mime_type: &mime_type,
-                })
-            }
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        {
+        let owned = OwnedAttachmentDescriptor::from_ref(descriptor);
+        if let Some(cached) = lookup_blocking(self.clone(), owned.clone()).await? {
             return Ok(cached);
         }
         let bytes = client
-            .attachment(&message_id, &attachment_id)
+            .attachment(&owned.message_id, &owned.attachment_id)
             .await
             .map_err(|error| error.to_string())?;
-        tokio::task::spawn_blocking(move || {
-            cache.write_bytes(
-                AttachmentDescriptor {
-                    target: AttachmentRef {
-                        account_id: &account_id,
-                        message_id: &message_id,
-                        attachment_id: &attachment_id,
-                    },
-                    filename: &filename,
-                    mime_type: &mime_type,
-                },
-                &bytes,
-            )
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+        write_blocking(self.clone(), owned, bytes).await
     }
 
     pub fn sweep(&self, ceiling_bytes: u64) -> io::Result<()> {
         let mut entries = Vec::new();
         collect_files(&self.root, &mut entries)?;
-        let mut total: u64 = entries.iter().map(|(_, size, _)| *size).sum();
+        let total: u64 = entries.iter().map(|(_, size, _)| *size).sum();
         if total <= ceiling_bytes {
             return Ok(());
         }
         entries.sort_by_key(|(_, _, modified)| *modified);
-        for (path, size, _) in entries {
-            if total <= ceiling_bytes {
-                break;
-            }
-            if fs::remove_file(&path).is_ok() {
-                total = total.saturating_sub(size);
-            }
-        }
+        evict_oldest(entries, total, ceiling_bytes);
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct OwnedAttachmentDescriptor {
+    account_id: String,
+    message_id: String,
+    attachment_id: String,
+    filename: String,
+    mime_type: String,
+}
+
+impl OwnedAttachmentDescriptor {
+    fn from_ref(descriptor: AttachmentDescriptor<'_>) -> Self {
+        Self {
+            account_id: descriptor.target.account_id.to_owned(),
+            message_id: descriptor.target.message_id.to_owned(),
+            attachment_id: descriptor.target.attachment_id.to_owned(),
+            filename: descriptor.filename.to_owned(),
+            mime_type: descriptor.mime_type.to_owned(),
+        }
+    }
+
+    fn as_ref(&self) -> AttachmentDescriptor<'_> {
+        AttachmentDescriptor {
+            target: AttachmentRef {
+                account_id: &self.account_id,
+                message_id: &self.message_id,
+                attachment_id: &self.attachment_id,
+            },
+            filename: &self.filename,
+            mime_type: &self.mime_type,
+        }
+    }
+}
+
+async fn lookup_blocking(
+    cache: AttachmentCache,
+    descriptor: OwnedAttachmentDescriptor,
+) -> Result<Option<CachedAttachment>, String> {
+    tokio::task::spawn_blocking(move || cache.lookup(descriptor.as_ref()))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn write_blocking(
+    cache: AttachmentCache,
+    descriptor: OwnedAttachmentDescriptor,
+    bytes: Vec<u8>,
+) -> Result<CachedAttachment, String> {
+    tokio::task::spawn_blocking(move || cache.write_bytes(descriptor.as_ref(), &bytes))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+fn evict_oldest(entries: Vec<(PathBuf, u64, SystemTime)>, mut total: u64, ceiling_bytes: u64) {
+    for (path, size, _) in entries {
+        if total <= ceiling_bytes {
+            break;
+        }
+        if fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
     }
 }
 

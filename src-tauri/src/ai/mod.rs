@@ -205,22 +205,7 @@ impl AiService {
                     .collect();
                 Ok(AccountRepository::list(connection)?
                     .into_iter()
-                    .map(|account| {
-                        let config = lookup.get(&account.id);
-                        AiConfigDto {
-                            has_api_key: credentials::load(&account.id).unwrap_or(None).is_some(),
-                            account_id: account.id.clone(),
-                            email: account.email,
-                            display_name: account.display_name,
-                            enabled: config.is_some_and(|value| value.enabled),
-                            base_url: config.and_then(|value| value.base_url.clone()),
-                            chat_model: config.and_then(|value| value.chat_model.clone()),
-                            embedding_model: config.and_then(|value| value.embedding_model.clone()),
-                            embedding_dimensions: config
-                                .and_then(|value| value.embedding_dimensions),
-                            index_paused: config.is_some_and(|value| value.index_paused),
-                        }
-                    })
+                    .map(|account| build_config_dto(account, &lookup))
                     .collect::<Vec<_>>())
             })
             .await
@@ -500,6 +485,25 @@ impl AiService {
             })
             .await
             .map_err(|error| error.to_string())
+    }
+}
+
+fn build_config_dto(
+    account: crate::storage::Account,
+    lookup: &HashMap<String, crate::storage::AccountAiConfig>,
+) -> AiConfigDto {
+    let config = lookup.get(&account.id);
+    AiConfigDto {
+        has_api_key: credentials::load(&account.id).unwrap_or(None).is_some(),
+        account_id: account.id,
+        email: account.email,
+        display_name: account.display_name,
+        enabled: config.is_some_and(|value| value.enabled),
+        base_url: config.and_then(|value| value.base_url.clone()),
+        chat_model: config.and_then(|value| value.chat_model.clone()),
+        embedding_model: config.and_then(|value| value.embedding_model.clone()),
+        embedding_dimensions: config.and_then(|value| value.embedding_dimensions),
+        index_paused: config.is_some_and(|value| value.index_paused),
     }
 }
 

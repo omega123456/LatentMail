@@ -279,81 +279,41 @@ fn sweep_is_a_no_op_when_total_size_is_within_the_ceiling() {
         .is_some());
 }
 
+fn binary_descriptor<'a>(attachment_id: &'a str, filename: &'a str) -> AttachmentDescriptor<'a> {
+    AttachmentDescriptor {
+        target: AttachmentRef {
+            account_id: "account",
+            message_id: "m1",
+            attachment_id: attachment_id,
+        },
+        filename: filename,
+        mime_type: "application/octet-stream",
+    }
+}
+
 #[test]
 fn touching_an_entry_on_lookup_protects_it_from_the_next_sweep() {
     let directory = tempfile::tempdir().unwrap();
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
 
     let older = cache
-        .write_bytes(
-            AttachmentDescriptor {
-                target: AttachmentRef {
-                    account_id: "account",
-                    message_id: "m1",
-                    attachment_id: "a",
-                },
-                filename: "a.bin",
-                mime_type: "application/octet-stream",
-            },
-            &[0u8; 100],
-        )
+        .write_bytes(binary_descriptor("a", "a.bin"), &[0u8; 100])
         .unwrap();
     let newer = cache
-        .write_bytes(
-            AttachmentDescriptor {
-                target: AttachmentRef {
-                    account_id: "account",
-                    message_id: "m1",
-                    attachment_id: "b",
-                },
-                filename: "b.bin",
-                mime_type: "application/octet-stream",
-            },
-            &[0u8; 100],
-        )
+        .write_bytes(binary_descriptor("b", "b.bin"), &[0u8; 100])
         .unwrap();
     age_by_hours(&older.cache_path, 2);
     age_by_hours(&newer.cache_path, 1);
 
-    assert!(cache
-        .lookup(AttachmentDescriptor {
-            target: AttachmentRef {
-                account_id: "account",
-                message_id: "m1",
-                attachment_id: "a"
-            },
-            filename: "a.bin",
-            mime_type: "application/octet-stream"
-        })
-        .is_some());
+    assert!(cache.lookup(binary_descriptor("a", "a.bin")).is_some());
 
     cache.sweep(150).unwrap();
 
     assert!(
-        cache
-            .lookup(AttachmentDescriptor {
-                target: AttachmentRef {
-                    account_id: "account",
-                    message_id: "m1",
-                    attachment_id: "a"
-                },
-                filename: "a.bin",
-                mime_type: "application/octet-stream"
-            })
-            .is_some(),
+        cache.lookup(binary_descriptor("a", "a.bin")).is_some(),
         "a recently touched entry must survive the sweep over an untouched, older-written one"
     );
-    assert!(cache
-        .lookup(AttachmentDescriptor {
-            target: AttachmentRef {
-                account_id: "account",
-                message_id: "m1",
-                attachment_id: "b"
-            },
-            filename: "b.bin",
-            mime_type: "application/octet-stream"
-        })
-        .is_none());
+    assert!(cache.lookup(binary_descriptor("b", "b.bin")).is_none());
 }
 
 #[test]

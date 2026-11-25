@@ -6,26 +6,84 @@ import { KeyCaps } from './KeyCaps';
 import { settingsLinkMuted, settingsLinkPrimary } from './styles';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
-export function ShortcutCapture({
-  command,
-  bindings,
+const MODIFIER_KEYS = ['Meta', 'Control', 'Shift', 'Alt'];
+
+function ShortcutCaptureButtons({
+  applyDisabled,
+  hasExistingBinding,
   onApply,
+  onRemove,
   onCancel,
 }: {
+  applyDisabled: boolean;
+  hasExistingBinding: boolean;
+  onApply: () => void;
+  onRemove: () => void;
+  onCancel: () => void;
+}) {
+  const keepFocus = (event: React.MouseEvent) => event.preventDefault();
+  return (
+    <>
+      <button
+        type="button"
+        onMouseDown={keepFocus}
+        onClick={onApply}
+        disabled={applyDisabled}
+        className={settingsLinkPrimary}
+      >
+        Apply
+      </button>
+      {hasExistingBinding && (
+        <button
+          type="button"
+          onMouseDown={keepFocus}
+          onClick={onRemove}
+          className={settingsLinkMuted}
+        >
+          Remove
+        </button>
+      )}
+      <button
+        type="button"
+        onMouseDown={keepFocus}
+        onClick={onCancel}
+        className={settingsLinkMuted}
+      >
+        Cancel
+      </button>
+    </>
+  );
+}
+
+type ShortcutCaptureProps = {
   command: CommandName;
   bindings: CommandBindings;
   onApply: (command: CommandName, keys: string[]) => void;
   onCancel: () => void;
-}) {
+};
+
+function ShortcutConflictAlert({ conflict }: { conflict: CommandName | null }) {
+  if (!conflict) return null;
+  return (
+    <p
+      role="alert"
+      className="flex items-center gap-1.5 pt-1.75 text-settings-meta text-settings-error dark:text-dark-settings-error"
+    >
+      <TriangleAlert aria-hidden="true" size={ICON_SIZE.xs} />
+      Already used by <b className="font-semibold">{COMMAND_METADATA[conflict].label}</b>
+    </p>
+  );
+}
+
+export function ShortcutCapture({ command, bindings, onApply, onCancel }: ShortcutCaptureProps) {
   const [captured, setCaptured] = useState<string[] | null>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
-  const isMac = isMacPlatform();
   const conflict = captured
     ? findConflictingCommand({
         bindings: bindings,
         command: command,
         candidate: captured[0],
-        isMac: isMac,
+        isMac: isMacPlatform(),
       })
     : null;
 
@@ -39,15 +97,8 @@ export function ShortcutCapture({
       onCancel();
       return;
     }
-    if (['Meta', 'Control', 'Shift', 'Alt'].includes(event.key)) return;
+    if (MODIFIER_KEYS.includes(event.key)) return;
     setCaptured(captureBinding(event));
-  };
-
-  const keepFocus = (event: React.MouseEvent) => event.preventDefault();
-
-  const apply = () => {
-    if (!captured || conflict) return;
-    onApply(command, captured);
   };
 
   return (
@@ -68,43 +119,17 @@ export function ShortcutCapture({
         >
           {captured ? <KeyCaps bindings={captured} /> : <span>Recording…</span>}
         </div>
-        <button
-          type="button"
-          onMouseDown={keepFocus}
-          onClick={apply}
-          disabled={!captured || Boolean(conflict)}
-          className={settingsLinkPrimary}
-        >
-          Apply
-        </button>
-        {bindings[command].length > 0 && (
-          <button
-            type="button"
-            onMouseDown={keepFocus}
-            onClick={() => onApply(command, [])}
-            className={settingsLinkMuted}
-          >
-            Remove
-          </button>
-        )}
-        <button
-          type="button"
-          onMouseDown={keepFocus}
-          onClick={onCancel}
-          className={settingsLinkMuted}
-        >
-          Cancel
-        </button>
+        <ShortcutCaptureButtons
+          applyDisabled={!captured || Boolean(conflict)}
+          hasExistingBinding={bindings[command].length > 0}
+          onApply={() => {
+            if (captured && !conflict) onApply(command, captured);
+          }}
+          onRemove={() => onApply(command, [])}
+          onCancel={onCancel}
+        />
       </div>
-      {conflict && (
-        <p
-          role="alert"
-          className="flex items-center gap-1.5 pt-1.75 text-settings-meta text-settings-error dark:text-dark-settings-error"
-        >
-          <TriangleAlert aria-hidden="true" size={ICON_SIZE.xs} />
-          Already used by <b className="font-semibold">{COMMAND_METADATA[conflict].label}</b>
-        </p>
-      )}
+      <ShortcutConflictAlert conflict={conflict} />
     </div>
   );
 }

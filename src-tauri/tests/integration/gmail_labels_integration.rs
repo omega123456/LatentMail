@@ -5,10 +5,7 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-#[tokio::test]
-async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
-    let server = MockServer::start().await;
-    let color = resolve_color("blue").expect("blue is on the palette");
+async fn mount_label_crud_mocks(server: &MockServer, color: &LabelColorPair) {
     Mock::given(method("POST"))
         .and(path("/users/me/labels"))
         .and(body_json(serde_json::json!({
@@ -19,7 +16,7 @@ async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
             "id": "Label_1", "name": "Clients",
             "color": { "textColor": color.text_color, "backgroundColor": color.background_color }
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("PATCH"))
         .and(path("/users/me/labels/Label_1"))
@@ -28,7 +25,7 @@ async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
             "id": "Label_1", "name": "Customers", "type": "user",
             "color": { "textColor": color.text_color, "backgroundColor": color.background_color }
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("PATCH"))
         .and(path("/users/me/labels/Label_1"))
@@ -39,13 +36,20 @@ async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
             "id": "Label_1", "name": "Customers", "type": "user",
             "color": { "textColor": "#ffffff", "backgroundColor": "#fb4c2f" }
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("DELETE"))
         .and(path("/users/me/labels/Label_1"))
         .respond_with(ResponseTemplate::new(204))
-        .mount(&server)
+        .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
+    let server = MockServer::start().await;
+    let color = resolve_color("blue").expect("blue is on the palette");
+    mount_label_crud_mocks(&server, &color).await;
 
     let client = GmailClient::with_base_url("token", server.uri());
 
@@ -195,6 +199,21 @@ fn user_label(connection: &rusqlite::Connection, id: &str, name: &str) {
     .unwrap();
 }
 
+fn validate_label_name(
+    connection: &rusqlite::Connection,
+    name: &str,
+    exclude_id: Option<&str>,
+) -> Result<String, LabelNameError> {
+    LabelRepository::validate_name(
+        connection,
+        LabelNameCheck {
+            account_id: "account",
+            name: name,
+            exclude_id: exclude_id,
+        },
+    )
+}
+
 #[test]
 fn each_label_name_rule_reports_a_distinguishable_error() {
     let connection = Storage::in_memory().unwrap();
@@ -202,91 +221,35 @@ fn each_label_name_rule_reports_a_distinguishable_error() {
     user_label(&connection, "Label_1", "Clients");
 
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: "   ",
-                exclude_id: None
-            }
-        ),
+        validate_label_name(&connection, "   ", None),
         Err(LabelNameError::Empty)
     );
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: &"x".repeat(101),
-                exclude_id: None
-            }
-        ),
+        validate_label_name(&connection, &"x".repeat(101), None),
         Err(LabelNameError::TooLong)
     );
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: "CATEGORY_Personal",
-                exclude_id: None
-            }
-        ),
+        validate_label_name(&connection, "CATEGORY_Personal", None),
         Err(LabelNameError::ReservedPrefix)
     );
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: "INBOX",
-                exclude_id: None
-            }
-        ),
+        validate_label_name(&connection, "INBOX", None),
         Err(LabelNameError::ReservedPrefix)
     );
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: "Bad\\Name",
-                exclude_id: None
-            }
-        ),
+        validate_label_name(&connection, "Bad\\Name", None),
         Err(LabelNameError::ForbiddenCharacters)
     );
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: "clients",
-                exclude_id: None
-            }
-        ),
+        validate_label_name(&connection, "clients", None),
         Err(LabelNameError::Duplicate)
     );
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: "CLIENTS",
-                exclude_id: Some("Label_1")
-            }
-        ),
+        validate_label_name(&connection, "CLIENTS", Some("Label_1")),
         Ok("CLIENTS".to_owned())
     );
     assert_eq!(
-        LabelRepository::validate_name(
-            &connection,
-            LabelNameCheck {
-                account_id: "account",
-                name: "  Vendors  ",
-                exclude_id: None
-            }
-        ),
+        validate_label_name(&connection, "  Vendors  ", None),
         Ok("Vendors".to_owned())
     );
 }

@@ -16,23 +16,48 @@ fn only_send_and_draft_operations_are_durable() {
     assert!(!OperationKind::LabelMutation.persists());
 }
 
+fn test_account() -> Account {
+    Account {
+        id: "account".into(),
+        email: "mail@example.com".into(),
+        display_name: "Mail".into(),
+        avatar_url: None,
+        history_id: None,
+        needs_reauthentication: false,
+        created_at: 1,
+        updated_at: 1,
+    }
+}
+
+fn test_operation(id: &str, kind: &str, status: &str) -> Operation {
+    Operation {
+        id: id.into(),
+        account_id: "account".into(),
+        lane: "interactive".into(),
+        kind: kind.into(),
+        entity_key: id.into(),
+        payload: "{}".into(),
+        status: status.into(),
+        attempts: 0,
+        next_attempt_at: None,
+        error: None,
+        created_at: 1,
+        updated_at: 1,
+    }
+}
+
+async fn load_operation(storage: &Storage, id: &str) -> Option<Operation> {
+    let operation_id = id.to_owned();
+    storage
+        .run(move |connection| OperationRepository::get(connection, &operation_id))
+        .await
+        .unwrap()
+}
+
 #[test]
 fn restart_recovers_queued_durable_work_and_marks_active_send_uncertain() {
     let connection = Storage::in_memory().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "mail@example.com".into(),
-            display_name: "Mail".into(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
+    AccountRepository::upsert(&connection, &test_account()).unwrap();
     for (id, kind, status) in [
         ("queued-send", "send", "queued"),
         ("active-send", "send", "active"),
@@ -40,24 +65,7 @@ fn restart_recovers_queued_durable_work_and_marks_active_send_uncertain() {
         ("queued-draft", "draft", "queued"),
         ("label", "label", "queued"),
     ] {
-        OperationRepository::upsert(
-            &connection,
-            &Operation {
-                id: id.into(),
-                account_id: "account".into(),
-                lane: "interactive".into(),
-                kind: kind.into(),
-                entity_key: id.into(),
-                payload: "{}".into(),
-                status: status.into(),
-                attempts: 0,
-                next_attempt_at: None,
-                error: None,
-                created_at: 1,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
+        OperationRepository::upsert(&connection, &test_operation(id, kind, status)).unwrap();
     }
     let RecoveredOperations {
         pending: recovered,
@@ -68,13 +76,11 @@ fn restart_recovers_queued_durable_work_and_marks_active_send_uncertain() {
         recovered_queue_operation(&recovered[1]).unwrap().kind,
         OperationKind::Draft
     );
-    assert_eq!(
-        recovered
-            .iter()
-            .map(|operation| operation.id.as_str())
-            .collect::<Vec<_>>(),
-        ["queued-send", "queued-draft"]
-    );
+    let recovered_ids: Vec<_> = recovered
+        .iter()
+        .map(|operation| operation.id.as_str())
+        .collect();
+    assert_eq!(recovered_ids, ["queued-send", "queued-draft"]);
     let interrupted = OperationRepository::get(&connection, "active-send")
         .unwrap()
         .unwrap();
@@ -95,36 +101,10 @@ fn restart_recovers_queued_durable_work_and_marks_active_send_uncertain() {
 #[test]
 fn a_draft_interrupted_mid_execution_is_requeued_rather_than_dropped() {
     let connection = Storage::in_memory().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "mail@example.com".into(),
-            display_name: "Mail".into(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
+    AccountRepository::upsert(&connection, &test_account()).unwrap();
     OperationRepository::upsert(
         &connection,
-        &Operation {
-            id: "active-draft".into(),
-            account_id: "account".into(),
-            lane: "interactive".into(),
-            kind: "draft".into(),
-            entity_key: "active-draft".into(),
-            payload: "{}".into(),
-            status: "active".into(),
-            attempts: 0,
-            next_attempt_at: None,
-            error: None,
-            created_at: 1,
-            updated_at: 1,
-        },
+        &test_operation("active-draft", "draft", "active"),
     )
     .unwrap();
     let RecoveredOperations {
@@ -136,27 +116,7 @@ fn a_draft_interrupted_mid_execution_is_requeued_rather_than_dropped() {
     assert_eq!(recovered[0].status, "queued");
 }
 
-#[tokio::test]
-async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let connection = storage.connection().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "mail@example.com".into(),
-            display_name: "Mail".into(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
-    drop(connection);
-
+async fn admit_create_draft(storage: &Storage) {
     let engine = QueueEngine::new(
         250,
         250,
@@ -164,7 +124,7 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
     );
     admit_durable(
         &engine,
-        &storage,
+        storage,
         DurableSubmission {
             operation: QueueOperation {
                 id: "draft-1".into(),
@@ -181,12 +141,20 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
     )
     .await
     .unwrap();
+}
 
-    let persisted = storage
-        .run(|connection| OperationRepository::get(connection, "draft-1"))
+#[tokio::test]
+async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    storage
+        .run(|connection| AccountRepository::upsert(connection, &test_account()))
         .await
-        .unwrap()
         .unwrap();
+
+    admit_create_draft(&storage).await;
+
+    let persisted = load_operation(&storage, "draft-1").await.unwrap();
     assert_eq!(persisted.status, "queued");
     assert_eq!(persisted.payload, "{\"mode\":\"create\"}");
 
@@ -195,12 +163,7 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
         .await
         .unwrap();
     assert_eq!(
-        storage
-            .run(|connection| OperationRepository::get(connection, "draft-1"))
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
+        load_operation(&storage, "draft-1").await.unwrap().status,
         "active"
     );
 
@@ -218,12 +181,7 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
         .await
         .unwrap();
     assert_eq!(
-        storage
-            .run(|connection| OperationRepository::get(connection, "draft-1"))
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
+        load_operation(&storage, "draft-1").await.unwrap().status,
         "done"
     );
 
@@ -231,11 +189,7 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
         .run(|connection| OperationRepository::remove(connection, "draft-1"))
         .await
         .unwrap();
-    assert!(storage
-        .run(|connection| OperationRepository::get(connection, "draft-1"))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(load_operation(&storage, "draft-1").await.is_none());
 }
 
 #[test]

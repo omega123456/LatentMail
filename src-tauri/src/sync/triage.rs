@@ -242,6 +242,76 @@ pub struct MoveMessagesRequest {
     pub destination: String,
 }
 
+struct DraftDeleteContext<'a> {
+    storage: &'a Storage,
+    client: &'a crate::gmail::GmailClient,
+    account_id: &'a str,
+}
+
+async fn delete_thread_drafts(
+    context: &DraftDeleteContext<'_>,
+    drafts: Vec<String>,
+    change: &LabelChange,
+) -> Result<(), String> {
+    if !change.deletes_drafts() {
+        return Err("Draft messages cannot be modified; delete them instead.".into());
+    }
+    for message_id in drafts {
+        super::mutations::delete_draft(
+            context.storage,
+            context.client,
+            DraftMessageRef {
+                account_id: context.account_id,
+                message_id: &message_id,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+struct ThreadMutationDispatch {
+    engine: Arc<super::SyncEngine>,
+    client: crate::gmail::GmailClient,
+    account_id: String,
+    thread_id: String,
+    labels: LabelDelta,
+}
+
+fn spawn_thread_mutation(
+    tasks: &mut tokio::task::JoinSet<(String, Result<MutationOutcome, super::SyncError>)>,
+    dispatch: ThreadMutationDispatch,
+) {
+    tasks.spawn(async move {
+        let thread_id = dispatch.thread_id;
+        let outcome = dispatch
+            .engine
+            .mutate(ThreadMutation {
+                account_id: dispatch.account_id,
+                client: dispatch.client,
+                thread_id: thread_id.clone(),
+                labels: dispatch.labels,
+            })
+            .await;
+        (thread_id, outcome)
+    });
+}
+
+async fn collect_thread_mutation_results(
+    mut tasks: tokio::task::JoinSet<(String, Result<MutationOutcome, super::SyncError>)>,
+    results: &mut Vec<MutationResultDto>,
+) -> Result<(), String> {
+    while let Some(outcome) = tasks.join_next().await {
+        let (thread_id, outcome) = outcome.map_err(|error| error.to_string())?;
+        let outcome = outcome.map_err(|error| error.to_string())?;
+        results.push(MutationResultDto {
+            thread_id: thread_id,
+            outcome: outcome.into(),
+        });
+    }
+    Ok(())
+}
+
 pub(super) async fn apply_to_threads<R: Runtime>(
     services: &AppServices<'_, R>,
     request: ThreadsChangeRequest,
@@ -265,6 +335,11 @@ pub(super) async fn apply_to_threads<R: Runtime>(
     )
     .await?;
 
+    let draft_context = DraftDeleteContext {
+        storage: engine.storage(),
+        client: &client,
+        account_id: &account_id,
+    };
     let mut results = Vec::with_capacity(thread_ids.len());
     let mut tasks = tokio::task::JoinSet::new();
     for thread_id in thread_ids {
@@ -273,54 +348,29 @@ pub(super) async fn apply_to_threads<R: Runtime>(
             .cloned()
             .unwrap_or_default();
         if !drafts.is_empty() {
-            if !change.deletes_drafts() {
-                return Err("Draft messages cannot be modified; delete them instead.".into());
-            }
-            for message_id in drafts {
-                super::mutations::delete_draft(
-                    engine.storage(),
-                    &client,
-                    DraftMessageRef {
-                        account_id: &account_id,
-                        message_id: &message_id,
-                    },
-                )
-                .await?;
-            }
+            delete_thread_drafts(&draft_context, drafts, &change).await?;
             results.push(MutationResultDto {
                 thread_id: thread_id,
                 outcome: MutationOutcome::Applied.into(),
             });
             continue;
         }
-        let engine = Arc::clone(&engine);
-        let client = client.clone();
-        let account_id = account_id.clone();
         let membership = membership_by_thread
             .get(&thread_id)
             .cloned()
             .unwrap_or_default();
-        let labels = change.labels_for(&membership);
-        tasks.spawn(async move {
-            let outcome = engine
-                .mutate(ThreadMutation {
-                    account_id: account_id,
-                    client: client,
-                    thread_id: thread_id.clone(),
-                    labels: labels,
-                })
-                .await;
-            (thread_id, outcome)
-        });
+        spawn_thread_mutation(
+            &mut tasks,
+            ThreadMutationDispatch {
+                engine: Arc::clone(&engine),
+                client: client.clone(),
+                account_id: account_id.clone(),
+                thread_id: thread_id,
+                labels: change.labels_for(&membership),
+            },
+        );
     }
-    while let Some(outcome) = tasks.join_next().await {
-        let (thread_id, outcome) = outcome.map_err(|error| error.to_string())?;
-        let outcome = outcome.map_err(|error| error.to_string())?;
-        results.push(MutationResultDto {
-            thread_id: thread_id,
-            outcome: outcome.into(),
-        });
-    }
+    collect_thread_mutation_results(tasks, &mut results).await?;
     Ok(results)
 }
 

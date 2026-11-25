@@ -181,6 +181,30 @@ async fn retries_transient_server_and_transport_failures_with_injected_bounds() 
     );
 }
 
+const REASONING_OFF_KEYS: [&str; 10] = [
+    "reasoning_effort",
+    "reasoning",
+    "thinking",
+    "enable_thinking",
+    "think",
+    "thinking_budget",
+    "reasoning_budget",
+    "thinking_budget_tokens",
+    "chat_template_kwargs",
+    "google",
+];
+
+async fn request_chat_answer(provider: &Provider) -> String {
+    provider
+        .chat_completion(ChatCompletionRequest {
+            model: "chat",
+            messages: serde_json::json!([]),
+            response_format: None,
+        })
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn chat_requests_carry_every_reasoning_off_key_and_step_down_when_the_provider_rejects_them()
 {
@@ -202,28 +226,8 @@ async fn chat_requests_carry_every_reasoning_off_key_and_step_down_when_the_prov
         .mount(&server)
         .await;
     let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
-    assert_eq!(
-        provider
-            .chat_completion(ChatCompletionRequest {
-                model: "chat",
-                messages: serde_json::json!([]),
-                response_format: None
-            })
-            .await
-            .unwrap(),
-        "answer"
-    );
-    assert_eq!(
-        provider
-            .chat_completion(ChatCompletionRequest {
-                model: "chat",
-                messages: serde_json::json!([]),
-                response_format: None
-            })
-            .await
-            .unwrap(),
-        "answer"
-    );
+    assert_eq!(request_chat_answer(&provider).await, "answer");
+    assert_eq!(request_chat_answer(&provider).await, "answer");
     let bodies = server
         .received_requests()
         .await
@@ -232,18 +236,7 @@ async fn chat_requests_carry_every_reasoning_off_key_and_step_down_when_the_prov
         .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(bodies.len(), 4);
-    for key in [
-        "reasoning_effort",
-        "reasoning",
-        "thinking",
-        "enable_thinking",
-        "think",
-        "thinking_budget",
-        "reasoning_budget",
-        "thinking_budget_tokens",
-        "chat_template_kwargs",
-        "google",
-    ] {
+    for key in REASONING_OFF_KEYS {
         assert!(
             bodies[0].get(key).is_some(),
             "{key} missing from first body"
@@ -331,7 +324,7 @@ async fn a_rate_limit_whose_body_is_not_an_openai_error_object_is_still_transien
                     model: "embedding",
                     input: vec!["mail".into()],
                     attempts: 3,
-                    backoff: |_| { Duration::ZERO }
+                    backoff: |_| Duration::ZERO,
                 }
             )
             .await

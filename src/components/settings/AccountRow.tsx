@@ -7,6 +7,44 @@ import type { Account } from '@/lib/types/ipc';
 import { settingsButton, settingsDangerIconButton } from './styles';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
+function AccountRowActions({
+  account,
+  reconnecting,
+  onReconnect,
+  onRemove,
+}: {
+  account: Account;
+  reconnecting: boolean;
+  onReconnect: () => void;
+  onRemove: () => void;
+}) {
+  const visibilityClass = account.needsReauthentication
+    ? 'opacity-100'
+    : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100';
+  return (
+    <div className={`flex shrink-0 items-center gap-1.5 ${visibilityClass}`}>
+      {account.needsReauthentication && (
+        <button
+          type="button"
+          onClick={onReconnect}
+          disabled={reconnecting}
+          className={`${settingsButton} px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          {reconnecting ? 'Reconnecting…' : 'Reconnect'}
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label={`Remove ${account.email}`}
+        onClick={onRemove}
+        className={settingsDangerIconButton}
+      >
+        <Trash2 aria-hidden="true" size={ICON_SIZE.xs} />
+      </button>
+    </div>
+  );
+}
+
 export function AccountRow({
   account,
   onRemove,
@@ -58,32 +96,12 @@ export function AccountRow({
           </p>
         )}
       </div>
-      <div
-        className={`flex shrink-0 items-center gap-1.5 ${
-          account.needsReauthentication
-            ? 'opacity-100'
-            : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100'
-        }`}
-      >
-        {account.needsReauthentication && (
-          <button
-            type="button"
-            onClick={() => void reconnect()}
-            disabled={reconnecting}
-            className={`${settingsButton} px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-60`}
-          >
-            {reconnecting ? 'Reconnecting…' : 'Reconnect'}
-          </button>
-        )}
-        <button
-          type="button"
-          aria-label={`Remove ${account.email}`}
-          onClick={() => onRemove(account)}
-          className={settingsDangerIconButton}
-        >
-          <Trash2 aria-hidden="true" size={ICON_SIZE.xs} />
-        </button>
-      </div>
+      <AccountRowActions
+        account={account}
+        reconnecting={reconnecting}
+        onReconnect={() => void reconnect()}
+        onRemove={() => onRemove(account)}
+      />
     </div>
   );
 }

@@ -48,31 +48,29 @@ fn icon_dot_geometry_and_color_are_stable() {
     assert_eq!(dot_color(true), DotColor::Reauthentication);
 }
 
+async fn upsert_account(storage: &Storage, id: &str, needs_reauthentication: bool) {
+    let account = Account {
+        id: id.to_owned(),
+        email: format!("{id}@example.com"),
+        display_name: id.to_owned(),
+        avatar_url: None,
+        history_id: None,
+        needs_reauthentication: needs_reauthentication,
+        created_at: 0,
+        updated_at: 0,
+    };
+    storage
+        .run(move |connection| AccountRepository::upsert(connection, &account))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn aggregate_reads_every_account_and_the_safe_platform_surfaces() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    storage
-        .run(|connection| {
-            for (id, needs_reauthentication) in [("one", false), ("two", true)] {
-                AccountRepository::upsert(
-                    connection,
-                    &Account {
-                        id: id.to_owned(),
-                        email: format!("{id}@example.com"),
-                        display_name: id.to_owned(),
-                        avatar_url: None,
-                        history_id: None,
-                        needs_reauthentication: needs_reauthentication,
-                        created_at: 0,
-                        updated_at: 0,
-                    },
-                )?;
-            }
-            Ok(())
-        })
-        .await
-        .unwrap();
+    upsert_account(&storage, "one", false).await;
+    upsert_account(&storage, "two", true).await;
     assert_eq!(
         aggregate(&storage).await.unwrap(),
         IndicatorState {

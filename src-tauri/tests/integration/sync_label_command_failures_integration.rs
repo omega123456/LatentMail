@@ -24,7 +24,7 @@ struct Harness {
     _server: MockServer,
 }
 
-async fn harness(account_id: &str) -> Harness {
+async fn start_mock_label_server() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
@@ -42,6 +42,11 @@ async fn harness(account_id: &str) -> Harness {
         )
         .mount(&server)
         .await;
+    server
+}
+
+async fn harness(account_id: &str) -> Harness {
+    let server = start_mock_label_server().await;
     std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
     std::env::set_var(
         "LATENTMAIL_GOOGLE_TOKEN_URL",

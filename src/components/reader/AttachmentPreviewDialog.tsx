@@ -219,21 +219,16 @@ function renderPreviewContent(resources: PreviewResources): ReactNode {
   return rendered ?? <UnsupportedPreview />;
 }
 
-export function AttachmentPreviewDialog({
+function useAttachmentPreviewResources({
   accountId,
   messageId,
   attachment,
-  onClose,
 }: {
   accountId: string | null;
   messageId: string;
   attachment: MessageAttachment;
-  onClose: () => void;
-}) {
-  const showSuccess = useToastStore((toaster) => toaster.showSuccess);
-  const showError = useToastStore((toaster) => toaster.showError);
+}): PreviewResources {
   const kind = resolvePreviewKind(attachment.mimeType, attachment.filename);
-
   const imageQuery = useCachedAttachmentQuery({
     accountId: accountId,
     messageId: messageId,
@@ -255,24 +250,72 @@ export function AttachmentPreviewDialog({
   });
   const docx = useDocxHtml(kind === 'docx' ? (previewBytes.bytes ?? undefined) : undefined);
 
-  const download = async () => {
-    if (!accountId) return;
-    const destination = await invoke('plugin:dialog|save', {
-      options: { defaultPath: sanitizeFilename(attachment.filename) },
-    });
-    if (!destination) return;
-    try {
-      await invoke('save_attachment_to_path', {
-        accountId: accountId,
-        messageId: messageId,
-        attachmentId: attachment.id,
-        destination: destination,
-      });
-      showSuccess(`Downloaded ${attachment.filename}`);
-    } catch {
-      showError(`Couldn't download ${attachment.filename}`);
-    }
+  return {
+    kind: kind,
+    filename: attachment.filename,
+    imagePending: imageQuery.isPending,
+    imageError: imageQuery.isError,
+    imageDisplayPath: imageQuery.data?.displayPath,
+    bytes: previewBytes.bytes,
+    bytesFailed: previewBytes.failed,
+    PdfPreview: pdf.component,
+    pdfFailed: pdf.failed,
+    textPending: textQuery.isPending,
+    textError: textQuery.isError,
+    textData: textQuery.data,
+    docxHtml: docx.html,
+    docxFailed: docx.failed,
   };
+}
+
+async function downloadAttachmentWithToast(input: {
+  accountId: string | null;
+  messageId: string;
+  attachment: MessageAttachment;
+  showSuccess: (message: string) => void;
+  showError: (message: string) => void;
+}) {
+  if (!input.accountId) return;
+  const destination = await invoke('plugin:dialog|save', {
+    options: { defaultPath: sanitizeFilename(input.attachment.filename) },
+  });
+  if (!destination) return;
+  try {
+    await invoke('save_attachment_to_path', {
+      accountId: input.accountId,
+      messageId: input.messageId,
+      attachmentId: input.attachment.id,
+      destination: destination,
+    });
+    input.showSuccess(`Downloaded ${input.attachment.filename}`);
+  } catch {
+    input.showError(`Couldn't download ${input.attachment.filename}`);
+  }
+}
+
+export function AttachmentPreviewDialog({
+  accountId,
+  messageId,
+  attachment,
+  onClose,
+}: {
+  accountId: string | null;
+  messageId: string;
+  attachment: MessageAttachment;
+  onClose: () => void;
+}) {
+  const showSuccess = useToastStore((toaster) => toaster.showSuccess);
+  const showError = useToastStore((toaster) => toaster.showError);
+  const resources = useAttachmentPreviewResources({ accountId, messageId, attachment });
+
+  const download = () =>
+    downloadAttachmentWithToast({
+      accountId: accountId,
+      messageId: messageId,
+      attachment: attachment,
+      showSuccess: showSuccess,
+      showError: showError,
+    });
 
   return (
     <ReaderDialogFrame
@@ -287,22 +330,7 @@ export function AttachmentPreviewDialog({
         </button>
       }
     >
-      {renderPreviewContent({
-        kind: kind,
-        filename: attachment.filename,
-        imagePending: imageQuery.isPending,
-        imageError: imageQuery.isError,
-        imageDisplayPath: imageQuery.data?.displayPath,
-        bytes: previewBytes.bytes,
-        bytesFailed: previewBytes.failed,
-        PdfPreview: pdf.component,
-        pdfFailed: pdf.failed,
-        textPending: textQuery.isPending,
-        textError: textQuery.isError,
-        textData: textQuery.data,
-        docxHtml: docx.html,
-        docxFailed: docx.failed,
-      })}
+      {renderPreviewContent(resources)}
     </ReaderDialogFrame>
   );
 }

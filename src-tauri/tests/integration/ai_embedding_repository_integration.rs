@@ -36,25 +36,112 @@ fn metadata_count(connection: &rusqlite::Connection, account_id: &str) -> i64 {
         .unwrap()
 }
 
+fn upsert_account(connection: &rusqlite::Connection, id: &str) {
+    AccountRepository::upsert(
+        connection,
+        &Account {
+            id: id.into(),
+            email: format!("{id}@example.com"),
+            display_name: id.into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+}
+
+fn assert_counts(connection: &rusqlite::Connection, account_id: &str, indexed_passages: i64) {
+    assert_eq!(
+        EmbeddingRepository::counts(connection, account_id).unwrap(),
+        latentmail_lib::storage::EmbeddingCounts {
+            indexed_messages: 1,
+            total_eligible_messages: 1,
+            indexed_passages: indexed_passages,
+        }
+    );
+}
+
+fn set_trash(connection: &rusqlite::Connection, message_id: &str, present: bool) {
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "one",
+            message_id: message_id,
+        },
+        LabelMembershipChange {
+            label_id: "TRASH",
+            present: present,
+        },
+    )
+    .unwrap();
+}
+
+fn set_plain_body(connection: &rusqlite::Connection, message_id: &str, plain_body: &str) {
+    MessageRepository::set_body(
+        connection,
+        MessageKey {
+            account_id: "one",
+            message_id: message_id,
+        },
+        MessageBodyUpdate {
+            html_body: None,
+            plain_body: Some(plain_body),
+            presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+}
+
+fn write_unit_vector(connection: &rusqlite::Connection, message_seq: i64) {
+    EmbeddingRepository::write(
+        connection,
+        "one",
+        &[MessageEmbedding {
+            message_seq: message_seq,
+            chunk_index: 0,
+            vector: vec![1.0, 0.0],
+        }],
+    )
+    .unwrap();
+}
+
+fn nearest_count(connection: &rusqlite::Connection) -> usize {
+    EmbeddingRepository::nearest(
+        connection,
+        "one",
+        NearestQuery {
+            vector: &[1.0, 0.0],
+            limit: 1,
+        },
+    )
+    .unwrap()
+    .len()
+}
+
+fn assert_mutable_body_update_invalidates_embedding(connection: &rusqlite::Connection) {
+    let mut mutable = message("one", "plain", 1);
+    mutable.truncated_body = None;
+    MessageRepository::write_full_state(connection, &mutable).unwrap();
+    let mutable_seq = connection
+        .query_row(
+            "SELECT seq FROM messages WHERE account_id='one' AND id='plain'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    write_unit_vector(connection, mutable_seq);
+    set_plain_body(connection, "plain", "changed body");
+    assert_eq!(metadata_count(connection, "one"), 0);
+}
+
 #[test]
 fn account_vector_tables_accept_different_dimensions() {
     let connection = Storage::in_memory().unwrap();
-    for id in ["one", "two"] {
-        AccountRepository::upsert(
-            &connection,
-            &Account {
-                id: id.into(),
-                email: format!("{id}@example.com"),
-                display_name: id.into(),
-                avatar_url: None,
-                history_id: None,
-                needs_reauthentication: false,
-                created_at: 1,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-    }
+    upsert_account(&connection, "one");
+    upsert_account(&connection, "two");
     EmbeddingRepository::create(&connection, "one", 2).unwrap();
     EmbeddingRepository::create(&connection, "two", 3).unwrap();
     MessageRepository::write_full_state(&connection, &message("one", "message", 1)).unwrap();
@@ -109,41 +196,14 @@ fn account_vector_tables_accept_different_dimensions() {
     assert!(nearest[0].distance <= nearest[1].distance);
     assert_eq!(metadata_count(&connection, "one"), 2);
     assert_eq!(metadata_count(&connection, "two"), 1);
-    assert_eq!(
-        EmbeddingRepository::counts(&connection, "one").unwrap(),
-        latentmail_lib::storage::EmbeddingCounts {
-            indexed_messages: 1,
-            total_eligible_messages: 1,
-            indexed_passages: 2,
-        }
-    );
-    assert_eq!(
-        EmbeddingRepository::counts(&connection, "two").unwrap(),
-        latentmail_lib::storage::EmbeddingCounts {
-            indexed_messages: 1,
-            total_eligible_messages: 1,
-            indexed_passages: 1,
-        }
-    );
+    assert_counts(&connection, "one", 2);
+    assert_counts(&connection, "two", 1);
 }
 
 #[test]
 fn triggers_remove_vectors_for_text_exclusion_and_message_deletion() {
     let connection = Storage::in_memory().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "one".into(),
-            email: "one@example.com".into(),
-            display_name: "one".into(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
+    upsert_account(&connection, "one");
     LabelRepository::upsert(
         &connection,
         &Label {
@@ -158,49 +218,22 @@ fn triggers_remove_vectors_for_text_exclusion_and_message_deletion() {
     .unwrap();
     MessageRepository::write_full_state(&connection, &message("one", "message", 1)).unwrap();
     EmbeddingRepository::create(&connection, "one", 2).unwrap();
-    let entry = MessageEmbedding {
-        message_seq: 1,
-        chunk_index: 0,
-        vector: vec![1.0, 0.0],
-    };
-    EmbeddingRepository::write(&connection, "one", std::slice::from_ref(&entry)).unwrap();
+    write_unit_vector(&connection, 1);
     let mut changed = message("one", "message", 2);
     changed.subject = "Changed".into();
     MessageRepository::write_full_state(&connection, &changed).unwrap();
     assert_eq!(metadata_count(&connection, "one"), 0);
-    EmbeddingRepository::write(&connection, "one", std::slice::from_ref(&entry)).unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "one",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "TRASH",
-            present: true,
-        },
-    )
-    .unwrap();
+    write_unit_vector(&connection, 1);
+    set_trash(&connection, "message", true);
     assert_eq!(metadata_count(&connection, "one"), 0);
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "one",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "TRASH",
-            present: false,
-        },
-    )
-    .unwrap();
+    set_trash(&connection, "message", false);
     assert_eq!(
         EmbeddingRepository::backlog(&connection, "one", 64)
             .unwrap()
             .len(),
         1
     );
-    EmbeddingRepository::write(&connection, "one", &[entry]).unwrap();
+    write_unit_vector(&connection, 1);
     MessageRepository::delete(&connection, "one", "message").unwrap();
     assert_eq!(metadata_count(&connection, "one"), 0);
 }
@@ -208,20 +241,7 @@ fn triggers_remove_vectors_for_text_exclusion_and_message_deletion() {
 #[test]
 fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
     let connection = Storage::in_memory().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "one".into(),
-            email: "one@example.com".into(),
-            display_name: "one".into(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
+    upsert_account(&connection, "one");
     let mut stored = message("one", "message", 1);
     stored.plain_body = None;
     MessageRepository::write_full_state(&connection, &stored).unwrap();
@@ -230,46 +250,13 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
         .execute_batch("DROP TRIGGER message_vectors_1_update; CREATE TRIGGER message_vectors_1_update BEFORE UPDATE OF subject,sender,to_recipients,cc_recipients,bcc_recipients,plain_body,truncated_body ON messages WHEN old.account_id='one' BEGIN DELETE FROM message_embeddings WHERE account_id=old.account_id AND message_seq=old.seq; END;")
         .unwrap();
     EmbeddingRepository::create(&connection, "one", 2).unwrap();
-    EmbeddingRepository::write(
-        &connection,
-        "one",
-        &[MessageEmbedding {
-            message_seq: 1,
-            chunk_index: 0,
-            vector: vec![1.0, 0.0],
-        }],
-    )
-    .unwrap();
-    MessageRepository::set_body(
-        &connection,
-        MessageKey {
-            account_id: "one",
-            message_id: "message",
-        },
-        MessageBodyUpdate {
-            html_body: None,
-            plain_body: Some("hydrated body"),
-            presence: HtmlPresence::Absent,
-        },
-    )
-    .unwrap();
+    write_unit_vector(&connection, 1);
+    set_plain_body(&connection, "message", "hydrated body");
     assert_eq!(metadata_count(&connection, "one"), 1);
     assert!(EmbeddingRepository::backlog(&connection, "one", 64)
         .unwrap()
         .is_empty());
-    assert_eq!(
-        EmbeddingRepository::nearest(
-            &connection,
-            "one",
-            NearestQuery {
-                vector: &[1.0, 0.0],
-                limit: 1
-            }
-        )
-        .unwrap()
-        .len(),
-        1
-    );
+    assert_eq!(nearest_count(&connection), 1);
     stored.subject = "Changed".into();
     stored.history_id = 2;
     MessageRepository::write_full_state(&connection, &stored).unwrap();
@@ -280,40 +267,7 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
             .len(),
         1
     );
-    let mut mutable = message("one", "plain", 1);
-    mutable.truncated_body = None;
-    MessageRepository::write_full_state(&connection, &mutable).unwrap();
-    let mutable_seq = connection
-        .query_row(
-            "SELECT seq FROM messages WHERE account_id='one' AND id='plain'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    EmbeddingRepository::write(
-        &connection,
-        "one",
-        &[MessageEmbedding {
-            message_seq: mutable_seq,
-            chunk_index: 0,
-            vector: vec![1.0, 0.0],
-        }],
-    )
-    .unwrap();
-    MessageRepository::set_body(
-        &connection,
-        MessageKey {
-            account_id: "one",
-            message_id: "plain",
-        },
-        MessageBodyUpdate {
-            html_body: None,
-            plain_body: Some("changed body"),
-            presence: HtmlPresence::Absent,
-        },
-    )
-    .unwrap();
-    assert_eq!(metadata_count(&connection, "one"), 0);
+    assert_mutable_body_update_invalidates_embedding(&connection);
 }
 
 #[test]

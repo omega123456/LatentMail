@@ -65,17 +65,16 @@ function usePruneRemovedInlineImages({
   }, [session?.html, session?.attachments, accountId, owner, removeAttachment]);
 }
 
-export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null>) {
-  const session = useComposeStore((compose) => compose.session);
+function useStageAttachmentPath(
+  accountId: string,
+  owner: string,
+  bodyRef: RefObject<BodyEditorHandle | null>,
+) {
   const addReadingAttachment = useComposeStore((compose) => compose.addReadingAttachment);
   const settleAttachment = useComposeStore((compose) => compose.settleAttachment);
   const failAttachment = useComposeStore((compose) => compose.failAttachment);
-  const removeAttachment = useComposeStore((compose) => compose.removeAttachment);
 
-  const { accountId, owner } = resolveAttachmentScope(session);
-  const stagePathRef = useRef<(path: string, contentId: string | null) => void>(() => undefined);
-
-  const stagePath = useCallback(
+  return useCallback(
     (path: string, contentId: string | null) => {
       const localId = crypto.randomUUID();
       addReadingAttachment({
@@ -100,6 +99,16 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     },
     [accountId, owner, addReadingAttachment, settleAttachment, failAttachment, bodyRef],
   );
+}
+
+export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null>) {
+  const session = useComposeStore((compose) => compose.session);
+  const removeAttachment = useComposeStore((compose) => compose.removeAttachment);
+
+  const { accountId, owner } = resolveAttachmentScope(session);
+  const stagePathRef = useRef<(path: string, contentId: string | null) => void>(() => undefined);
+  const stagePath = useStageAttachmentPath(accountId, owner, bodyRef);
+
   useEffect(() => {
     stagePathRef.current = stagePath;
   }, [stagePath]);

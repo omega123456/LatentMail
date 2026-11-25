@@ -6,6 +6,47 @@ import { QueueStateChip } from './QueueStateChip';
 import { QueueOperationList } from './QueueOperationList';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
+function QueueLaneExpandButton({
+  lane,
+  expanded,
+  onToggleExpand,
+}: {
+  lane: LaneSnapshot;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const meta = LANE_META[lane.lane];
+  const stateMeta = LANE_STATE_META[lane.state];
+  const LaneIcon = meta.Icon;
+
+  return (
+    <button
+      type="button"
+      onClick={onToggleExpand}
+      aria-expanded={expanded}
+      aria-label={`${expanded ? 'Collapse' : 'Expand'} the ${meta.label} lane`}
+      className="flex h-full flex-1 cursor-pointer items-center gap-3 pl-queue-indent-lane text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-settings-primary"
+    >
+      <LaneIcon aria-hidden="true" size={ICON_SIZE.xs} className={stateMeta.iconClass} />
+      <span className={`min-w-24 text-settings-lane uppercase ${stateMeta.nameClass}`}>
+        {meta.label}
+      </span>
+      <LaneOccupancy capacity={lane.capacity} active={lane.active} muted={lane.state === 'idle'} />
+      {lane.backlog > 0 && (
+        <span className="whitespace-nowrap text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
+          {lane.backlog.toLocaleString()} queued
+        </span>
+      )}
+      <span className="flex-1" />
+      <QueueStateChip
+        pipClassName={stateMeta.pipClass}
+        label={stateMeta.label}
+        className={stateMeta.chipClass}
+      />
+    </button>
+  );
+}
+
 export function QueueLaneRow({
   lane,
   expanded,
@@ -23,8 +64,6 @@ export function QueueLaneRow({
 }) {
   const meta = LANE_META[lane.lane];
   const stateMeta = LANE_STATE_META[lane.state];
-  const idle = lane.state === 'idle';
-  const LaneIcon = meta.Icon;
   const paused = lane.state === 'paused';
 
   return (
@@ -34,30 +73,7 @@ export function QueueLaneRow({
           aria-hidden="true"
           className={`absolute inset-y-2 left-0 w-0.75 rounded-full ${stateMeta.railClass}`}
         />
-        <button
-          type="button"
-          onClick={onToggleExpand}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} the ${meta.label} lane`}
-          className="flex h-full flex-1 cursor-pointer items-center gap-3 pl-queue-indent-lane text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-settings-primary"
-        >
-          <LaneIcon aria-hidden="true" size={ICON_SIZE.xs} className={stateMeta.iconClass} />
-          <span className={`min-w-24 text-settings-lane uppercase ${stateMeta.nameClass}`}>
-            {meta.label}
-          </span>
-          <LaneOccupancy capacity={lane.capacity} active={lane.active} muted={idle} />
-          {lane.backlog > 0 && (
-            <span className="whitespace-nowrap text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
-              {lane.backlog.toLocaleString()} queued
-            </span>
-          )}
-          <span className="flex-1" />
-          <QueueStateChip
-            pipClassName={stateMeta.pipClass}
-            label={stateMeta.label}
-            className={stateMeta.chipClass}
-          />
-        </button>
+        <QueueLaneExpandButton lane={lane} expanded={expanded} onToggleExpand={onToggleExpand} />
         <button
           type="button"
           aria-label={`${paused ? 'Resume' : 'Pause'} the ${meta.label} lane for this account`}

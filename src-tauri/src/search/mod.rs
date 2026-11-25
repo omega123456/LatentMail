@@ -76,6 +76,44 @@ pub struct SearchTotalRequest {
     pub scope: Option<SearchScope>,
 }
 
+struct SearchPageSpec {
+    page_size: usize,
+    direction: ThreadPageDirection,
+    has_cursor: bool,
+}
+
+fn build_search_page(
+    mut rows: Vec<crate::storage::ThreadListRow>,
+    spec: SearchPageSpec,
+) -> ThreadSearchPage {
+    let has_more = rows.len() > spec.page_size;
+    if has_more {
+        match spec.direction {
+            ThreadPageDirection::Forward => rows.truncate(spec.page_size),
+            ThreadPageDirection::Backward => {
+                rows.drain(..rows.len() - spec.page_size);
+            }
+        }
+    }
+    let cursor_for = |row: &crate::storage::ThreadListRow| ThreadCursor {
+        latest_at: row.thread.latest_at,
+        id: row.thread.id.clone(),
+    };
+    let next_cursor = (spec.direction == ThreadPageDirection::Forward && has_more)
+        .then(|| rows.last().map(cursor_for))
+        .flatten();
+    let previous_cursor = ((spec.direction == ThreadPageDirection::Backward && has_more)
+        || (spec.direction == ThreadPageDirection::Forward && spec.has_cursor))
+        .then(|| rows.first().map(cursor_for))
+        .flatten();
+    let items = rows.into_iter().map(ThreadDto::from_row).collect();
+    ThreadSearchPage {
+        items: items,
+        next_cursor: next_cursor,
+        previous_cursor: previous_cursor,
+    }
+}
+
 pub async fn run_search_threads(
     storage: &Storage,
     request: SearchThreadsRequest,
@@ -107,9 +145,9 @@ pub async fn run_search_threads(
     let has_cursor = cursor_pair.is_some();
     let direction = direction.unwrap_or_default();
 
-    let mut rows = storage
+    let rows = storage
         .run(move |connection| {
-            let rows = SearchRepository::search_with_direction(
+            SearchRepository::search_with_direction(
                 connection,
                 SearchPageQuery {
                     account_id: &account_id,
@@ -119,38 +157,19 @@ pub async fn run_search_threads(
                     limit: i64::from(limit) + 1,
                     direction: direction,
                 },
-            )?;
-            Ok(rows)
+            )
         })
         .await
         .map_err(|error| error.to_string())?;
 
-    let has_more = rows.len() > page_size;
-    if has_more {
-        match direction {
-            ThreadPageDirection::Forward => rows.truncate(page_size),
-            ThreadPageDirection::Backward => {
-                rows.drain(..rows.len() - page_size);
-            }
-        }
-    }
-    let cursor_for = |row: &crate::storage::ThreadListRow| ThreadCursor {
-        latest_at: row.thread.latest_at,
-        id: row.thread.id.clone(),
-    };
-    let next_cursor = (direction == ThreadPageDirection::Forward && has_more)
-        .then(|| rows.last().map(cursor_for))
-        .flatten();
-    let previous_cursor = ((direction == ThreadPageDirection::Backward && has_more)
-        || (direction == ThreadPageDirection::Forward && has_cursor))
-        .then(|| rows.first().map(cursor_for))
-        .flatten();
-    let items = rows.into_iter().map(ThreadDto::from_row).collect();
-    Ok(ThreadSearchPage {
-        items,
-        next_cursor,
-        previous_cursor,
-    })
+    Ok(build_search_page(
+        rows,
+        SearchPageSpec {
+            page_size: page_size,
+            direction: direction,
+            has_cursor: has_cursor,
+        },
+    ))
 }
 
 pub async fn run_search_total(

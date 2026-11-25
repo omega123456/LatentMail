@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create, type StoreApi } from 'zustand';
 import { dispatchSetZoom } from '@/lib/ipc/dispatch';
 import { invoke } from '@/lib/ipc/commands';
 import { hydrateSettings } from '@/lib/settings/hydrate';
@@ -57,6 +57,11 @@ type LayoutState = PersistedLayoutSettings & {
   untrustImageSender: (address: string) => void;
 };
 
+type PersistedSetter = <Key extends keyof PersistedLayoutSettings>(
+  key: Key,
+  transform?: (value: Settings[Key]) => Settings[Key],
+) => (incoming: Settings[Key]) => void;
+
 export function applyZoom(zoomPercent: number) {
   void dispatchSetZoom(percentToFraction(zoomPercent)).catch(() => undefined);
 }
@@ -65,24 +70,58 @@ function persist<Key extends keyof Settings>(key: Key, value: Settings[Key]) {
   void invoke('write_setting', { key: key, value: value }).catch(() => undefined);
 }
 
-export const useLayoutStore = create<LayoutState>((set, get) => {
-  const persistedSetter =
-    <Key extends keyof PersistedLayoutSettings>(
-      key: Key,
-      transform?: (value: Settings[Key]) => Settings[Key],
-    ) =>
-    (incoming: Settings[Key]) => {
-      const next = transform ? transform(incoming) : incoming;
-      set({ [key]: next } as Partial<LayoutState>);
-      persist(key, next);
-    };
+function createPersistedSetter(set: StoreApi<LayoutState>['setState']): PersistedSetter {
+  return (key, transform) => (incoming) => {
+    const next = transform ? transform(incoming) : incoming;
+    set({ [key]: next } as Partial<LayoutState>);
+    persist(key, next);
+  };
+}
 
+function createPanelSizingActions(persistedSetter: PersistedSetter) {
+  return {
+    setSidebarCollapsed: persistedSetter('sidebarCollapsed'),
+    setSidebarWidth: persistedSetter('sidebarWidth', (size) =>
+      clampSize(size, SIDEBAR_WIDTH_RANGE),
+    ),
+    setListWidth: persistedSetter('listWidth', (size) => clampSize(size, LIST_WIDTH_RANGE)),
+    setReaderHeight: persistedSetter('readerHeight', (size) =>
+      clampSize(size, READER_HEIGHT_PERCENT_RANGE),
+    ),
+    setAssistantWidth: persistedSetter('assistantWidth', (size) =>
+      clampSize(size, ASSISTANT_WIDTH_RANGE),
+    ),
+  };
+}
+
+function createPreferenceActions(persistedSetter: PersistedSetter) {
+  return {
+    setShowUnreadCounts: persistedSetter('showUnreadCounts'),
+    setShowSenderAvatars: persistedSetter('showSenderAvatars'),
+    setSyncOnStartup: persistedSetter('syncOnStartup'),
+    setSyncIntervalSeconds: persistedSetter('syncIntervalSeconds'),
+    setAlwaysLoadRemoteImages: persistedSetter('alwaysLoadRemoteImages'),
+    setLogLevel: persistedSetter('logLevel'),
+    setPrefetchImageAttachments: persistedSetter('prefetchImageAttachments'),
+    setStartAtLogin: persistedSetter('startAtLogin'),
+    setCloseToTray: persistedSetter('closeToTray'),
+    setStartMinimized: persistedSetter('startMinimized'),
+    setDesktopNotifications: persistedSetter('desktopNotifications'),
+    setUpdateCheckInterval: persistedSetter('updateCheckInterval'),
+    setInstallUpdateOnQuit: persistedSetter('installUpdateOnQuit'),
+  };
+}
+
+export const useLayoutStore = create<LayoutState>((set, get) => {
+  const persistedSetter = createPersistedSetter(set);
   const setLayout = persistedSetter('layout');
   const setDensity = persistedSetter('density');
   const setAllowedImageSenders = persistedSetter('allowedImageSenders');
 
   return {
     ...DEFAULT_PERSISTED_SETTINGS,
+    ...createPanelSizingActions(persistedSetter),
+    ...createPreferenceActions(persistedSetter),
     assistantOpen: false,
     route: 'mail',
     hydrated: false,
@@ -96,36 +135,12 @@ export const useLayoutStore = create<LayoutState>((set, get) => {
     cycleLayout: () => setLayout(nextLayoutMode(get().layout)),
     setDensity: setDensity,
     cycleDensity: () => setDensity(nextDensityMode(get().density)),
-    setSidebarCollapsed: persistedSetter('sidebarCollapsed'),
-    setSidebarWidth: persistedSetter('sidebarWidth', (size) =>
-      clampSize(size, SIDEBAR_WIDTH_RANGE),
-    ),
-    setListWidth: persistedSetter('listWidth', (size) => clampSize(size, LIST_WIDTH_RANGE)),
-    setReaderHeight: persistedSetter('readerHeight', (size) =>
-      clampSize(size, READER_HEIGHT_PERCENT_RANGE),
-    ),
     setAssistantOpen: (assistantOpen) => set({ assistantOpen }),
-    setAssistantWidth: persistedSetter('assistantWidth', (size) =>
-      clampSize(size, ASSISTANT_WIDTH_RANGE),
-    ),
-    setShowUnreadCounts: persistedSetter('showUnreadCounts'),
-    setShowSenderAvatars: persistedSetter('showSenderAvatars'),
     setZoomPercent: (zoomPercent) => {
       applyZoom(zoomPercent);
       set({ zoomPercent });
       persist('zoomPercent', zoomPercent);
     },
-    setSyncOnStartup: persistedSetter('syncOnStartup'),
-    setSyncIntervalSeconds: persistedSetter('syncIntervalSeconds'),
-    setAlwaysLoadRemoteImages: persistedSetter('alwaysLoadRemoteImages'),
-    setLogLevel: persistedSetter('logLevel'),
-    setPrefetchImageAttachments: persistedSetter('prefetchImageAttachments'),
-    setStartAtLogin: persistedSetter('startAtLogin'),
-    setCloseToTray: persistedSetter('closeToTray'),
-    setStartMinimized: persistedSetter('startMinimized'),
-    setDesktopNotifications: persistedSetter('desktopNotifications'),
-    setUpdateCheckInterval: persistedSetter('updateCheckInterval'),
-    setInstallUpdateOnQuit: persistedSetter('installUpdateOnQuit'),
     trustImageSender: (address) => {
       const next = addTrustedImageSender(get().allowedImageSenders, address);
       if (next) setAllowedImageSenders(next);

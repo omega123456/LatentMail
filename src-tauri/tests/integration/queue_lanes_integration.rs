@@ -27,17 +27,35 @@ async fn no_op_queue_executes_enqueued_work() {
     assert_eq!(queue.summary().pending, 0);
 }
 
-#[tokio::test(start_paused = true)]
-async fn pause_halts_work_and_resume_dispatches_all_three_lanes() {
-    let (started, mut receiver) = mpsc::unbounded_channel();
-    let executor: Executor = Arc::new(move |operation| {
+fn recording_executor(started: mpsc::UnboundedSender<String>) -> Executor {
+    Arc::new(move |operation| {
         let started = started.clone();
         Box::pin(async move {
             started.send(operation.id).unwrap();
             Ok(())
         })
-    });
-    let queue = QueueEngine::new(250, 250, executor);
+    })
+}
+
+fn gated_recording_executor(
+    started: mpsc::UnboundedSender<String>,
+    gate: Arc<tokio::sync::Notify>,
+) -> Executor {
+    Arc::new(move |operation| {
+        let started = started.clone();
+        let gate = Arc::clone(&gate);
+        Box::pin(async move {
+            started.send(operation.id).unwrap();
+            gate.notified().await;
+            Ok(())
+        })
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn pause_halts_work_and_resume_dispatches_all_three_lanes() {
+    let (started, mut receiver) = mpsc::unbounded_channel();
+    let queue = QueueEngine::new(250, 250, recording_executor(started));
     queue.pause();
     queue
         .enqueue(operation("background", Lane::Background, "one"))
@@ -71,17 +89,11 @@ async fn pause_halts_work_and_resume_dispatches_all_three_lanes() {
 async fn same_entity_serializes_while_other_entities_start() {
     let (started, mut receiver) = mpsc::unbounded_channel();
     let release = Arc::new(tokio::sync::Notify::new());
-    let gate = Arc::clone(&release);
-    let executor: Executor = Arc::new(move |operation| {
-        let started = started.clone();
-        let gate = Arc::clone(&gate);
-        Box::pin(async move {
-            started.send(operation.id).unwrap();
-            gate.notified().await;
-            Ok(())
-        })
-    });
-    let queue = QueueEngine::new(250, 250, executor);
+    let queue = QueueEngine::new(
+        250,
+        250,
+        gated_recording_executor(started, Arc::clone(&release)),
+    );
     queue
         .enqueue(operation("first", Lane::Interactive, "same"))
         .await

@@ -37,11 +37,21 @@ fn operation(
     }
 }
 
-#[tokio::test]
-async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
-    let (executor, mut started) = controllable_executor();
-    let (events, mut events_receiver) = events_channel();
-    let queue = QueueEngine::with_config(
+fn find_record<'a>(
+    lane: &'a latentmail_lib::queue::registry::LaneSnapshot,
+    id: &str,
+) -> &'a latentmail_lib::queue::registry::OperationRecord {
+    lane.operations
+        .iter()
+        .find(|record| record.id == id)
+        .expect("record present")
+}
+
+fn queue_with_events(
+    events: latentmail_lib::queue::QueueEventSink,
+    executor: Executor,
+) -> Arc<QueueEngine> {
+    QueueEngine::with_config(
         QueueConfig {
             rate_per_second: 250,
             burst: 250,
@@ -49,7 +59,14 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
             ..QueueConfig::default()
         },
         executor,
-    );
+    )
+}
+
+#[tokio::test]
+async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
+    let (executor, mut started) = controllable_executor();
+    let (events, mut events_receiver) = events_channel();
+    let queue = queue_with_events(events, executor);
 
     queue
         .enqueue(operation(OperationSeed {
@@ -65,20 +82,8 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
     wait_for_item_status(&mut events_receiver, "op-1", "active").await;
 
     let snapshot = queue.snapshot().await;
-    let account = snapshot
-        .iter()
-        .find(|account| account.account_id == "account-1")
-        .expect("account present");
-    let lane = account
-        .lanes
-        .iter()
-        .find(|lane| lane.lane == Lane::Background)
-        .expect("background lane present");
-    let record = lane
-        .operations
-        .iter()
-        .find(|record| record.id == "op-1")
-        .expect("record present");
+    let lane = find_lane(&snapshot, "account-1", Lane::Background);
+    let record = find_record(lane, "op-1");
     assert_eq!(record.account_id, "account-1");
     assert_eq!(record.lane, Lane::Background);
     assert_eq!(record.kind, OperationKind::Sync);
@@ -92,20 +97,8 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
     wait_for_item_status(&mut events_receiver, "op-1", "done").await;
 
     let snapshot = queue.snapshot().await;
-    let account = snapshot
-        .iter()
-        .find(|account| account.account_id == "account-1")
-        .expect("account present");
-    let lane = account
-        .lanes
-        .iter()
-        .find(|lane| lane.lane == Lane::Background)
-        .expect("background lane present");
-    let record = lane
-        .operations
-        .iter()
-        .find(|record| record.id == "op-1")
-        .expect("record present in history");
+    let lane = find_lane(&snapshot, "account-1", Lane::Background);
+    let record = find_record(lane, "op-1");
     assert_eq!(record.status, OperationStatus::Done);
     assert_eq!(lane.active, 0);
     assert_eq!(lane.backlog, 0);
@@ -268,21 +261,42 @@ fn find_lane<'a>(
         .expect("lane present")
 }
 
-#[tokio::test]
-async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_interactive() {
+async fn assert_account_pause_toggle(queue: &QueueEngine, account_id: &str) {
     use latentmail_lib::queue::PauseScope;
 
+    let scope = PauseScope::Account {
+        account_id: account_id.into(),
+    };
+    assert!(queue.set_paused(&scope, true).await);
+    let paused_snapshot = queue.snapshot().await;
+    assert_eq!(
+        find_lane(&paused_snapshot, account_id, Lane::Background).state,
+        LaneState::Paused
+    );
+    assert_eq!(
+        find_lane(&paused_snapshot, account_id, Lane::Interactive).state,
+        LaneState::Paused
+    );
+    queue.set_paused(&scope, false).await;
+}
+
+async fn wait_for_idle_traversal(queue: &QueueEngine, account_id: &str) -> bool {
+    for _ in 0..50 {
+        let snapshot = queue.snapshot().await;
+        let lane = find_lane(&snapshot, account_id, Lane::Traversal);
+        if lane.state == LaneState::Idle {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_interactive() {
     let (executor, mut started) = controllable_executor();
     let (events, _events_receiver) = events_channel();
-    let queue = QueueEngine::with_config(
-        QueueConfig {
-            rate_per_second: 250,
-            burst: 250,
-            events: events,
-            ..QueueConfig::default()
-        },
-        executor,
-    );
+    let queue = queue_with_events(events, executor);
 
     for index in 0..5 {
         let id = format!("interactive-{index}");
@@ -325,56 +339,23 @@ async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_inter
     assert_eq!(background_lane.state, LaneState::Blocked);
     assert_eq!(background_lane.backlog, 1);
 
-    let account_paused = queue
-        .set_paused(
-            &PauseScope::Account {
-                account_id: "account-1".into(),
-            },
-            true,
-        )
-        .await;
-    assert!(account_paused);
-    let paused_snapshot = queue.snapshot().await;
-    assert_eq!(
-        find_lane(&paused_snapshot, "account-1", Lane::Background).state,
-        LaneState::Paused
-    );
-    assert_eq!(
-        find_lane(&paused_snapshot, "account-1", Lane::Interactive).state,
-        LaneState::Paused
-    );
-    queue
-        .set_paused(
-            &PauseScope::Account {
-                account_id: "account-1".into(),
-            },
-            false,
-        )
-        .await;
+    assert_account_pause_toggle(&queue, "account-1").await;
 
     for release in releases.drain(..) {
         release.send(()).unwrap();
     }
     let (_, background_release) = started.recv().await.expect("background operation unblocks");
     background_release.send(()).unwrap();
-
     let (_, fifth_release) = started
         .recv()
         .await
         .expect("fifth interactive operation runs");
     fifth_release.send(()).unwrap();
 
-    let mut settled = false;
-    for _ in 0..50 {
-        let snapshot = queue.snapshot().await;
-        let lane = find_lane(&snapshot, "account-1", Lane::Traversal);
-        if lane.state == LaneState::Idle {
-            settled = true;
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    assert!(settled, "traversal lane settles to idle once no work runs");
+    assert!(
+        wait_for_idle_traversal(&queue, "account-1").await,
+        "traversal lane settles to idle once no work runs"
+    );
 }
 
 #[test]

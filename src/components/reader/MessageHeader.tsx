@@ -14,6 +14,72 @@ export type MessageSender = Participant;
 const participantButtonClass =
   'cursor-pointer truncate text-left focus-visible:outline-2 focus-visible:outline-primary';
 
+function MessageSenderLine({
+  sender,
+  badges,
+  onComposeTo,
+}: {
+  sender: MessageSender;
+  badges: MessageBadge[];
+  onComposeTo?: (participant: Participant) => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-baseline gap-2">
+      <button
+        type="button"
+        onClick={() => onComposeTo?.(sender)}
+        className={`${participantButtonClass} text-sender text-on-surface dark:text-dark-on-surface`}
+      >
+        {sender.name || sender.address}
+      </button>
+      <button
+        type="button"
+        onClick={() => onComposeTo?.(sender)}
+        className={`${participantButtonClass} text-body-sm text-secondary dark:text-dark-secondary`}
+      >
+        &lt;{sender.address}&gt;
+      </button>
+      <CopyButton value={sender.address} label={`Copy ${sender.address}`} />
+      {badges.length > 0 && (
+        <ul aria-label="Labels" className="flex flex-wrap items-center gap-1">
+          {badges.map((badge) => (
+            <Badge key={badge.id} badge={badge} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function MessageRecipientsLine({
+  recipients,
+  onComposeTo,
+}: {
+  recipients: Participant[];
+  onComposeTo?: (participant: Participant) => void;
+}) {
+  const copyLabel =
+    recipients.length === 1 ? `Copy ${recipients[0].address}` : 'Copy all recipient addresses';
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <button
+        type="button"
+        onClick={() => recipients[0] && onComposeTo?.(recipients[0])}
+        title={participantsTitle(recipients)}
+        className={`${participantButtonClass} text-snippet text-secondary dark:text-dark-secondary`}
+      >
+        to {formatParticipants(recipients)}
+      </button>
+      {recipients.length > 0 && (
+        <CopyButton
+          value={recipients.map((participant) => participant.address).join(', ')}
+          label={copyLabel}
+        />
+      )}
+    </div>
+  );
+}
+
 export function MessageHeader({
   sender,
   recipients,
@@ -40,50 +106,8 @@ export function MessageHeader({
           <Avatar size={AVATAR_SIZE.xxl} src={avatarSrc} label={senderLabel} ring />
         )}
         <div className="flex min-w-0 flex-col">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-2">
-            <button
-              type="button"
-              onClick={() => onComposeTo?.(sender)}
-              className={`${participantButtonClass} text-sender text-on-surface dark:text-dark-on-surface`}
-            >
-              {sender.name || sender.address}
-            </button>
-            <button
-              type="button"
-              onClick={() => onComposeTo?.(sender)}
-              className={`${participantButtonClass} text-body-sm text-secondary dark:text-dark-secondary`}
-            >
-              &lt;{sender.address}&gt;
-            </button>
-            <CopyButton value={sender.address} label={`Copy ${sender.address}`} />
-            {badges.length > 0 && (
-              <ul aria-label="Labels" className="flex flex-wrap items-center gap-1">
-                {badges.map((badge) => (
-                  <Badge key={badge.id} badge={badge} />
-                ))}
-              </ul>
-            )}
-          </div>
-          <div className="flex min-w-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={() => recipients[0] && onComposeTo?.(recipients[0])}
-              title={participantsTitle(recipients)}
-              className={`${participantButtonClass} text-snippet text-secondary dark:text-dark-secondary`}
-            >
-              to {formatParticipants(recipients)}
-            </button>
-            {recipients.length > 0 && (
-              <CopyButton
-                value={recipients.map((participant) => participant.address).join(', ')}
-                label={
-                  recipients.length === 1
-                    ? `Copy ${recipients[0].address}`
-                    : 'Copy all recipient addresses'
-                }
-              />
-            )}
-          </div>
+          <MessageSenderLine sender={sender} badges={badges} onComposeTo={onComposeTo} />
+          <MessageRecipientsLine recipients={recipients} onComposeTo={onComposeTo} />
         </div>
       </div>
       <time

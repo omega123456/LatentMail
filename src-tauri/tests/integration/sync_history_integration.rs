@@ -70,27 +70,39 @@ fn seed_message(
     }
 }
 
-fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEvents) {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let connection = storage.connection().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "me@example.com".into(),
-            display_name: String::new(),
-            avatar_url: None,
-            history_id: Some(40),
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
+fn test_account(history_id: Option<i64>) -> Account {
+    Account {
+        id: "account".into(),
+        email: "me@example.com".into(),
+        display_name: String::new(),
+        avatar_url: None,
+        history_id: history_id,
+        needs_reauthentication: false,
+        created_at: 1,
+        updated_at: 1,
+    }
+}
+
+fn add_label(connection: &rusqlite::Connection, message_id: &str, label_id: &str) {
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: message_id,
+        },
+        LabelMembershipChange {
+            label_id: label_id,
+            present: true,
         },
     )
     .unwrap();
+}
+
+fn seed_initial_database(connection: &rusqlite::Connection) {
+    AccountRepository::upsert(connection, &test_account(Some(40))).unwrap();
     for label_id in ["INBOX", "UNREAD", "STARRED"] {
         LabelRepository::upsert(
-            &connection,
+            connection,
             &Label {
                 account_id: "account".into(),
                 id: label_id.into(),
@@ -102,86 +114,32 @@ fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEven
         )
         .unwrap();
     }
-    MessageRepository::write_full_state(
-        &connection,
-        &seed_message(SeedMessage {
-            id: "existing1",
-            thread_id: "t1",
-            sent_at: 1,
-            unread: false,
-        }),
-    )
-    .unwrap();
-    MessageRepository::write_full_state(
-        &connection,
-        &seed_message(SeedMessage {
-            id: "existing2",
-            thread_id: "t1",
-            sent_at: 2,
-            unread: true,
-        }),
-    )
-    .unwrap();
-    MessageRepository::write_full_state(
-        &connection,
-        &seed_message(SeedMessage {
-            id: "existing3",
-            thread_id: "t3",
-            sent_at: 1,
-            unread: false,
-        }),
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "existing1",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "existing2",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "existing2",
-        },
-        LabelMembershipChange {
-            label_id: "UNREAD",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "existing3",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
-    ThreadRepository::recompute(&connection, "account", "t1").unwrap();
-    ThreadRepository::recompute(&connection, "account", "t3").unwrap();
+    let seeds = [
+        ("existing1", "t1", 1, false, &["INBOX"][..]),
+        ("existing2", "t1", 2, true, &["INBOX", "UNREAD"][..]),
+        ("existing3", "t3", 1, false, &["INBOX"][..]),
+    ];
+    for (id, thread_id, sent_at, unread, labels) in seeds {
+        let message = seed_message(SeedMessage {
+            id: id,
+            thread_id: thread_id,
+            sent_at: sent_at,
+            unread: unread,
+        });
+        MessageRepository::write_full_state(connection, &message).unwrap();
+        for label_id in labels {
+            add_label(connection, id, label_id);
+        }
+    }
+    ThreadRepository::recompute(connection, "account", "t1").unwrap();
+    ThreadRepository::recompute(connection, "account", "t3").unwrap();
+}
+
+fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEvents) {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_initial_database(&connection);
     drop(connection);
 
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -242,6 +200,52 @@ async fn mount_history_fixture(server: &MockServer) {
         .await;
 }
 
+fn assert_sync_complete_event(events: &FiredEvents, expected_changed: bool) {
+    let fired = events.lock().unwrap().clone();
+    let complete = fired
+        .iter()
+        .find(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE)
+        .map(|(_, payload)| payload)
+        .expect("sync://complete event emitted");
+    assert_eq!(
+        complete.get("changed"),
+        Some(&serde_json::json!(expected_changed))
+    );
+    let completed_at = complete
+        .get("completedAt")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap();
+    assert!(chrono::DateTime::from_timestamp_millis(completed_at)
+        .is_some_and(|moment| moment > chrono::DateTime::UNIX_EPOCH));
+}
+
+fn has_event(events: &FiredEvents, expected_name: &str) -> bool {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(name, _)| name == expected_name)
+}
+
+fn arrival_subjects(events: &FiredEvents) -> Vec<String> {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(name, _)| name == latentmail_lib::events::MAIL_NEW)
+        .flat_map(|(_, payload)| payload["arrivals"].as_array().unwrap().iter())
+        .map(|arrival| arrival["subject"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+async fn mount_empty_labels(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
+        .mount(server)
+        .await;
+}
+
 #[tokio::test]
 async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint() {
     let server = MockServer::start().await;
@@ -261,10 +265,13 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     assert!(MessageRepository::get(&connection, "account", "new1")
         .unwrap()
         .is_some());
-    let t2 = ThreadRepository::get(&connection, "account", "t2")
-        .unwrap()
-        .unwrap();
-    assert_eq!(t2.message_count, 1);
+    assert_eq!(
+        ThreadRepository::get(&connection, "account", "t2")
+            .unwrap()
+            .unwrap()
+            .message_count,
+        1
+    );
     assert!(
         MessageRepository::get(&connection, "account", "existing1")
             .unwrap()
@@ -280,51 +287,88 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     let t1 = ThreadRepository::get(&connection, "account", "t1")
         .unwrap()
         .unwrap();
-    assert!(t1.is_starred);
-    assert!(!t1.is_unread);
+    assert!(t1.is_starred && !t1.is_unread);
     assert!(MessageRepository::get(&connection, "account", "existing3")
         .unwrap()
         .is_none());
     assert!(ThreadRepository::get(&connection, "account", "t3")
         .unwrap()
         .is_none());
-    let account = AccountRepository::get(&connection, "account")
-        .unwrap()
-        .unwrap();
-    assert_eq!(account.history_id, Some(50));
-    assert_eq!(catch_ups.load(Ordering::SeqCst), 1);
-
-    let fired = events.lock().unwrap().clone();
-    assert!(fired
-        .iter()
-        .any(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE));
-    assert!(fired
-        .iter()
-        .any(|(name, _)| name == latentmail_lib::events::MAIL_NEW));
-    let complete = fired
-        .iter()
-        .find(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE)
-        .map(|(_, payload)| payload);
     assert_eq!(
-        complete.and_then(|payload| payload.get("changed")),
-        Some(&serde_json::json!(true))
+        AccountRepository::get(&connection, "account")
+            .unwrap()
+            .unwrap()
+            .history_id,
+        Some(50)
     );
-    let completed_at = complete
-        .and_then(|payload| payload.get("completedAt"))
-        .and_then(serde_json::Value::as_i64)
-        .unwrap();
-    assert!(chrono::DateTime::from_timestamp_millis(completed_at)
-        .is_some_and(|moment| moment > chrono::DateTime::UNIX_EPOCH));
+    assert_eq!(catch_ups.load(Ordering::SeqCst), 1);
+    assert!(has_event(&events, latentmail_lib::events::MAIL_NEW));
+    assert_sync_complete_event(&events, true);
 }
 
-#[tokio::test]
-async fn incremental_sync_reports_only_unread_inbox_arrivals() {
-    let server = MockServer::start().await;
+struct ArrivalCase {
+    id: &'static str,
+    thread_id: &'static str,
+    labels: &'static [&'static str],
+    from: &'static str,
+    subject: &'static str,
+    internal_date: &'static str,
+}
+
+fn arrival_cases() -> Vec<ArrivalCase> {
+    vec![
+        ArrivalCase {
+            id: "arrival",
+            thread_id: "t2",
+            labels: &["INBOX", "UNREAD"],
+            from: "Carol <carol@example.com>",
+            subject: "New mail",
+            internal_date: "3000",
+        },
+        ArrivalCase {
+            id: "sentcopy",
+            thread_id: "t4",
+            labels: &["SENT"],
+            from: "me@example.com",
+            subject: "My own reply",
+            internal_date: "3000",
+        },
+        ArrivalCase {
+            id: "alreadyread",
+            thread_id: "t5",
+            labels: &["INBOX"],
+            from: "Dave <dave@example.com>",
+            subject: "Read on my phone",
+            internal_date: "3000",
+        },
+        ArrivalCase {
+            id: "stale",
+            thread_id: "t6",
+            labels: &["INBOX", "UNREAD"],
+            from: "Eve <eve@example.com>",
+            subject: "Old mail",
+            internal_date: "-600000",
+        },
+    ]
+}
+
+async fn mount_arrival_message(server: &MockServer, case: ArrivalCase) {
     Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
+        .and(path(format!("/users/me/messages/{}", case.id)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": case.id, "threadId": case.thread_id, "historyId": "50", "labelIds": case.labels,
+            "snippet": "s", "internalDate": case.internal_date,
+            "payload": {"mimeType": "text/plain", "headers": [
+                {"name": "From", "value": case.from},
+                {"name": "Subject", "value": case.subject}
+            ], "body": {"data": "bmV3"}}
+        })))
+        .mount(server)
         .await;
+}
+
+async fn mount_arrival_filter_mocks(server: &MockServer) {
+    mount_empty_labels(server).await;
     Mock::given(method("GET"))
         .and(path("/users/me/history"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -339,55 +383,17 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
                 ]
             }]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
-    for (id, thread, labels, from, subject, internal_date) in [
-        (
-            "arrival",
-            "t2",
-            serde_json::json!(["INBOX", "UNREAD"]),
-            "Carol <carol@example.com>",
-            "New mail",
-            "3000",
-        ),
-        (
-            "sentcopy",
-            "t4",
-            serde_json::json!(["SENT"]),
-            "me@example.com",
-            "My own reply",
-            "3000",
-        ),
-        (
-            "alreadyread",
-            "t5",
-            serde_json::json!(["INBOX"]),
-            "Dave <dave@example.com>",
-            "Read on my phone",
-            "3000",
-        ),
-        (
-            "stale",
-            "t6",
-            serde_json::json!(["INBOX", "UNREAD"]),
-            "Eve <eve@example.com>",
-            "Old mail",
-            "-600000",
-        ),
-    ] {
-        Mock::given(method("GET"))
-            .and(path(format!("/users/me/messages/{id}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": id, "threadId": thread, "historyId": "50", "labelIds": labels, "snippet": "s",
-                "internalDate": internal_date,
-                "payload": {"mimeType": "text/plain", "headers": [
-                    {"name": "From", "value": from},
-                    {"name": "Subject", "value": subject}
-                ], "body": {"data": "bmV3"}}
-            })))
-            .mount(&server)
-            .await;
+    for case in arrival_cases() {
+        mount_arrival_message(server, case).await;
     }
+}
+
+#[tokio::test]
+async fn incremental_sync_reports_only_unread_inbox_arrivals() {
+    let server = MockServer::start().await;
+    mount_arrival_filter_mocks(&server).await;
 
     let (engine, _storage, _directory, events) = engine_with_seed();
     engine
@@ -409,21 +415,14 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
     );
 }
 
-#[tokio::test]
-async fn history_does_not_notify_again_for_unread_mail_saved_by_the_probe() {
-    let server = MockServer::start().await;
-    let (engine, storage, _directory, events) = engine_with_seed();
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
-        .await;
+async fn mount_probe_and_reply_messages(server: &MockServer) {
+    mount_empty_labels(server).await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "messages": [{"id": "probed", "threadId": "t2"}]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     for id in ["probed", "reply"] {
         Mock::given(method("GET"))
@@ -435,24 +434,21 @@ async fn history_does_not_notify_again_for_unread_mail_saved_by_the_probe() {
                     {"name": "Subject", "value": id}
                 ], "body": {"data": "bmV3"}}
             })))
-            .mount(&server)
+            .mount(server)
             .await;
     }
+}
+
+#[tokio::test]
+async fn history_does_not_notify_again_for_unread_mail_saved_by_the_probe() {
+    let server = MockServer::start().await;
+    let (engine, storage, _directory, events) = engine_with_seed();
+    mount_probe_and_reply_messages(&server).await;
     engine
         .probe_only("account", GmailClient::with_base_url("token", server.uri()))
         .await
         .unwrap();
-    let arrival_subjects = || {
-        events
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(name, _)| name == latentmail_lib::events::MAIL_NEW)
-            .flat_map(|(_, payload)| payload["arrivals"].as_array().unwrap().iter())
-            .map(|arrival| arrival["subject"].as_str().unwrap().to_owned())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(arrival_subjects(), ["probed"]);
+    assert_eq!(arrival_subjects(&events), ["probed"]);
     Mock::given(method("GET"))
         .and(path("/users/me/history"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -472,19 +468,18 @@ async fn history_does_not_notify_again_for_unread_mail_saved_by_the_probe() {
             .run_sync("account", GmailClient::with_base_url("token", server.uri()))
             .await
             .unwrap();
-        assert_eq!(arrival_subjects(), ["probed", "reply"]);
+        assert_eq!(arrival_subjects(&events), ["probed", "reply"]);
     }
     engine
         .probe_only("account", GmailClient::with_base_url("token", server.uri()))
         .await
         .unwrap();
-    assert_eq!(arrival_subjects(), ["probed", "reply"]);
+    assert_eq!(arrival_subjects(&events), ["probed", "reply"]);
     let connection = storage.connection().unwrap();
     let message = MessageRepository::get(&connection, "account", "probed")
         .unwrap()
         .unwrap();
-    assert!(message.is_unread);
-    assert!(message.is_starred);
+    assert!(message.is_unread && message.is_starred);
     assert_eq!(
         AccountRepository::get(&connection, "account")
             .unwrap()
@@ -494,21 +489,15 @@ async fn history_does_not_notify_again_for_unread_mail_saved_by_the_probe() {
     );
 }
 
-#[tokio::test]
-async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
-        .await;
+async fn mount_lagging_inbox_mocks(server: &MockServer) {
+    mount_empty_labels(server).await;
     Mock::given(method("GET"))
         .and(path("/users/me/history"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"historyId": "70", "history": []})),
         )
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
@@ -518,7 +507,7 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
                 {"id": "existing1", "threadId": "t1"}
             ]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/existing1"))
@@ -530,7 +519,7 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
                 {"name": "Subject", "value": "Should not have been fetched"}
             ], "body": {"data": "bm8"}}
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/lagging"))
@@ -542,13 +531,20 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
                 {"name": "Subject", "value": "Arrived before history said so"}
             ], "body": {"data": "bGF0ZQ"}}
         })))
-        .mount(&server)
+        .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
+    let server = MockServer::start().await;
+    mount_lagging_inbox_mocks(&server).await;
 
     let (engine, storage, _directory, events) = engine_with_seed();
-    let client = GmailClient::with_base_url("token", server.uri());
-
-    engine.run_sync("account", client).await.unwrap();
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
 
     let connection = storage.connection().unwrap();
     let message = MessageRepository::get(&connection, "account", "lagging")
@@ -565,11 +561,7 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
             .subject,
         "Existing"
     );
-    assert!(events
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|(name, _)| name == latentmail_lib::events::MAIL_NEW));
+    assert!(has_event(&events, latentmail_lib::events::MAIL_NEW));
     assert_eq!(
         AccountRepository::get(&connection, "account")
             .unwrap()
@@ -577,25 +569,15 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
             .history_id,
         Some(40)
     );
-
     drop(connection);
+
     events.lock().unwrap().clear();
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
         .unwrap();
-    let second = events.lock().unwrap().clone();
-    assert!(!second
-        .iter()
-        .any(|(name, _)| name == latentmail_lib::events::MAIL_NEW));
-    let complete = second
-        .iter()
-        .find(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE)
-        .map(|(_, payload)| payload);
-    assert_eq!(
-        complete.and_then(|payload| payload.get("changed")),
-        Some(&serde_json::json!(false))
-    );
+    assert!(!has_event(&events, latentmail_lib::events::MAIL_NEW));
+    assert_sync_complete_event(&events, false);
 }
 
 #[tokio::test]
@@ -659,6 +641,37 @@ async fn a_history_record_carrying_only_messages_is_not_treated_as_a_no_op() {
     );
 }
 
+async fn mount_resumed_reconciliation_mocks(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(404))
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "historyId": "60",
+            "history": [{
+                "id": "60",
+                "messagesAdded": [{"message": {"id": "late", "threadId": "late-thread"}}]
+            }]
+        })))
+        .mount(server)
+        .await;
+    mount_empty_labels(server).await;
+    for (id, thread_id) in [("reconciled", "reconciled-thread"), ("late", "late-thread")] {
+        Mock::given(method("GET"))
+            .and(path(format!("/users/me/messages/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": id, "threadId": thread_id, "historyId": "60", "labelIds": [],
+                "internalDate": "1000", "payload": {"headers": []}
+            })))
+            .mount(server)
+            .await;
+    }
+}
+
 #[tokio::test]
 async fn resumed_reconciliation_leaves_later_history_for_the_next_incremental_sync() {
     let (engine, storage, _directory, _events) = engine_with_seed();
@@ -686,38 +699,7 @@ async fn resumed_reconciliation_leaves_later_history_for_the_next_incremental_sy
     drop(connection);
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/history"))
-        .respond_with(ResponseTemplate::new(404))
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/history"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "historyId": "60",
-            "history": [{
-                "id": "60",
-                "messagesAdded": [{"message": {"id": "late", "threadId": "late-thread"}}]
-            }]
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
-        .await;
-    for (id, thread_id) in [("reconciled", "reconciled-thread"), ("late", "late-thread")] {
-        Mock::given(method("GET"))
-            .and(path(format!("/users/me/messages/{id}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": id, "threadId": thread_id, "historyId": "60", "labelIds": [],
-                "internalDate": "1000", "payload": {"headers": []}
-            })))
-            .mount(&server)
-            .await;
-    }
+    mount_resumed_reconciliation_mocks(&server).await;
 
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
@@ -767,25 +749,39 @@ async fn incremental_sync_does_not_advance_the_checkpoint_on_failure() {
     assert_eq!(account.history_id, Some(40));
 }
 
+async fn mount_stale_history_mocks(server: &MockServer) {
+    mount_empty_labels(server).await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "historyId": "60",
+            "history": [{
+                "id": "60",
+                "messagesAdded": [{"message": {"id": "raced", "threadId": "t1"}}]
+            }]
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/raced"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "raced", "threadId": "t1", "historyId": "60", "labelIds": ["INBOX"], "snippet": "stale",
+            "internalDate": "1000",
+            "payload": {"mimeType": "text/plain", "headers": [
+                {"name": "From", "value": "Stale <stale@example.com>"},
+                {"name": "Subject", "value": "Stale fetch"}
+            ], "body": {"data": "c3RhbGU"}}
+        })))
+        .mount(server)
+        .await;
+}
+
 #[tokio::test]
 async fn a_stale_full_state_write_from_history_is_rejected_by_the_existing_gate() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "me@example.com".into(),
-            display_name: String::new(),
-            avatar_url: None,
-            history_id: Some(40),
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
+    AccountRepository::upsert(&connection, &test_account(Some(40))).unwrap();
     let mut ahead = seed_message(SeedMessage {
         id: "raced",
         thread_id: "t1",
@@ -799,34 +795,7 @@ async fn a_stale_full_state_write_from_history_is_rejected_by_the_existing_gate(
     drop(connection);
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/history"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "historyId": "60",
-            "history": [{
-                "id": "60",
-                "messagesAdded": [{"message": {"id": "raced", "threadId": "t1"}}]
-            }]
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages/raced"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "raced", "threadId": "t1", "historyId": "60", "labelIds": ["INBOX"], "snippet": "stale",
-            "internalDate": "1000",
-            "payload": {"mimeType": "text/plain", "headers": [
-                {"name": "From", "value": "Stale <stale@example.com>"},
-                {"name": "Subject", "value": "Stale fetch"}
-            ], "body": {"data": "c3RhbGU"}}
-        })))
-        .mount(&server)
-        .await;
+    mount_stale_history_mocks(&server).await;
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
@@ -847,15 +816,23 @@ async fn a_stale_full_state_write_from_history_is_rejected_by_the_existing_gate(
     assert_eq!(message.subject, "Already ahead");
 }
 
-#[tokio::test(start_paused = true)]
-async fn changing_the_poll_interval_takes_effect_without_waiting_out_the_old_one() {
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let scheduler = SyncScheduler::start(Duration::from_secs(600), false, move || {
+fn channel_scheduler(
+    interval: Duration,
+    immediate: bool,
+) -> (Arc<SyncScheduler>, tokio::sync::mpsc::UnboundedReceiver<()>) {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let scheduler = SyncScheduler::start(interval, immediate, move || {
         let sender = sender.clone();
         async move {
             let _ = sender.send(());
         }
     });
+    (scheduler, receiver)
+}
+
+#[tokio::test(start_paused = true)]
+async fn changing_the_poll_interval_takes_effect_without_waiting_out_the_old_one() {
+    let (scheduler, mut receiver) = channel_scheduler(Duration::from_secs(600), false);
 
     tokio::time::advance(Duration::from_secs(60)).await;
     assert!(receiver.try_recv().is_err(), "should not have ticked yet");
@@ -870,13 +847,7 @@ async fn changing_the_poll_interval_takes_effect_without_waiting_out_the_old_one
 
 #[tokio::test(start_paused = true)]
 async fn sync_on_startup_disabled_genuinely_skips_the_immediate_tick() {
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let _scheduler = SyncScheduler::start(Duration::from_secs(600), false, move || {
-        let sender = sender.clone();
-        async move {
-            let _ = sender.send(());
-        }
-    });
+    let (_scheduler, mut receiver) = channel_scheduler(Duration::from_secs(600), false);
 
     tokio::task::yield_now().await;
     assert!(
@@ -887,13 +858,7 @@ async fn sync_on_startup_disabled_genuinely_skips_the_immediate_tick() {
 
 #[tokio::test(start_paused = true)]
 async fn sync_on_startup_enabled_ticks_immediately() {
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let _scheduler = SyncScheduler::start(Duration::from_secs(600), true, move || {
-        let sender = sender.clone();
-        async move {
-            let _ = sender.send(());
-        }
-    });
+    let (_scheduler, mut receiver) = channel_scheduler(Duration::from_secs(600), true);
 
     assert!(
         receiver.recv().await.is_some(),
@@ -901,16 +866,54 @@ async fn sync_on_startup_enabled_ticks_immediately() {
     );
 }
 
-#[tokio::test]
-async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
-    let server = MockServer::start().await;
+struct StartupFixture {
+    application: tauri::App<tauri::test::MockRuntime>,
+    database_path: std::path::PathBuf,
+    storage: Storage,
+    _home: tempfile::TempDir,
+}
+
+fn prepare_startup_fixture() -> StartupFixture {
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    std::env::set_var("APPDATA", home.path());
+    std::env::set_var("XDG_DATA_HOME", home.path());
+
+    let application = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
+        .visible(false)
+        .build()
+        .unwrap();
+    let handle = application.handle();
+
+    let directory = application.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    let database_path = directory.join("latentmail.sqlite");
+    let storage = Storage::open(&database_path).unwrap();
+    application.manage(storage.clone());
+    latentmail_lib::settings::initialize(handle, storage.clone()).unwrap();
+    latentmail_lib::auth::initialize(handle, storage.clone()).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(&connection, &test_account(None)).unwrap();
+    drop(connection);
+    StartupFixture {
+        application: application,
+        database_path: database_path,
+        storage: storage,
+        _home: home,
+    }
+}
+
+async fn mount_startup_sync_mocks(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": "fresh-access-token",
             "token_type": "Bearer",
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
@@ -920,80 +923,34 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
             "threadsTotal": 0,
             "historyId": "100"
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "labels": [{"id":"INBOX","name":"Inbox","type":"system","messagesTotal":0,"messagesUnread":0}]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(serde_json::json!({ "messages": [] })),
         )
-        .mount(&server)
+        .mount(server)
         .await;
+}
 
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
-        "LATENTMAIL_GOOGLE_TOKEN_URL",
-        format!("{}/token", server.uri()),
-    );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
-    let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
-
-    let application = tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap();
-    tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
-        .visible(false)
-        .build()
-        .unwrap();
-    let handle = application.handle();
-
-    let directory = application.path().app_data_dir().unwrap();
-    std::fs::create_dir_all(&directory).unwrap();
-    let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
-    application.manage(seed_storage.clone());
-    latentmail_lib::settings::initialize(handle, seed_storage.clone()).unwrap();
-    latentmail_lib::auth::initialize(handle, seed_storage.clone()).unwrap();
-    let connection = seed_storage.connection().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "me@example.com".into(),
-            display_name: String::new(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
-    drop(connection);
-    latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
-
-    latentmail_lib::sync::initialize(handle, seed_storage).unwrap();
-
-    let poll_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+async fn wait_for_history_id(storage: &Storage, expected: i64) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let history_id = {
-            let connection = poll_storage.connection().unwrap();
-            AccountRepository::get(&connection, "account")
-                .unwrap()
-                .and_then(|account| account.history_id)
-        };
-        if history_id == Some(100) {
-            break;
+        let connection = storage.connection().unwrap();
+        let history_id = AccountRepository::get(&connection, "account")
+            .unwrap()
+            .and_then(|account| account.history_id);
+        drop(connection);
+        if history_id == Some(expected) {
+            return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -1003,94 +960,17 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
     }
 }
 
-#[tokio::test]
-async fn startup_recovery_marks_an_interrupted_send_uncertain_and_requeues_an_interrupted_draft() {
-    let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
-
-    let application = tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap();
-    tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
-        .visible(false)
-        .build()
-        .unwrap();
-    let handle = application.handle();
-
-    let directory = application.path().app_data_dir().unwrap();
-    std::fs::create_dir_all(&directory).unwrap();
-    let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
-    application.manage(seed_storage.clone());
-    latentmail_lib::settings::initialize(handle, seed_storage.clone()).unwrap();
-    latentmail_lib::auth::initialize(handle, seed_storage.clone()).unwrap();
-    let connection = seed_storage.connection().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "me@example.com".into(),
-            display_name: String::new(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
-    OperationRepository::upsert(
-        &connection,
-        &Operation {
-            id: "op-send-interrupted".into(),
-            account_id: "account".into(),
-            lane: "interactive".into(),
-            kind: "send".into(),
-            entity_key: "send:session".into(),
-            payload: "{}".into(),
-            status: "active".into(),
-            attempts: 0,
-            next_attempt_at: None,
-            error: None,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
-    OperationRepository::upsert(
-        &connection,
-        &Operation {
-            id: "op-draft-interrupted".into(),
-            account_id: "account".into(),
-            lane: "interactive".into(),
-            kind: "draft".into(),
-            entity_key: "draft:session".into(),
-            payload: "{}".into(),
-            status: "active".into(),
-            attempts: 0,
-            next_attempt_at: None,
-            error: None,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
-    drop(connection);
-    latentmail_lib::sync::initialize(handle, seed_storage).unwrap();
-
-    let poll_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+async fn wait_for_operation_status(storage: &Storage, id: &str, expected: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let send_status = {
-            let connection = poll_storage.connection().unwrap();
-            OperationRepository::get(&connection, "op-send-interrupted")
-                .unwrap()
-                .unwrap()
-                .status
-        };
-        if send_status == "failed" {
-            break;
+        let connection = storage.connection().unwrap();
+        let status = OperationRepository::get(&connection, id)
+            .unwrap()
+            .unwrap()
+            .status;
+        drop(connection);
+        if status == expected {
+            return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -1098,6 +978,64 @@ async fn startup_recovery_marks_an_interrupted_send_uncertain_and_requeues_an_in
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+fn active_operation(id: &str, kind: &str, entity_key: &str) -> Operation {
+    Operation {
+        id: id.into(),
+        account_id: "account".into(),
+        lane: "interactive".into(),
+        kind: kind.into(),
+        entity_key: entity_key.into(),
+        payload: "{}".into(),
+        status: "active".into(),
+        attempts: 0,
+        next_attempt_at: None,
+        error: None,
+        created_at: 1,
+        updated_at: 1,
+    }
+}
+
+#[tokio::test]
+async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
+    let server = MockServer::start().await;
+    mount_startup_sync_mocks(&server).await;
+
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+
+    let fixture = prepare_startup_fixture();
+    latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
+    latentmail_lib::sync::initialize(fixture.application.handle(), fixture.storage).unwrap();
+
+    let poll_storage = Storage::open(&fixture.database_path).unwrap();
+    wait_for_history_id(&poll_storage, 100).await;
+}
+
+#[tokio::test]
+async fn startup_recovery_marks_an_interrupted_send_uncertain_and_requeues_an_interrupted_draft() {
+    let fixture = prepare_startup_fixture();
+    let connection = fixture.storage.connection().unwrap();
+    OperationRepository::upsert(
+        &connection,
+        &active_operation("op-send-interrupted", "send", "send:session"),
+    )
+    .unwrap();
+    OperationRepository::upsert(
+        &connection,
+        &active_operation("op-draft-interrupted", "draft", "draft:session"),
+    )
+    .unwrap();
+    drop(connection);
+    latentmail_lib::sync::initialize(fixture.application.handle(), fixture.storage).unwrap();
+
+    let poll_storage = Storage::open(&fixture.database_path).unwrap();
+    wait_for_operation_status(&poll_storage, "op-send-interrupted", "failed").await;
 
     let connection = poll_storage.connection().unwrap();
     let send_op = OperationRepository::get(&connection, "op-send-interrupted")

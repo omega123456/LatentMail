@@ -141,23 +141,23 @@ impl Storage {
     }
 
     pub async fn vacuum(&self) -> Result<u64, StorageError> {
-        self.run(|connection| {
-            let mode: i64 = connection.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
-            if mode != AUTO_VACUUM_INCREMENTAL {
-                tracing::warn!(
-                    target: "storage",
-                    mode,
-                    "database is not in incremental auto-vacuum mode, no pages can be reclaimed"
-                );
-                return Ok(0);
-            }
-            let reclaimed: u64 =
-                connection.query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
-            let mut statement = connection.prepare("PRAGMA incremental_vacuum(0)")?;
-            let mut rows = statement.query([])?;
-            while rows.next()?.is_some() {}
-            Ok(reclaimed)
-        })
-        .await
+        self.run(run_incremental_vacuum).await
     }
+}
+
+fn run_incremental_vacuum(connection: &Connection) -> rusqlite::Result<u64> {
+    let mode: i64 = connection.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
+    if mode != AUTO_VACUUM_INCREMENTAL {
+        tracing::warn!(
+            target: "storage",
+            mode,
+            "database is not in incremental auto-vacuum mode, no pages can be reclaimed"
+        );
+        return Ok(0);
+    }
+    let reclaimed: u64 = connection.query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+    let mut statement = connection.prepare("PRAGMA incremental_vacuum(0)")?;
+    let mut rows = statement.query([])?;
+    while rows.next()?.is_some() {}
+    Ok(reclaimed)
 }

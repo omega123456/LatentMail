@@ -71,18 +71,74 @@ const DOWNLOAD_ARIA_PREFIX: Record<DownloadState, string> = {
   idle: 'Download',
 };
 
-export function ReceivedAttachmentChip({
+function useAttachmentDownload(input: {
+  accountId: string | null;
+  messageId: string;
+  attachment: MessageAttachment;
+}) {
+  const [downloadState, setDownloadState] = useState<DownloadState>('idle');
+
+  const download = async () => {
+    if (!input.accountId || downloadState === 'downloading') return;
+    const destination = await invoke('plugin:dialog|save', {
+      options: { defaultPath: sanitizeFilename(input.attachment.filename) },
+    });
+    if (!destination) return;
+    setDownloadState('downloading');
+    try {
+      await invoke('save_attachment_to_path', {
+        accountId: input.accountId,
+        messageId: input.messageId,
+        attachmentId: input.attachment.id,
+        destination: destination,
+      });
+      setDownloadState('idle');
+    } catch {
+      setDownloadState('failed');
+    }
+  };
+
+  return { downloadState: downloadState, download: download };
+}
+
+function AttachmentDownloadButton({
+  downloadState,
+  filename,
+  onDownload,
+}: {
+  downloadState: DownloadState;
+  filename: string;
+  onDownload: () => void;
+}) {
+  const downloading = downloadState === 'downloading';
+  return (
+    <button
+      type="button"
+      aria-label={`${DOWNLOAD_ARIA_PREFIX[downloadState]} ${filename}`}
+      disabled={downloading}
+      onClick={onDownload}
+      className="relative z-10 shrink-0 cursor-pointer rounded-chip p-1 text-secondary hover:bg-surface-container hover:text-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary disabled:cursor-not-allowed dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface"
+    >
+      {downloading ? (
+        <Loader2 className="animate-spin" size={ICON_SIZE.sm} aria-hidden="true" />
+      ) : (
+        <Download size={ICON_SIZE.sm} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+function AttachmentThumbnailWell({
   accountId,
   messageId,
   attachment,
-  onPreview,
+  downloadState,
 }: {
   accountId: string | null;
   messageId: string;
   attachment: MessageAttachment;
-  onPreview: () => void;
+  downloadState: DownloadState;
 }) {
-  const [downloadState, setDownloadState] = useState<DownloadState>('idle');
   const prefetch = useLayoutStore((layout) => layout.prefetchImageAttachments);
   const { family, Icon, coloured, inkClassName, wellClassName } = resolveMimeIcon(
     attachment.mimeType,
@@ -98,33 +154,43 @@ export function ReceivedAttachmentChip({
   const thumbnailPath =
     wantsThumbnail && cachedQuery.isSuccess ? cachedQuery.data.displayPath : null;
   const thumbnailLoading = wantsThumbnail && cachedQuery.isPending;
-  const downloading = downloadState === 'downloading';
-  const failed = downloadState === 'failed';
 
-  const download = async () => {
-    if (!accountId || downloading) return;
-    const destination = await invoke('plugin:dialog|save', {
-      options: { defaultPath: sanitizeFilename(attachment.filename) },
-    });
-    if (!destination) return;
-    setDownloadState('downloading');
-    try {
-      await invoke('save_attachment_to_path', {
-        accountId: accountId,
-        messageId: messageId,
-        attachmentId: attachment.id,
-        destination: destination,
-      });
-      setDownloadState('idle');
-    } catch {
-      setDownloadState('failed');
-    }
-  };
+  return (
+    <div
+      aria-hidden="true"
+      className={`relative size-7 shrink-0 overflow-hidden rounded-chip ${chipWellClass({ downloadState, coloured, wellClassName, inkClassName })} grid place-items-center ${thumbnailLoading ? 'animate-pulse' : ''}`}
+    >
+      {renderWellContent({
+        downloadState: downloadState,
+        thumbnailPath: thumbnailPath,
+        thumbnailLoading: thumbnailLoading,
+        Icon: Icon,
+      })}
+    </div>
+  );
+}
+
+export function ReceivedAttachmentChip({
+  accountId,
+  messageId,
+  attachment,
+  onPreview,
+}: {
+  accountId: string | null;
+  messageId: string;
+  attachment: MessageAttachment;
+  onPreview: () => void;
+}) {
+  const { downloadState, download } = useAttachmentDownload({ accountId, messageId, attachment });
+  const subtitleTone =
+    downloadState === 'failed'
+      ? 'text-error dark:text-dark-error'
+      : 'text-outline dark:text-dark-outline';
 
   return (
     <div
       data-testid={`received-attachment-chip-${attachment.id}`}
-      className={`relative flex max-w-56 items-center gap-stack-gap-sm rounded-chip border border-outline-variant bg-surface-container-low p-1.5 shadow-segment dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:shadow-none ${downloading ? 'opacity-60' : ''}`}
+      className={`relative flex max-w-56 items-center gap-stack-gap-sm rounded-chip border border-outline-variant bg-surface-container-low p-1.5 shadow-segment dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:shadow-none ${downloadState === 'downloading' ? 'opacity-60' : ''}`}
     >
       <button
         type="button"
@@ -132,17 +198,12 @@ export function ReceivedAttachmentChip({
         onClick={onPreview}
         className="absolute inset-0 z-10 cursor-pointer rounded-chip focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
       />
-      <div
-        aria-hidden="true"
-        className={`relative size-7 shrink-0 overflow-hidden rounded-chip ${chipWellClass({ downloadState, coloured, wellClassName, inkClassName })} grid place-items-center ${thumbnailLoading ? 'animate-pulse' : ''}`}
-      >
-        {renderWellContent({
-          downloadState: downloadState,
-          thumbnailPath: thumbnailPath,
-          thumbnailLoading: thumbnailLoading,
-          Icon: Icon,
-        })}
-      </div>
+      <AttachmentThumbnailWell
+        accountId={accountId}
+        messageId={messageId}
+        attachment={attachment}
+        downloadState={downloadState}
+      />
       <div className="min-w-0 flex-1">
         <p
           title={attachment.filename}
@@ -150,27 +211,15 @@ export function ReceivedAttachmentChip({
         >
           {attachment.filename}
         </p>
-        <p
-          className={`truncate text-label-sm ${
-            failed ? 'text-error dark:text-dark-error' : 'text-outline dark:text-dark-outline'
-          }`}
-        >
+        <p className={`truncate text-label-sm ${subtitleTone}`}>
           {downloadSubtitle(downloadState, attachment.size)}
         </p>
       </div>
-      <button
-        type="button"
-        aria-label={`${DOWNLOAD_ARIA_PREFIX[downloadState]} ${attachment.filename}`}
-        disabled={downloading}
-        onClick={() => void download()}
-        className="relative z-10 shrink-0 cursor-pointer rounded-chip p-1 text-secondary hover:bg-surface-container hover:text-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary disabled:cursor-not-allowed dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface"
-      >
-        {downloading ? (
-          <Loader2 className="animate-spin" size={ICON_SIZE.sm} aria-hidden="true" />
-        ) : (
-          <Download size={ICON_SIZE.sm} aria-hidden="true" />
-        )}
-      </button>
+      <AttachmentDownloadButton
+        downloadState={downloadState}
+        filename={attachment.filename}
+        onDownload={() => void download()}
+      />
     </div>
   );
 }

@@ -6,6 +6,63 @@ import type { Account, AccountQueueSnapshot, Lane } from '@/lib/types/ipc';
 import { QueueLaneRow } from './QueueLaneRow';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
+function QueueAccountHeader({
+  account,
+  label,
+  bar,
+  allLanesPaused,
+  onTogglePause,
+}: {
+  account: Account | undefined;
+  label: string;
+  bar: ReturnType<typeof describeAccountBar>;
+  allLanesPaused: boolean;
+  onTogglePause: () => void;
+}) {
+  return (
+    <div
+      className={`flex h-queue-bar-h items-center gap-2.75 pl-3.25 pr-3.5 ${bar.barClass} ${bar.inkClass}`}
+    >
+      <Avatar
+        size={AVATAR_SIZE.xs}
+        src={account?.avatarUrl ?? null}
+        label={label}
+        fallbackClassName="text-avatar-sm bg-white/22"
+      />
+      <span className="min-w-0 truncate text-body-sm font-semibold">{label}</span>
+      <span className="flex-1" />
+      <span aria-live="polite" className="inline-flex items-center gap-1.75 text-settings-meta">
+        <span aria-hidden="true" className={`size-1.75 shrink-0 rounded-full ${bar.pipClass}`} />
+        {bar.statusLabel}
+      </span>
+      <span className="ml-4.5 whitespace-nowrap text-settings-meta tabular-nums">
+        {bar.queuedLabel}
+      </span>
+      {bar.failedLabel && (
+        <span className="ml-4.5 inline-flex items-center gap-1.75 text-settings-meta">
+          <span
+            aria-hidden="true"
+            className="size-1.75 shrink-0 rounded-full bg-settings-bar-pip-failed dark:bg-dark-settings-bar-pip-failed"
+          />
+          {bar.failedLabel}
+        </span>
+      )}
+      <button
+        type="button"
+        aria-label={`${allLanesPaused ? 'Resume' : 'Pause'} queued work for ${label}`}
+        onClick={onTogglePause}
+        className="ml-4.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-chip opacity-85 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current"
+      >
+        {allLanesPaused ? (
+          <Play aria-hidden="true" size={ICON_SIZE.xs} />
+        ) : (
+          <Pause aria-hidden="true" size={ICON_SIZE.xs} />
+        )}
+      </button>
+    </div>
+  );
+}
+
 export function QueueAccountCard({
   account,
   snapshot,
@@ -30,46 +87,13 @@ export function QueueAccountCard({
       data-testid={`queue-account-card-${snapshot.accountId}`}
       className={`overflow-hidden rounded-card border bg-settings-card dark:bg-dark-settings-card ${bar.borderClass}`}
     >
-      <div
-        className={`flex h-queue-bar-h items-center gap-2.75 pl-3.25 pr-3.5 ${bar.barClass} ${bar.inkClass}`}
-      >
-        <Avatar
-          size={AVATAR_SIZE.xs}
-          src={account?.avatarUrl ?? null}
-          label={label}
-          fallbackClassName="text-avatar-sm bg-white/22"
-        />
-        <span className="min-w-0 truncate text-body-sm font-semibold">{label}</span>
-        <span className="flex-1" />
-        <span aria-live="polite" className="inline-flex items-center gap-1.75 text-settings-meta">
-          <span aria-hidden="true" className={`size-1.75 shrink-0 rounded-full ${bar.pipClass}`} />
-          {bar.statusLabel}
-        </span>
-        <span className="ml-4.5 whitespace-nowrap text-settings-meta tabular-nums">
-          {bar.queuedLabel}
-        </span>
-        {bar.failedLabel && (
-          <span className="ml-4.5 inline-flex items-center gap-1.75 text-settings-meta">
-            <span
-              aria-hidden="true"
-              className="size-1.75 shrink-0 rounded-full bg-settings-bar-pip-failed dark:bg-dark-settings-bar-pip-failed"
-            />
-            {bar.failedLabel}
-          </span>
-        )}
-        <button
-          type="button"
-          aria-label={`${allLanesPaused ? 'Resume' : 'Pause'} queued work for ${label}`}
-          onClick={() => onTogglePause(snapshot.accountId, undefined, !allLanesPaused)}
-          className="ml-4.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-chip opacity-85 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current"
-        >
-          {allLanesPaused ? (
-            <Play aria-hidden="true" size={ICON_SIZE.xs} />
-          ) : (
-            <Pause aria-hidden="true" size={ICON_SIZE.xs} />
-          )}
-        </button>
-      </div>
+      <QueueAccountHeader
+        account={account}
+        label={label}
+        bar={bar}
+        allLanesPaused={allLanesPaused}
+        onTogglePause={() => onTogglePause(snapshot.accountId, undefined, !allLanesPaused)}
+      />
       {snapshot.lanes.map((lane) => (
         <QueueLaneRow
           key={lane.lane}

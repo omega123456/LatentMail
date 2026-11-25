@@ -22,6 +22,15 @@ const labelClass = 'text-label-sm text-on-surface-variant dark:text-dark-on-surf
 const selectWrapperClass = 'flex flex-col gap-1';
 
 type ScopeChoice = { scope: SearchScope; label: string };
+type TextFieldKey = 'from' | 'to' | 'subject' | 'includesText' | 'excludesText';
+
+const TEXT_FIELDS: { key: TextFieldKey; id: string; label: string }[] = [
+  { key: 'from', id: 'search-panel-from', label: 'From' },
+  { key: 'to', id: 'search-panel-to', label: 'To' },
+  { key: 'subject', id: 'search-panel-subject', label: 'Subject' },
+  { key: 'includesText', id: 'search-panel-includes', label: 'Includes the words' },
+  { key: 'excludesText', id: 'search-panel-excludes', label: 'Doesn\u2019t have' },
+];
 
 function scopeKey(scope: SearchScope): string {
   return JSON.stringify(scope);
@@ -48,21 +57,7 @@ function scopeForKey(choices: ScopeChoice[], key: string): SearchScope | undefin
   return choices.find((choice) => scopeKey(choice.scope) === key)?.scope;
 }
 
-export function AdvancedSearchPanel({
-  initialQuery,
-  labels,
-  scope,
-  onScopeChange,
-  onSubmit,
-  onClose,
-}: {
-  initialQuery: string;
-  labels: MailLabel[];
-  scope: SearchScope;
-  onScopeChange: (scope: SearchScope) => void;
-  onSubmit: (query: string) => void;
-  onClose: () => void;
-}) {
+function usePanelFields(initialQuery: string) {
   const parsedQuery = useParseSearchQueryQuery(initialQuery);
   const baseFields = useMemo<PanelFields>(
     () =>
@@ -75,13 +70,103 @@ export function AdvancedSearchPanel({
   const fields = overrides ?? baseFields;
   const setFields = (updater: (current: PanelFields) => PanelFields) =>
     setOverrides((current) => updater(current ?? baseFields));
+  const resetFields = () => setOverrides(BLANK_FIELDS);
+  return { fields: fields, setFields: setFields, resetFields: resetFields };
+}
 
-  const userLabels = labels.filter((label) => label.kind === 'user');
-  const choices = scopeChoices(userLabels);
-  const scopeValue = scopeKey(scope);
+function SearchPanelFlags({
+  fields,
+  onChange,
+}: {
+  fields: PanelFields;
+  onChange: (updater: (current: PanelFields) => PanelFields) => void;
+}) {
+  return (
+    <div className="flex items-center gap-4">
+      <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">
+        <input
+          type="checkbox"
+          checked={fields.hasAttachment}
+          onChange={(event) =>
+            onChange((current) => ({ ...current, hasAttachment: event.target.checked }))
+          }
+          className="size-4"
+        />
+        Has attachment
+      </label>
+      <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">
+        <input
+          type="checkbox"
+          checked={fields.unreadOnly}
+          onChange={(event) =>
+            onChange((current) => ({ ...current, unreadOnly: event.target.checked }))
+          }
+          className="size-4"
+        />
+        Unread only
+      </label>
+    </div>
+  );
+}
+
+function SearchPanelActions({ onReset, onSearch }: { onReset: () => void; onSearch: () => void }) {
+  return (
+    <div className="flex justify-end gap-2 border-t border-outline-variant/40 pt-3 dark:border-dark-outline-variant">
+      <button type="button" onClick={onReset} className={secondaryActionButtonClass}>
+        Reset
+      </button>
+      <button type="button" onClick={onSearch} className={primaryActionButtonClass}>
+        Search
+      </button>
+    </div>
+  );
+}
+
+type AdvancedSearchPanelProps = {
+  initialQuery: string;
+  labels: MailLabel[];
+  scope: SearchScope;
+  onScopeChange: (scope: SearchScope) => void;
+  onSubmit: (query: string) => void;
+  onClose: () => void;
+};
+
+function ScopeField({
+  scope,
+  choices,
+  onSelectScope,
+}: {
+  scope: SearchScope;
+  choices: ScopeChoice[];
+  onSelectScope: (key: string) => void;
+}) {
+  return (
+    <div className={selectWrapperClass}>
+      <label htmlFor="search-panel-scope" className={labelClass}>
+        Search in
+      </label>
+      <Select
+        id="search-panel-scope"
+        value={scopeKey(scope)}
+        onChange={onSelectScope}
+        options={scopeOptions(choices)}
+        className={selectClass}
+      />
+    </div>
+  );
+}
+
+export function AdvancedSearchPanel(props: AdvancedSearchPanelProps) {
+  const { fields, setFields, resetFields } = usePanelFields(props.initialQuery);
+  const choices = scopeChoices(props.labels.filter((label) => label.kind === 'user'));
   const selectScope = (key: string) => {
     const chosen = scopeForKey(choices, key);
-    if (chosen) onScopeChange(chosen);
+    if (chosen) props.onScopeChange(chosen);
+  };
+  const submitSearch = () => {
+    const serialized = serializeFields(fields);
+    if (serialized.trim().length === 0) return;
+    props.onSubmit(serialized);
   };
 
   return (
@@ -90,7 +175,7 @@ export function AdvancedSearchPanel({
         aria-hidden="true"
         data-testid="advanced-search-panel-overlay"
         className="fixed inset-0 z-40 bg-on-surface/20"
-        onClick={onClose}
+        onClick={props.onClose}
       />
       <div
         role="dialog"
@@ -98,112 +183,25 @@ export function AdvancedSearchPanel({
         data-testid="advanced-search-panel"
         className="absolute left-0 right-0 top-full z-50 mt-2 flex flex-col gap-3 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-4 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
       >
-        <label htmlFor="search-panel-from" className="flex flex-col gap-1">
-          <span className={labelClass}>From</span>
-          <TextInput
-            id="search-panel-from"
-            value={fields.from}
-            onChange={(event) => setFields((current) => ({ ...current, from: event.target.value }))}
-          />
-        </label>
-        <label htmlFor="search-panel-to" className="flex flex-col gap-1">
-          <span className={labelClass}>To</span>
-          <TextInput
-            id="search-panel-to"
-            value={fields.to}
-            onChange={(event) => setFields((current) => ({ ...current, to: event.target.value }))}
-          />
-        </label>
-        <label htmlFor="search-panel-subject" className="flex flex-col gap-1">
-          <span className={labelClass}>Subject</span>
-          <TextInput
-            id="search-panel-subject"
-            value={fields.subject}
-            onChange={(event) =>
-              setFields((current) => ({ ...current, subject: event.target.value }))
-            }
-          />
-        </label>
-        <label htmlFor="search-panel-includes" className="flex flex-col gap-1">
-          <span className={labelClass}>Includes the words</span>
-          <TextInput
-            id="search-panel-includes"
-            value={fields.includesText}
-            onChange={(event) =>
-              setFields((current) => ({ ...current, includesText: event.target.value }))
-            }
-          />
-        </label>
-        <label htmlFor="search-panel-excludes" className="flex flex-col gap-1">
-          <span className={labelClass}>Doesn&rsquo;t have</span>
-          <TextInput
-            id="search-panel-excludes"
-            value={fields.excludesText}
-            onChange={(event) =>
-              setFields((current) => ({ ...current, excludesText: event.target.value }))
-            }
-          />
-        </label>
+        {TEXT_FIELDS.map((entry) => (
+          <label key={entry.key} htmlFor={entry.id} className="flex flex-col gap-1">
+            <span className={labelClass}>{entry.label}</span>
+            <TextInput
+              id={entry.id}
+              value={fields[entry.key]}
+              onChange={(event) =>
+                setFields((current) => ({ ...current, [entry.key]: event.target.value }))
+              }
+            />
+          </label>
+        ))}
         <DateFilter
           value={fields.date}
           onChange={(date) => setFields((current) => ({ ...current, date }))}
         />
-        <div className={selectWrapperClass}>
-          <label htmlFor="search-panel-scope" className={labelClass}>
-            Search in
-          </label>
-          <Select
-            id="search-panel-scope"
-            value={scopeValue}
-            onChange={selectScope}
-            options={scopeOptions(choices)}
-            className={selectClass}
-          />
-        </div>
-        <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">
-            <input
-              type="checkbox"
-              checked={fields.hasAttachment}
-              onChange={(event) =>
-                setFields((current) => ({ ...current, hasAttachment: event.target.checked }))
-              }
-              className="size-4"
-            />
-            Has attachment
-          </label>
-          <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">
-            <input
-              type="checkbox"
-              checked={fields.unreadOnly}
-              onChange={(event) =>
-                setFields((current) => ({ ...current, unreadOnly: event.target.checked }))
-              }
-              className="size-4"
-            />
-            Unread only
-          </label>
-        </div>
-        <div className="flex justify-end gap-2 border-t border-outline-variant/40 pt-3 dark:border-dark-outline-variant">
-          <button
-            type="button"
-            onClick={() => setOverrides(BLANK_FIELDS)}
-            className={secondaryActionButtonClass}
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const serialized = serializeFields(fields);
-              if (serialized.trim().length === 0) return;
-              onSubmit(serialized);
-            }}
-            className={primaryActionButtonClass}
-          >
-            Search
-          </button>
-        </div>
+        <ScopeField scope={props.scope} choices={choices} onSelectScope={selectScope} />
+        <SearchPanelFlags fields={fields} onChange={setFields} />
+        <SearchPanelActions onReset={resetFields} onSearch={submitSearch} />
       </div>
     </>
   );

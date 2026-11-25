@@ -12,6 +12,51 @@ use tauri::Manager;
 
 const REMOTE_IMAGE: &str = r#"<img src="https://tracker.example/pixel.png">"#;
 
+struct PolicySeedMessage<'a> {
+    id: &'a str,
+    sender: &'a str,
+    label_id: &'a str,
+}
+
+fn seed_policy_message(connection: &rusqlite::Connection, seed: PolicySeedMessage<'_>) {
+    MessageRepository::write_full_state(
+        connection,
+        &Message {
+            account_id: "account".into(),
+            id: seed.id.into(),
+            thread_id: "t1".into(),
+            rfc_message_id: None,
+            sender: seed.sender.into(),
+            recipients: "me@example.com".into(),
+            subject: "Newsletter".into(),
+            sent_at: 1,
+            snippet: String::new(),
+            html_body: Some(REMOTE_IMAGE.into()),
+            plain_body: None,
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Present,
+        },
+    )
+    .unwrap();
+    LabelRepository::ensure_placeholder(connection, "account", seed.label_id).unwrap();
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: seed.id,
+        },
+        LabelMembershipChange {
+            label_id: seed.label_id,
+            present: true,
+        },
+    )
+    .unwrap();
+}
+
 fn seeded_storage(directory: &std::path::Path) -> Storage {
     let storage = Storage::open(directory.join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
@@ -42,42 +87,14 @@ fn seeded_storage(directory: &std::path::Path) -> Storage {
         ("m2", "spammer@example.com", "SPAM"),
         ("m3", "Elena Rodriguez <Elena.R@Example.com>", "TRASH"),
     ] {
-        MessageRepository::write_full_state(
+        seed_policy_message(
             &connection,
-            &Message {
-                account_id: "account".into(),
-                id: id.into(),
-                thread_id: "t1".into(),
-                rfc_message_id: None,
-                sender: sender.into(),
-                recipients: "me@example.com".into(),
-                subject: "Newsletter".into(),
-                sent_at: 1,
-                snippet: String::new(),
-                html_body: Some(REMOTE_IMAGE.into()),
-                plain_body: None,
-                has_attachments: false,
-                is_unread: false,
-                is_starred: false,
-                history_id: 1,
-                truncated_body: None,
-                html_presence: HtmlPresence::Present,
-            },
-        )
-        .unwrap();
-        LabelRepository::ensure_placeholder(&connection, "account", label_id).unwrap();
-        MessageRepository::set_label_membership(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: id,
-            },
-            LabelMembershipChange {
+            PolicySeedMessage {
+                id: id,
+                sender: sender,
                 label_id: label_id,
-                present: true,
             },
-        )
-        .unwrap();
+        );
     }
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     drop(connection);

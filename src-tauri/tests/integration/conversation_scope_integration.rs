@@ -173,51 +173,55 @@ fn ordinary_scope_returns_no_messages_when_every_message_is_trashed() {
     );
 }
 
+fn attach_hidden_metadata(connection: &rusqlite::Connection, hidden: &str) {
+    LabelRepository::ensure_placeholder(connection, "account", "Label_hidden").unwrap();
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: hidden,
+        },
+        LabelMembershipChange {
+            label_id: "Label_hidden",
+            present: true,
+        },
+    )
+    .unwrap();
+    AttachmentRepository::replace_for_message(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: hidden,
+        },
+        &[Attachment {
+            attachment_id: format!("{hidden}-attachment"),
+            filename: "hidden.pdf".into(),
+            mime_type: "application/pdf".into(),
+            size: 1,
+            position: 0,
+        }],
+    )
+    .unwrap();
+    MessageRepository::replace_inline_parts(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: hidden,
+        },
+        &[InlinePart {
+            content_id: format!("{hidden}-cid"),
+            mime_type: "image/png".into(),
+            bytes: vec![1],
+        }],
+    )
+    .unwrap();
+}
+
 #[test]
 fn a_hidden_messages_labels_attachments_and_inline_parts_never_reach_a_visible_message() {
     let connection = seeded_connection();
     for hidden in ["trash", "spam"] {
-        LabelRepository::ensure_placeholder(&connection, "account", "Label_hidden").unwrap();
-        MessageRepository::set_label_membership(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: hidden,
-            },
-            LabelMembershipChange {
-                label_id: "Label_hidden",
-                present: true,
-            },
-        )
-        .unwrap();
-        AttachmentRepository::replace_for_message(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: hidden,
-            },
-            &[Attachment {
-                attachment_id: format!("{hidden}-attachment"),
-                filename: "hidden.pdf".into(),
-                mime_type: "application/pdf".into(),
-                size: 1,
-                position: 0,
-            }],
-        )
-        .unwrap();
-        MessageRepository::replace_inline_parts(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: hidden,
-            },
-            &[InlinePart {
-                content_id: format!("{hidden}-cid"),
-                mime_type: "image/png".into(),
-                bytes: vec![1],
-            }],
-        )
-        .unwrap();
+        attach_hidden_metadata(&connection, hidden);
     }
 
     let visible = MessageRepository::list_conversation_metadata(

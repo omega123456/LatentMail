@@ -1,3 +1,4 @@
+use crate::support::ensure_placeholder_labels;
 use latentmail_lib::storage::{
     truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
     ComposeDraftMetadata, ComposeDraftMetadataRepository, EmbeddingRepository, HtmlPresence, Label,
@@ -98,19 +99,22 @@ fn unique_indexed_column_sets(connection: &rusqlite::Connection, table: &str) ->
         .collect()
 }
 
-#[test]
-fn migrations_are_idempotent_and_repositories_round_trip() {
-    let mut connection = Storage::in_memory().unwrap();
-    AccountRepository::upsert(&connection, &account()).unwrap();
-    AccountRepository::upsert(&connection, &account()).unwrap();
-    assert_eq!(
-        AccountRepository::get(&connection, "account").unwrap(),
-        Some(account())
-    );
-    assert_eq!(
-        AccountRepository::list(&connection).unwrap(),
-        vec![account()]
-    );
+fn set_message_label(connection: &rusqlite::Connection, label_id: &str, present: bool) {
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: "message",
+        },
+        LabelMembershipChange {
+            label_id: label_id,
+            present: present,
+        },
+    )
+    .unwrap();
+}
+
+fn assert_labels_round_trip(connection: &rusqlite::Connection) {
     let unread = Label {
         account_id: "account".into(),
         id: "UNREAD".into(),
@@ -124,15 +128,18 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         name: "Starred".into(),
         ..unread.clone()
     };
-    LabelRepository::upsert(&connection, &unread).unwrap();
-    LabelRepository::upsert(&connection, &starred).unwrap();
+    LabelRepository::upsert(connection, &unread).unwrap();
+    LabelRepository::upsert(connection, &starred).unwrap();
     assert_eq!(
-        LabelRepository::list(&connection, "account").unwrap(),
+        LabelRepository::list(connection, "account").unwrap(),
         vec![starred, unread]
     );
-    assert!(MessageRepository::write_full_state(&connection, &message()).unwrap());
+}
+
+fn assert_message_and_draft_round_trip(connection: &rusqlite::Connection) {
+    assert!(MessageRepository::write_full_state(connection, &message()).unwrap());
     MessageRepository::set_recipient_roles(
-        &connection,
+        connection,
         MessageKey {
             account_id: "account",
             message_id: "message",
@@ -146,7 +153,7 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
     )
     .unwrap();
     assert_eq!(
-        MessageRepository::recipient_roles(&connection, "account", "message").unwrap(),
+        MessageRepository::recipient_roles(connection, "account", "message").unwrap(),
         RecipientRoles {
             to: "to@example.com".into(),
             cc: "cc@example.com".into(),
@@ -167,60 +174,33 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         quote_html: Some("<blockquote>quote</blockquote>".into()),
         quote_plain: Some("quote".into()),
     };
-    ComposeDraftMetadataRepository::upsert(&connection, &metadata).unwrap();
+    ComposeDraftMetadataRepository::upsert(connection, &metadata).unwrap();
     assert_eq!(
-        ComposeDraftMetadataRepository::get(&connection, "account", "draft").unwrap(),
+        ComposeDraftMetadataRepository::get(connection, "account", "draft").unwrap(),
         Some(metadata)
     );
-    ComposeDraftMetadataRepository::remove(&connection, "account", "draft").unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "UNREAD",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "STARRED",
-            present: true,
-        },
-    )
-    .unwrap();
+    ComposeDraftMetadataRepository::remove(connection, "account", "draft").unwrap();
+}
+
+fn assert_label_membership_round_trip(connection: &rusqlite::Connection) {
+    set_message_label(connection, "UNREAD", true);
+    set_message_label(connection, "STARRED", true);
     assert!(
-        MessageRepository::get(&connection, "account", "message")
+        MessageRepository::get(connection, "account", "message")
             .unwrap()
             .unwrap()
             .is_unread
     );
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "UNREAD",
-            present: false,
-        },
-    )
-    .unwrap();
+    set_message_label(connection, "UNREAD", false);
     assert!(
-        !MessageRepository::get(&connection, "account", "message")
+        !MessageRepository::get(connection, "account", "message")
             .unwrap()
             .unwrap()
             .is_unread
     );
+}
+
+fn assert_thread_setting_and_operation_round_trip(connection: &rusqlite::Connection) {
     let thread = Thread {
         account_id: "account".into(),
         id: "thread".into(),
@@ -238,14 +218,14 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         },
         recipient_identity: None,
     };
-    ThreadRepository::upsert(&connection, &thread).unwrap();
+    ThreadRepository::upsert(connection, &thread).unwrap();
     assert_eq!(
-        ThreadRepository::get(&connection, "account", "thread").unwrap(),
+        ThreadRepository::get(connection, "account", "thread").unwrap(),
         Some(thread)
     );
-    SettingRepository::set(&connection, "theme", "dark").unwrap();
+    SettingRepository::set(connection, "theme", "dark").unwrap();
     assert_eq!(
-        SettingRepository::get(&connection, "theme")
+        SettingRepository::get(connection, "theme")
             .unwrap()
             .as_deref(),
         Some("dark")
@@ -264,11 +244,30 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         created_at: 1,
         updated_at: 1,
     };
-    OperationRepository::upsert(&connection, &operation).unwrap();
+    OperationRepository::upsert(connection, &operation).unwrap();
     assert_eq!(
-        OperationRepository::get(&connection, "operation").unwrap(),
+        OperationRepository::get(connection, "operation").unwrap(),
         Some(operation)
     );
+}
+
+#[test]
+fn migrations_are_idempotent_and_repositories_round_trip() {
+    let mut connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    assert_eq!(
+        AccountRepository::get(&connection, "account").unwrap(),
+        Some(account())
+    );
+    assert_eq!(
+        AccountRepository::list(&connection).unwrap(),
+        vec![account()]
+    );
+    assert_labels_round_trip(&connection);
+    assert_message_and_draft_round_trip(&connection);
+    assert_label_membership_round_trip(&connection);
+    assert_thread_setting_and_operation_round_trip(&connection);
     refinery::embed_migrations!("./migrations");
     migrations::runner().run(&mut connection).unwrap();
 }
@@ -345,6 +344,53 @@ fn truncated_body_caps_at_ten_thousand_chars_and_prefers_plain_text() {
     assert_eq!(truncate_body(None, None), None);
 }
 
+fn sample_backfill_cursor() -> TraversalCursor {
+    TraversalCursor {
+        account_id: "account".into(),
+        kind: TraversalKind::Backfill,
+        position: Some("page-token-3".into()),
+        discovered_count: 500,
+        persisted_count: 420,
+        completed: false,
+        last_advanced_at: 1_700_000_000,
+        resumed: true,
+    }
+}
+
+fn sample_reconciliation_cursor() -> TraversalCursor {
+    TraversalCursor {
+        account_id: "account".into(),
+        kind: TraversalKind::Reconciliation,
+        position: Some("universe".into()),
+        discovered_count: 10,
+        persisted_count: 10,
+        completed: false,
+        last_advanced_at: 1_700_000_001,
+        resumed: false,
+    }
+}
+
+fn assert_independent_cursor_deletion(connection: &rusqlite::Connection) {
+    TraversalCursorRepository::delete(connection, "account", TraversalKind::Backfill).unwrap();
+    assert!(
+        TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        TraversalCursorRepository::get(connection, "account", TraversalKind::Reconciliation)
+            .unwrap()
+            .is_some()
+    );
+    TraversalCursorRepository::delete(connection, "account", TraversalKind::Reconciliation)
+        .unwrap();
+    assert!(
+        TraversalCursorRepository::get(connection, "account", TraversalKind::Reconciliation)
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[test]
 fn traversal_cursor_round_trips_and_survives_reopening() {
     let directory = tempfile::tempdir().unwrap();
@@ -353,20 +399,7 @@ fn traversal_cursor_round_trips_and_survives_reopening() {
         let storage = Storage::open(&path).unwrap();
         let connection = storage.connection().unwrap();
         AccountRepository::upsert(&connection, &account()).unwrap();
-        TraversalCursorRepository::upsert(
-            &connection,
-            &TraversalCursor {
-                account_id: "account".into(),
-                kind: TraversalKind::Backfill,
-                position: Some("page-token-3".into()),
-                discovered_count: 500,
-                persisted_count: 420,
-                completed: false,
-                last_advanced_at: 1_700_000_000,
-                resumed: true,
-            },
-        )
-        .unwrap();
+        TraversalCursorRepository::upsert(&connection, &sample_backfill_cursor()).unwrap();
     }
     let storage = Storage::open(&path).unwrap();
     let connection = storage.connection().unwrap();
@@ -395,20 +428,7 @@ fn traversal_cursor_round_trips_and_survives_reopening() {
     assert!(updated.completed);
     assert_eq!(updated.position.as_deref(), Some("page-token-4"));
 
-    TraversalCursorRepository::upsert(
-        &connection,
-        &TraversalCursor {
-            account_id: "account".into(),
-            kind: TraversalKind::Reconciliation,
-            position: Some("universe".into()),
-            discovered_count: 10,
-            persisted_count: 10,
-            completed: false,
-            last_advanced_at: 1_700_000_001,
-            resumed: false,
-        },
-    )
-    .unwrap();
+    TraversalCursorRepository::upsert(&connection, &sample_reconciliation_cursor()).unwrap();
     let backfill_after_reconciliation_write =
         TraversalCursorRepository::get(&connection, "account", TraversalKind::Backfill)
             .unwrap()
@@ -424,74 +444,25 @@ fn traversal_cursor_round_trips_and_survives_reopening() {
     assert_eq!(reconciliation.position.as_deref(), Some("universe"));
     assert_eq!(reconciliation.discovered_count, 10);
 
-    TraversalCursorRepository::delete(&connection, "account", TraversalKind::Backfill).unwrap();
-    assert!(
-        TraversalCursorRepository::get(&connection, "account", TraversalKind::Backfill)
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        TraversalCursorRepository::get(&connection, "account", TraversalKind::Reconciliation)
-            .unwrap()
-            .is_some()
-    );
-
-    TraversalCursorRepository::delete(&connection, "account", TraversalKind::Reconciliation)
-        .unwrap();
-    assert!(
-        TraversalCursorRepository::get(&connection, "account", TraversalKind::Reconciliation)
-            .unwrap()
-            .is_none()
-    );
+    assert_independent_cursor_deletion(&connection);
 }
 
 #[test]
 fn bulk_membership_overwrite_keeps_denormalised_flags_consistent() {
     let connection = Storage::in_memory().unwrap();
     AccountRepository::upsert(&connection, &account()).unwrap();
-    for label_id in ["UNREAD", "STARRED", "INBOX", "TRASH"] {
-        LabelRepository::ensure_placeholder(&connection, "account", label_id).unwrap();
-    }
+    ensure_placeholder_labels(
+        &connection,
+        "account",
+        &["UNREAD", "STARRED", "INBOX", "TRASH"],
+    );
     let mut starting = message();
     starting.is_unread = true;
     starting.is_starred = true;
     MessageRepository::write_full_state(&connection, &starting).unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "UNREAD",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "STARRED",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
+    for label_id in ["UNREAD", "STARRED", "INBOX"] {
+        set_message_label(&connection, label_id, true);
+    }
 
     MessageRepository::overwrite_membership(
         &connection,
@@ -536,36 +507,12 @@ fn indexed_labels(connection: &rusqlite::Connection, thread_id: &str) -> Vec<(St
 fn thread_label_index_tracks_membership_through_recompute() {
     let connection = Storage::in_memory().unwrap();
     AccountRepository::upsert(&connection, &account()).unwrap();
-    for label_id in ["INBOX", "UNREAD", "TRASH"] {
-        LabelRepository::ensure_placeholder(&connection, "account", label_id).unwrap();
-    }
+    ensure_placeholder_labels(&connection, "account", &["INBOX", "UNREAD", "TRASH"]);
     let mut stored = message();
     stored.sent_at = 4_100;
     MessageRepository::write_full_state(&connection, &stored).unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "message",
-        },
-        LabelMembershipChange {
-            label_id: "UNREAD",
-            present: true,
-        },
-    )
-    .unwrap();
+    set_message_label(&connection, "INBOX", true);
+    set_message_label(&connection, "UNREAD", true);
     ThreadRepository::recompute(&connection, "account", "thread").unwrap();
     assert_eq!(
         indexed_labels(&connection, "thread"),
@@ -637,163 +584,164 @@ fn missing_ids_batches_primary_key_lookups_and_deduplicates_candidates() {
     assert_eq!(missing.last().map(String::as_str), Some("id-499"));
 }
 
-#[test]
-fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
-    let connection = Storage::in_memory().unwrap();
+fn plan_has(plan: &[String], needle: &str) -> bool {
+    plan.iter().any(|step| step.contains(needle))
+}
+
+fn temp_btree_count(plan: &[String]) -> usize {
+    plan.iter()
+        .filter(|step| step.contains("TEMP B-TREE"))
+        .count()
+}
+
+fn assert_thread_and_reconciliation_plans(connection: &rusqlite::Connection) {
     let thread_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT id FROM threads WHERE account_id='account' ORDER BY latest_at DESC,id DESC LIMIT 51",
     );
-    assert!(thread_plan
-        .iter()
-        .any(|step| step.contains("threads_by_latest")));
-    assert!(!thread_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(&thread_plan, "threads_by_latest"));
+    assert!(!plan_has(&thread_plan, "TEMP B-TREE"));
+
     let cursor_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT id FROM threads WHERE account_id='account' AND (latest_at,id)<(10,'thread') ORDER BY latest_at DESC,id DESC LIMIT 51",
     );
-    assert!(cursor_plan
-        .iter()
-        .any(|step| step.contains("threads_by_latest")));
-    assert!(!cursor_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(&cursor_plan, "threads_by_latest"));
+    assert!(!plan_has(&cursor_plan, "TEMP B-TREE"));
+
     let backward_cursor_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT id FROM threads WHERE account_id='account' AND (latest_at,id)>(10,'thread') ORDER BY latest_at ASC,id ASC LIMIT 51",
     );
-    assert!(backward_cursor_plan
-        .iter()
-        .any(|step| step.contains("threads_by_latest (account_id=? AND (latest_at,id)>(?,?))")));
-    assert!(!backward_cursor_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &backward_cursor_plan,
+        "threads_by_latest (account_id=? AND (latest_at,id)>(?,?))"
+    ));
+    assert!(!plan_has(&backward_cursor_plan, "TEMP B-TREE"));
 
     let reconciliation_new_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT r.message_id FROM reconcile_remote_messages r LEFT JOIN messages m ON m.account_id=r.account_id AND m.id=r.message_id WHERE r.account_id=?1 AND m.id IS NULL AND r.message_id>COALESCE(?2,'') ORDER BY r.message_id LIMIT ?3",
     );
-    assert!(reconciliation_new_plan
-        .iter()
-        .any(|step| step.contains("PRIMARY KEY (account_id=? AND message_id>?)")));
-    assert!(!reconciliation_new_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &reconciliation_new_plan,
+        "PRIMARY KEY (account_id=? AND message_id>?)"
+    ));
+    assert!(!plan_has(&reconciliation_new_plan, "TEMP B-TREE"));
+
     let reconciliation_absent_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT m.id FROM messages m LEFT JOIN reconcile_remote_messages r ON r.account_id=m.account_id AND r.message_id=m.id WHERE m.account_id=?1 AND r.message_id IS NULL AND m.id>COALESCE(?2,'') ORDER BY m.id LIMIT ?3",
     );
-    assert!(reconciliation_absent_plan
-        .iter()
-        .any(|step| step.contains("sqlite_autoindex_messages_1 (account_id=? AND id>?)")));
-    assert!(!reconciliation_absent_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &reconciliation_absent_plan,
+        "sqlite_autoindex_messages_1 (account_id=? AND id>?)"
+    ));
+    assert!(!plan_has(&reconciliation_absent_plan, "TEMP B-TREE"));
+
     let reconciliation_membership_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT r.message_id FROM reconcile_remote_messages r JOIN messages m ON m.account_id=r.account_id AND m.id=r.message_id WHERE r.account_id=?1 AND r.message_id>COALESCE(?2,'') AND (EXISTS (SELECT 1 FROM reconcile_remote_labels l WHERE l.account_id=r.account_id AND l.message_id=r.message_id AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=l.account_id AND ml.message_id=l.message_id AND ml.label_id=l.label_id)) OR EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=r.account_id AND ml.message_id=r.message_id AND NOT EXISTS (SELECT 1 FROM reconcile_remote_labels l WHERE l.account_id=ml.account_id AND l.message_id=ml.message_id AND l.label_id=ml.label_id))) ORDER BY r.message_id LIMIT ?3",
     );
-    assert!(reconciliation_membership_plan
-        .iter()
-        .any(|step| step.contains("PRIMARY KEY (account_id=? AND message_id>?)")));
-    assert!(reconciliation_membership_plan
-        .iter()
-        .any(|step| step.contains("label_id=?")));
-    assert!(!reconciliation_membership_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &reconciliation_membership_plan,
+        "PRIMARY KEY (account_id=? AND message_id>?)"
+    ));
+    assert!(plan_has(&reconciliation_membership_plan, "label_id=?"));
+    assert!(!plan_has(&reconciliation_membership_plan, "TEMP B-TREE"));
+
     let reconciliation_universe_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT message_id FROM reconcile_remote_messages WHERE account_id=?1 AND message_id>COALESCE(?2,'') ORDER BY message_id LIMIT ?3",
     );
-    assert!(reconciliation_universe_plan
-        .iter()
-        .any(|step| step.contains("PRIMARY KEY (account_id=? AND message_id>?)")));
-    assert!(!reconciliation_universe_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &reconciliation_universe_plan,
+        "PRIMARY KEY (account_id=? AND message_id>?)"
+    ));
+    assert!(!plan_has(&reconciliation_universe_plan, "TEMP B-TREE"));
+}
 
+fn assert_labelled_thread_plans(connection: &rusqlite::Connection) {
     let labelled_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id='account' AND tl.label_id='INBOX' ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT 51",
     );
-    assert!(labelled_plan
-        .iter()
-        .any(|step| step.contains("SEARCH tl USING PRIMARY KEY")));
-    assert!(!labelled_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
-    assert!(!labelled_plan.iter().any(|step| step.contains("SCAN")));
+    assert!(plan_has(&labelled_plan, "SEARCH tl USING PRIMARY KEY"));
+    assert!(!plan_has(&labelled_plan, "TEMP B-TREE"));
+    assert!(!plan_has(&labelled_plan, "SCAN"));
+
     let labelled_cursor_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id='account' AND tl.label_id='INBOX' AND (tl.latest_at,tl.thread_id)<(10,'thread') ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT 51",
     );
-    assert!(labelled_cursor_plan
-        .iter()
-        .any(|step| step.contains("(latest_at,thread_id)<(?,?)")));
-    assert!(!labelled_cursor_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &labelled_cursor_plan,
+        "(latest_at,thread_id)<(?,?)"
+    ));
+    assert!(!plan_has(&labelled_cursor_plan, "TEMP B-TREE"));
+
     let unread_count_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT tl.label_id,COUNT(*) FROM threads t CROSS JOIN thread_labels tl ON tl.account_id=t.account_id AND tl.thread_id=t.id WHERE t.account_id='account' AND t.is_unread=1 GROUP BY tl.label_id",
     );
-    assert!(unread_count_plan
-        .iter()
-        .any(|step| step.contains("SEARCH t USING INDEX threads_unread")));
-    assert!(unread_count_plan
-        .iter()
-        .any(|step| step.contains("COVERING INDEX thread_labels_by_thread")));
-    assert!(!unread_count_plan.iter().any(|step| step.contains("SCAN")));
+    assert!(plan_has(
+        &unread_count_plan,
+        "SEARCH t USING INDEX threads_unread"
+    ));
+    assert!(plan_has(
+        &unread_count_plan,
+        "COVERING INDEX thread_labels_by_thread"
+    ));
+    assert!(!plan_has(&unread_count_plan, "SCAN"));
 
     let thread_cascade_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN DELETE FROM thread_labels WHERE account_id='account' AND thread_id='thread'",
     );
-    assert!(thread_cascade_plan
-        .iter()
-        .any(|step| step.contains("thread_labels_by_thread")));
+    assert!(plan_has(&thread_cascade_plan, "thread_labels_by_thread"));
 
     let labelled_listing_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.account_id,t.id,t.subject,t.participants,tl.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id=?1 AND tl.label_id=?2 ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT ?5",
     );
-    assert!(labelled_listing_plan
-        .iter()
-        .any(|step| step.contains("SEARCH tl USING PRIMARY KEY (account_id=? AND label_id=?)")));
-    assert!(labelled_listing_plan
-        .iter()
-        .any(|step| step.contains("SEARCH m2 USING INDEX messages_by_thread")));
-    assert!(!labelled_listing_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
-    assert!(!labelled_listing_plan
-        .iter()
-        .any(|step| step.contains("SCAN")));
+    assert!(plan_has(
+        &labelled_listing_plan,
+        "SEARCH tl USING PRIMARY KEY (account_id=? AND label_id=?)"
+    ));
+    assert!(plan_has(
+        &labelled_listing_plan,
+        "SEARCH m2 USING INDEX messages_by_thread"
+    ));
+    assert!(!plan_has(&labelled_listing_plan, "TEMP B-TREE"));
+    assert!(!plan_has(&labelled_listing_plan, "SCAN"));
+}
 
+fn assert_embedding_plans(connection: &rusqlite::Connection) {
     let embedding_backlog_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT m.seq,m.sender,m.recipients,m.subject,m.plain_body,m.html_body,m.truncated_body FROM messages m WHERE m.seq IN (SELECT k.seq FROM messages k WHERE k.account_id=?1 AND NOT EXISTS (SELECT 1 FROM message_embeddings e WHERE e.account_id=k.account_id AND e.message_seq=k.seq) AND NOT EXISTS (SELECT 1 FROM message_labels l WHERE l.account_id=k.account_id AND l.message_id=k.id AND l.label_id IN ('TRASH','SPAM','DRAFT')) LIMIT ?2)",
     );
     assert!(
-        embedding_backlog_plan.iter().any(|step| step.contains(
+        plan_has(
+            &embedding_backlog_plan,
             "SEARCH k USING COVERING INDEX sqlite_autoindex_messages_1 (account_id=?)"
-        )),
+        ),
         "the embedding backlog must pick candidate rows from a covering index, never by scanning the message bodies"
     );
-    assert!(embedding_backlog_plan.iter().any(|step| step.contains(
+    assert!(plan_has(
+        &embedding_backlog_plan,
         "SEARCH e USING COVERING INDEX message_embeddings_by_account_message (account_id=? AND message_seq=?)"
-    )));
-    assert!(embedding_backlog_plan
-        .iter()
-        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
-    assert!(!embedding_backlog_plan
-        .iter()
-        .any(|step| step.contains("SCAN m") || step.contains("SCAN k")));
-    assert!(!embedding_backlog_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    ));
+    assert!(plan_has(
+        &embedding_backlog_plan,
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+    ));
+    assert!(!plan_has(&embedding_backlog_plan, "SCAN m"));
+    assert!(!plan_has(&embedding_backlog_plan, "SCAN k"));
+    assert!(!plan_has(&embedding_backlog_plan, "TEMP B-TREE"));
 
     let embedding_total_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT (SELECT COUNT(*) FROM messages WHERE account_id=?1)-(SELECT COUNT(DISTINCT message_id) FROM message_labels WHERE account_id=?1 AND label_id IN ('TRASH','SPAM','DRAFT'))",
     );
     assert!(
@@ -803,155 +751,140 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
                 && step.contains("(account_id=?)")),
         "the eligible-message count must stay one covering range scan over the account"
     );
-    assert!(embedding_total_plan.iter().any(|step| step.contains(
+    assert!(plan_has(
+        &embedding_total_plan,
         "SEARCH message_labels USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=?)"
-    )));
+    ));
     assert!(
-        !embedding_total_plan
-            .iter()
-            .any(|step| step.contains("TEMP B-TREE")),
+        !plan_has(&embedding_total_plan, "TEMP B-TREE"),
         "the eligible-message count must read message_id in index order so DISTINCT needs no sort"
     );
 
+    let embedding_seq_plan = query_plan(
+        connection,
+        "EXPLAIN QUERY PLAN SELECT m.seq FROM messages m WHERE m.account_id='account' AND NOT EXISTS (SELECT 1 FROM message_embeddings e WHERE e.account_id=m.account_id AND e.message_seq=m.seq) AND NOT EXISTS (SELECT 1 FROM message_labels l WHERE l.account_id=m.account_id AND l.message_id=m.id AND l.label_id IN ('TRASH','SPAM','DRAFT')) LIMIT 64",
+    );
+    assert!(plan_has(
+        &embedding_seq_plan,
+        "message_embeddings_by_account_message"
+    ));
+    assert!(!plan_has(&embedding_seq_plan, "TEMP B-TREE"));
+
+    for sql in [
+        "EXPLAIN QUERY PLAN SELECT COUNT(DISTINCT message_seq) FROM message_embeddings WHERE account_id='account'",
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM message_embeddings WHERE account_id='account'",
+    ] {
+        let count_plan = query_plan(connection, sql);
+        assert!(plan_has(&count_plan, "message_embeddings_by_account_message"));
+        assert!(!plan_has(&count_plan, "TEMP B-TREE"));
+    }
+}
+
+fn assert_message_and_operation_plans(connection: &rusqlite::Connection) {
     let label_index_write_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN INSERT INTO thread_labels (account_id,label_id,thread_id,latest_at) SELECT ?1,CASE WHEN EXISTS (SELECT 1 FROM message_labels x WHERE x.account_id=?1 AND x.message_id=m.id AND x.label_id='TRASH') THEN 'TRASH' WHEN EXISTS (SELECT 1 FROM message_labels x WHERE x.account_id=?1 AND x.message_id=m.id AND x.label_id='SPAM') THEN 'SPAM' ELSE ml.label_id END,?2,MAX(m.sent_at) FROM messages m CROSS JOIN message_labels ml ON ml.account_id=m.account_id AND ml.message_id=m.id WHERE m.account_id=?1 AND m.thread_id=?2 GROUP BY 2",
     );
-    assert!(label_index_write_plan.iter().any(|step| step.contains(
+    assert!(plan_has(
+        &label_index_write_plan,
         "SEARCH m USING COVERING INDEX messages_by_thread (account_id=? AND thread_id=?)"
-    )));
-    assert!(label_index_write_plan.iter().any(|step| step.contains(
+    ));
+    assert!(plan_has(
+        &label_index_write_plan,
         "SEARCH x USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=? AND message_id=? AND label_id=?)"
-    )));
+    ));
     assert!(
-        !label_index_write_plan
-            .iter()
-            .any(|step| step.contains("MATERIALIZE") || step.contains("SCAN")),
+        !plan_has(&label_index_write_plan, "MATERIALIZE") && !plan_has(&label_index_write_plan, "SCAN"),
         "the per-thread label index write must stay driven by messages_by_thread, never materialise a per-account aggregate"
     );
 
     let message_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT snippet FROM messages WHERE account_id='account' AND thread_id='thread' ORDER BY sent_at DESC,id DESC LIMIT 1",
     );
-    assert!(message_plan
-        .iter()
-        .any(|step| step.contains("messages_by_thread")));
-    assert!(!message_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(&message_plan, "messages_by_thread"));
+    assert!(!plan_has(&message_plan, "TEMP B-TREE"));
 
     let visible_count_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT m.thread_id,COUNT(*) FROM messages m WHERE m.account_id='account' AND m.thread_id IN ('thread-1','thread-2') AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ('TRASH','SPAM')) GROUP BY m.thread_id",
     );
-    assert!(visible_count_plan
-        .iter()
-        .any(|step| step.contains("COVERING INDEX messages_by_thread")));
-    assert!(visible_count_plan
-        .iter()
-        .any(|step| step.contains("COVERING INDEX sqlite_autoindex_message_labels_1")));
-    assert!(!visible_count_plan
-        .iter()
-        .any(|step| step.contains("SCAN m") || step.contains("SCAN ml")));
-    assert!(!visible_count_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &visible_count_plan,
+        "COVERING INDEX messages_by_thread"
+    ));
+    assert!(plan_has(
+        &visible_count_plan,
+        "COVERING INDEX sqlite_autoindex_message_labels_1"
+    ));
+    assert!(!plan_has(&visible_count_plan, "SCAN m"));
+    assert!(!plan_has(&visible_count_plan, "SCAN ml"));
+    assert!(!plan_has(&visible_count_plan, "TEMP B-TREE"));
 
-    let embedding_backlog_plan = query_plan(
-        &connection,
-        "EXPLAIN QUERY PLAN SELECT m.seq FROM messages m WHERE m.account_id='account' AND NOT EXISTS (SELECT 1 FROM message_embeddings e WHERE e.account_id=m.account_id AND e.message_seq=m.seq) AND NOT EXISTS (SELECT 1 FROM message_labels l WHERE l.account_id=m.account_id AND l.message_id=m.id AND l.label_id IN ('TRASH','SPAM','DRAFT')) LIMIT 64",
-    );
-    assert!(embedding_backlog_plan
-        .iter()
-        .any(|step| step.contains("message_embeddings_by_account_message")));
-    assert!(!embedding_backlog_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
-
-    let embedding_count_plan = query_plan(
-        &connection,
-        "EXPLAIN QUERY PLAN SELECT COUNT(DISTINCT message_seq) FROM message_embeddings WHERE account_id='account'",
-    );
-    assert!(embedding_count_plan
-        .iter()
-        .any(|step| step.contains("message_embeddings_by_account_message")));
-    assert!(!embedding_count_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
-
-    let embedding_passage_count_plan = query_plan(
-        &connection,
-        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM message_embeddings WHERE account_id='account'",
-    );
-    assert!(embedding_passage_count_plan
-        .iter()
-        .any(|step| step.contains("message_embeddings_by_account_message")));
-    assert!(!embedding_passage_count_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
-
-    let draft_plan = query_plan(
-        &connection,
-        "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE account_id='account' AND draft_id='draft'",
-    );
-    assert!(draft_plan
-        .iter()
-        .any(|step| step.contains("messages_by_draft")));
-
+    assert!(plan_has(
+        &query_plan(
+            connection,
+            "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE account_id='account' AND draft_id='draft'",
+        ),
+        "messages_by_draft"
+    ));
     let conversation_messages_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE account_id='account' AND thread_id='thread' ORDER BY sent_at",
     );
-    assert!(conversation_messages_plan
-        .iter()
-        .any(|step| step.contains("messages_by_thread")));
-    assert!(!conversation_messages_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(&conversation_messages_plan, "messages_by_thread"));
+    assert!(!plan_has(&conversation_messages_plan, "TEMP B-TREE"));
 
-    let contact_plan = query_plan(
-        &connection,
-        "EXPLAIN QUERY PLAN SELECT address FROM contacts WHERE account_id='account' AND address LIKE 'a%'",
-    );
-    assert!(contact_plan
-        .iter()
-        .any(|step| step.contains("contacts_lookup")));
+    assert!(plan_has(
+        &query_plan(
+            connection,
+            "EXPLAIN QUERY PLAN SELECT address FROM contacts WHERE account_id='account' AND address LIKE 'a%'",
+        ),
+        "contacts_lookup"
+    ));
+}
 
+fn assert_operation_and_search_plans(connection: &rusqlite::Connection) {
+    assert_operation_plans(connection);
+    assert_message_history_index_is_gone(connection);
+    assert_search_text_term_plans(connection);
+    assert_search_predicate_plans(connection);
+}
+
+fn assert_operation_plans(connection: &rusqlite::Connection) {
     let operation_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE kind IN ('send','draft') AND status='queued' ORDER BY created_at",
     );
-    assert!(operation_plan
-        .iter()
-        .any(|step| step.contains("operations_queued_durable")));
-    assert!(!operation_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
-    let active_draft_plan = query_plan(
-        &connection,
-        "EXPLAIN QUERY PLAN UPDATE operations SET status='queued' WHERE kind='draft' AND status='active'",
-    );
-    assert!(active_draft_plan
-        .iter()
-        .any(|step| step.contains("operations_active_drafts")));
-    let account_operation_plan = query_plan(
-        &connection,
-        "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE account_id='account'",
-    );
-    assert!(account_operation_plan
-        .iter()
-        .any(|step| step.contains("operations_by_account")));
+    assert!(plan_has(&operation_plan, "operations_queued_durable"));
+    assert!(!plan_has(&operation_plan, "TEMP B-TREE"));
 
+    assert!(plan_has(
+        &query_plan(
+            connection,
+            "EXPLAIN QUERY PLAN UPDATE operations SET status='queued' WHERE kind='draft' AND status='active'",
+        ),
+        "operations_active_drafts"
+    ));
+    assert!(plan_has(
+        &query_plan(
+            connection,
+            "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE account_id='account'",
+        ),
+        "operations_by_account"
+    ));
     let failed_durable_scoped_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE kind IN ('send','draft') AND status='failed' AND account_id='account' ORDER BY created_at",
     );
-    assert!(failed_durable_scoped_plan
-        .iter()
-        .any(|step| step.contains("operations_failed_durable")));
-    assert!(!failed_durable_scoped_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &failed_durable_scoped_plan,
+        "operations_failed_durable"
+    ));
+    assert!(!plan_has(&failed_durable_scoped_plan, "TEMP B-TREE"));
+}
 
+fn assert_message_history_index_is_gone(connection: &rusqlite::Connection) {
     let mut statement = connection.prepare("PRAGMA index_list(messages)").unwrap();
     let message_indexes = statement
         .query_map([], |row| row.get::<_, String>(1))
@@ -961,288 +894,268 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(!message_indexes
         .iter()
         .any(|name| name == "messages_by_history"));
+}
 
+fn assert_search_text_term_plans(connection: &rusqlite::Connection) {
     let search_text_term_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM message_search JOIN messages m ON m.seq=message_search.rowid JOIN threads t ON t.account_id=m.account_id AND t.id=m.thread_id WHERE message_search MATCH 'x' AND m.account_id='account' GROUP BY t.id ORDER BY t.latest_at DESC, t.id DESC LIMIT 51",
     );
-    assert!(search_text_term_plan
-        .iter()
-        .any(|step| step.contains("SCAN message_search VIRTUAL TABLE INDEX 0:M4")));
-    assert_eq!(
-        search_text_term_plan
-            .iter()
-            .filter(|step| step.contains("TEMP B-TREE"))
-            .count(),
-        2
-    );
+    assert!(plan_has(
+        &search_text_term_plan,
+        "SCAN message_search VIRTUAL TABLE INDEX 0:M4"
+    ));
+    assert_eq!(temp_btree_count(&search_text_term_plan), 2);
     let backward_search_text_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM message_search JOIN messages m ON m.seq=message_search.rowid JOIN threads t ON t.account_id=m.account_id AND t.id=m.thread_id WHERE message_search MATCH 'x' AND m.account_id='account' AND (t.latest_at,t.id)>(1,'t') GROUP BY t.id ORDER BY t.latest_at ASC, t.id ASC LIMIT 51",
     );
-    assert_eq!(
-        backward_search_text_plan
-            .iter()
-            .filter(|step| step.contains("TEMP B-TREE"))
-            .count(),
-        2
-    );
+    assert_eq!(temp_btree_count(&backward_search_text_plan), 2);
+}
 
+fn assert_search_predicate_plans(connection: &rusqlite::Connection) {
     let search_predicate_only_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM threads t WHERE t.account_id='account' AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND m.is_unread=1) ORDER BY t.latest_at DESC, t.id DESC LIMIT 51",
     );
-    assert!(search_predicate_only_plan.iter().any(
-        |step| step.contains("SEARCH t USING COVERING INDEX threads_by_latest (account_id=?)")
+    assert!(plan_has(
+        &search_predicate_only_plan,
+        "SEARCH t USING COVERING INDEX threads_by_latest (account_id=?)"
     ));
-    assert!(search_predicate_only_plan
-        .iter()
-        .any(|step| step.contains("SEARCH m USING INDEX messages_by_thread")));
-    assert!(!search_predicate_only_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &search_predicate_only_plan,
+        "SEARCH m USING INDEX messages_by_thread"
+    ));
+    assert!(!plan_has(&search_predicate_only_plan, "TEMP B-TREE"));
 
     let search_predicate_cursor_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM threads t WHERE t.account_id='account' AND (t.latest_at,t.id)<(1,'t') AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND m.is_unread=1) ORDER BY t.latest_at DESC, t.id DESC LIMIT 51",
     );
-    assert!(search_predicate_cursor_plan.iter().any(|step| step
-        .contains("SEARCH t USING COVERING INDEX threads_by_latest (account_id=? AND (latest_at,id)<(?,?))")));
-    assert!(!search_predicate_cursor_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &search_predicate_cursor_plan,
+        "SEARCH t USING COVERING INDEX threads_by_latest (account_id=? AND (latest_at,id)<(?,?))"
+    ));
+    assert!(!plan_has(&search_predicate_cursor_plan, "TEMP B-TREE"));
+
     let backward_search_predicate_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM threads t WHERE t.account_id='account' AND (t.latest_at,t.id)>(1,'t') AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND m.is_unread=1) ORDER BY t.latest_at ASC, t.id ASC LIMIT 51",
     );
-    assert!(backward_search_predicate_plan
-        .iter()
-        .any(|step| step.contains("threads_by_latest (account_id=? AND (latest_at,id)>(?,?))")));
-    assert!(!backward_search_predicate_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &backward_search_predicate_plan,
+        "threads_by_latest (account_id=? AND (latest_at,id)>(?,?))"
+    ));
+    assert!(!plan_has(&backward_search_predicate_plan, "TEMP B-TREE"));
+}
 
-    AccountRepository::upsert(&connection, &account()).unwrap();
-    EmbeddingRepository::create(&connection, "account", 2).unwrap();
+fn assert_vector_retrieval_plans(connection: &rusqlite::Connection) {
+    AccountRepository::upsert(connection, &account()).unwrap();
+    EmbeddingRepository::create(connection, "account", 2).unwrap();
     let table = EmbeddingRepository::table_name(1);
     let candidate_plan = query_plan(
-        &connection,
+        connection,
         &format!(
             "EXPLAIN QUERY PLAN {}",
             RetrievalRepository::candidate_sql(&table, false)
         ),
     );
     assert!(
-        candidate_plan
-            .iter()
-            .any(|step| step.contains("SCAN v VIRTUAL TABLE")),
+        plan_has(&candidate_plan, "SCAN v VIRTUAL TABLE"),
         "the assistant's candidate read must drive from the vector table's nearest-neighbour search"
     );
-    assert!(candidate_plan
-        .iter()
-        .any(|step| step.contains("SEARCH e USING INTEGER PRIMARY KEY (rowid=?)")));
-    assert!(candidate_plan
-        .iter()
-        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
-    assert!(!candidate_plan
-        .iter()
-        .any(|step| step.contains("SCAN e") || step.contains("SCAN m")));
-    assert!(!candidate_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(plan_has(
+        &candidate_plan,
+        "SEARCH e USING INTEGER PRIMARY KEY (rowid=?)"
+    ));
+    assert!(plan_has(
+        &candidate_plan,
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+    ));
+    assert!(!plan_has(&candidate_plan, "SCAN e"));
+    assert!(!plan_has(&candidate_plan, "SCAN m"));
+    assert!(!plan_has(&candidate_plan, "TEMP B-TREE"));
+    assert_filtered_candidate_plan(connection, &table);
+    assert_citation_sources_plan(connection);
+}
 
+fn assert_filtered_candidate_plan(connection: &rusqlite::Connection, table: &str) {
     let filtered_plan = query_plan(
-        &connection,
+        connection,
         &format!(
             "EXPLAIN QUERY PLAN {}",
-            RetrievalRepository::candidate_sql(&table, true)
+            RetrievalRepository::candidate_sql(table, true)
         ),
     );
     assert!(
-        filtered_plan
-            .iter()
-            .any(|step| step.contains("SCAN v VIRTUAL TABLE")),
+        plan_has(&filtered_plan, "SCAN v VIRTUAL TABLE"),
         "the filtered candidate read must still drive from the vector search"
     );
     assert!(
-        filtered_plan
-            .iter()
-            .any(|step| step.contains("LIST SUBQUERY")),
+        plan_has(&filtered_plan, "LIST SUBQUERY"),
         "the filters must reach the vector search as a rowid list, not run after it"
     );
-    assert!(filtered_plan
-        .iter()
-        .any(|step| step.contains("SEARCH f USING INTEGER PRIMARY KEY (rowid=?)")));
-    assert!(filtered_plan.iter().any(|step| step.contains(
+    assert!(plan_has(
+        &filtered_plan,
+        "SEARCH f USING INTEGER PRIMARY KEY (rowid=?)"
+    ));
+    assert!(plan_has(
+        &filtered_plan,
         "SEARCH ml USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=? AND message_id=?)"
-    )));
-    assert!(!filtered_plan
-        .iter()
-        .any(|step| step.contains("SCAN f") || step.contains("SCAN ml")));
-    assert!(!filtered_plan
-        .iter()
-        .any(|step| step.contains("TEMP B-TREE")));
+    ));
+    assert!(!plan_has(&filtered_plan, "SCAN f"));
+    assert!(!plan_has(&filtered_plan, "SCAN ml"));
+    assert!(!plan_has(&filtered_plan, "TEMP B-TREE"));
+}
 
+fn assert_citation_sources_plan(connection: &rusqlite::Connection) {
     let sources_plan = query_plan(
-        &connection,
+        connection,
         "EXPLAIN QUERY PLAN SELECT m.seq,m.id,m.thread_id,m.sender,m.recipients,m.subject,m.sent_at,m.plain_body,m.html_body,m.truncated_body FROM json_each(?2) r CROSS JOIN messages m ON m.seq=r.value WHERE m.account_id=?1",
     );
     assert!(
-        sources_plan
-            .iter()
-            .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")),
+        plan_has(
+            &sources_plan,
+            "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+        ),
         "citation sources must be one batched rowid lookup, not a query per passage"
     );
-    assert!(!sources_plan
-        .iter()
-        .any(|step| step.contains("SCAN m ") || step.contains("TEMP B-TREE")));
+    assert!(!plan_has(&sources_plan, "SCAN m "));
+    assert!(!plan_has(&sources_plan, "TEMP B-TREE"));
+}
 
+fn assert_lexical_and_recency_plans(connection: &rusqlite::Connection) {
     let lexical_relevance_plan = query_plan(
-        &connection,
+        connection,
         &format!(
             "EXPLAIN QUERY PLAN {}",
             RetrievalRepository::LEXICAL_RELEVANCE_SQL
         ),
     );
     assert!(
-        lexical_relevance_plan
-            .iter()
-            .any(|step| step.contains("SCAN message_search VIRTUAL TABLE INDEX 32:M4")),
+        plan_has(
+            &lexical_relevance_plan,
+            "SCAN message_search VIRTUAL TABLE INDEX 32:M4"
+        ),
         "the lexical relevance read must drive from the rank-ordered match"
     );
-    assert!(lexical_relevance_plan
-        .iter()
-        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert!(plan_has(
+        &lexical_relevance_plan,
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+    ));
     assert!(
-        lexical_relevance_plan.iter().any(|step| step.contains(
+        plan_has(
+            &lexical_relevance_plan,
             "SEARCH ml USING COVERING INDEX message_labels_by_label (account_id=? AND label_id=? AND message_id=?)"
-        )),
+        ),
         "the folder filter must resolve its label once and probe membership on the covering index"
     );
-    assert_eq!(
-        lexical_relevance_plan
-            .iter()
-            .filter(|step| step.contains("TEMP B-TREE"))
-            .count(),
-        0
-    );
+    assert_eq!(temp_btree_count(&lexical_relevance_plan), 0);
 
     let lexical_chronological_plan = query_plan(
-        &connection,
+        connection,
         &format!(
             "EXPLAIN QUERY PLAN {}",
             RetrievalRepository::LEXICAL_CHRONOLOGICAL_SQL
         ),
     );
     assert!(
-        lexical_chronological_plan
-            .iter()
-            .any(|step| step.contains("SCAN message_search VIRTUAL TABLE INDEX 0:M4")),
+        plan_has(
+            &lexical_chronological_plan,
+            "SCAN message_search VIRTUAL TABLE INDEX 0:M4"
+        ),
         "the lexical chronological read must still drive from the match, not from every message"
     );
-    assert!(lexical_chronological_plan
-        .iter()
-        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert!(plan_has(
+        &lexical_chronological_plan,
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+    ));
+    assert_recency_plans(connection);
+}
 
+fn assert_recency_plans(connection: &rusqlite::Connection) {
     for sql in [
         RetrievalRepository::RECENCY_DESCENDING_SQL,
         RetrievalRepository::RECENCY_ASCENDING_SQL,
     ] {
-        let recency_plan = query_plan(&connection, &format!("EXPLAIN QUERY PLAN {sql}"));
+        let recency_plan = query_plan(connection, &format!("EXPLAIN QUERY PLAN {sql}"));
         assert!(
-            recency_plan.iter().any(|step| step.contains(
+            plan_has(
+                &recency_plan,
                 "SEARCH m USING INDEX messages_by_sent_at (account_id=? AND sent_at>? AND sent_at<?)"
-            )),
+            ),
             "the filter-only read must seek to the requested date window and take its order from the index, not filter and sort"
         );
         assert!(
-            recency_plan.iter().any(|step| step.contains(
+            plan_has(
+                &recency_plan,
                 "SEARCH ml USING COVERING INDEX message_labels_by_label (account_id=? AND label_id=? AND message_id=?)"
-            )),
+            ),
             "the folder filter must resolve its label once and probe membership on the covering index"
         );
-        assert_eq!(
-            recency_plan
-                .iter()
-                .filter(|step| step.contains("TEMP B-TREE"))
-                .count(),
-            0
-        );
+        assert_eq!(temp_btree_count(&recency_plan), 0);
     }
+}
+
+#[test]
+fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
+    let connection = Storage::in_memory().unwrap();
+    assert_thread_and_reconciliation_plans(&connection);
+    assert_labelled_thread_plans(&connection);
+    assert_embedding_plans(&connection);
+    assert_message_and_operation_plans(&connection);
+    assert_operation_and_search_plans(&connection);
+    assert_vector_retrieval_plans(&connection);
+    assert_lexical_and_recency_plans(&connection);
+}
+
+fn assert_rowid_table_key(connection: &rusqlite::Connection, table: &str, former_key: &[&str]) {
+    let columns = table_columns(connection, table);
+    let (first_name, _, first_pk) = &columns[0];
+    assert_eq!(first_name, "seq", "{table}'s first column must be seq");
+    assert_eq!(*first_pk, 1, "{table}.seq must be the table's primary key");
+    for column in former_key {
+        let (_, not_null, pk) = columns
+            .iter()
+            .find(|(name, _, _)| name == column)
+            .unwrap_or_else(|| panic!("{table} lost its former key column {column}"));
+        assert!(*not_null, "{table}.{column} must stay NOT NULL");
+        assert_eq!(*pk, 0, "{table}.{column} must no longer be the primary key");
+    }
+    let expected: Vec<String> = former_key
+        .iter()
+        .map(|column| (*column).to_owned())
+        .collect();
+    let unique_sets = unique_indexed_column_sets(connection, table);
+    assert!(
+        unique_sets.iter().any(|set| set == &expected),
+        "{table} must retain {former_key:?} as a UNIQUE constraint"
+    );
 }
 
 #[test]
 fn every_rowid_table_carries_a_leading_autoincrement_seq_and_its_former_key_as_a_unique_constraint()
 {
     let connection = Storage::in_memory().unwrap();
-
-    let single_key_tables = [
-        ("accounts", "id"),
-        ("settings", "key"),
-        ("operations", "id"),
-        ("avatar_cache", "cache_key"),
-    ];
-    for (table, former_key) in single_key_tables {
-        let columns = table_columns(&connection, table);
-        let (first_name, _, first_pk) = &columns[0];
-        assert_eq!(first_name, "seq", "{table}'s first column must be seq");
-        assert_eq!(*first_pk, 1, "{table}.seq must be the table's primary key");
-        let (_, former_key_not_null, former_key_pk) = columns
-            .iter()
-            .find(|(name, _, _)| name == former_key)
-            .unwrap_or_else(|| panic!("{table} lost its former key column {former_key}"));
-        assert!(
-            *former_key_not_null,
-            "{table}.{former_key} must stay NOT NULL"
-        );
-        assert_eq!(
-            *former_key_pk, 0,
-            "{table}.{former_key} must no longer be the primary key"
-        );
-        let unique_sets = unique_indexed_column_sets(&connection, table);
-        assert!(
-            unique_sets
-                .iter()
-                .any(|set| set == &[former_key.to_owned()]),
-            "{table}.{former_key} must be covered by a UNIQUE constraint"
-        );
-    }
-
-    let composite_key_tables = [
-        ("labels", vec!["account_id", "id"]),
-        ("messages", vec!["account_id", "id"]),
-        (
-            "message_labels",
-            vec!["account_id", "message_id", "label_id"],
-        ),
-        ("threads", vec!["account_id", "id"]),
+    let tables: &[(&str, &[&str])] = &[
+        ("accounts", &["id"]),
+        ("settings", &["key"]),
+        ("operations", &["id"]),
+        ("avatar_cache", &["cache_key"]),
+        ("labels", &["account_id", "id"]),
+        ("messages", &["account_id", "id"]),
+        ("message_labels", &["account_id", "message_id", "label_id"]),
+        ("threads", &["account_id", "id"]),
         (
             "message_inline_parts",
-            vec!["account_id", "message_id", "content_id"],
+            &["account_id", "message_id", "content_id"],
         ),
-        ("traversal_cursors", vec!["account_id", "kind"]),
-        ("contacts", vec!["account_id", "address"]),
-        ("compose_draft_metadata", vec!["account_id", "draft_id"]),
+        ("traversal_cursors", &["account_id", "kind"]),
+        ("contacts", &["account_id", "address"]),
+        ("compose_draft_metadata", &["account_id", "draft_id"]),
     ];
-    for (table, former_key) in composite_key_tables {
-        let columns = table_columns(&connection, table);
-        let (first_name, _, first_pk) = &columns[0];
-        assert_eq!(first_name, "seq", "{table}'s first column must be seq");
-        assert_eq!(*first_pk, 1, "{table}.seq must be the table's primary key");
-        for column in &former_key {
-            let (_, not_null, pk) = columns
-                .iter()
-                .find(|(name, _, _)| name == column)
-                .unwrap_or_else(|| panic!("{table} lost its former key column {column}"));
-            assert!(*not_null, "{table}.{column} must stay NOT NULL");
-            assert_eq!(*pk, 0, "{table}.{column} must no longer be the primary key");
-        }
-        let expected: Vec<String> = former_key.iter().map(|column| column.to_string()).collect();
-        let unique_sets = unique_indexed_column_sets(&connection, table);
-        assert!(
-            unique_sets.iter().any(|set| set == &expected),
-            "{table} must retain {former_key:?} as a UNIQUE constraint"
-        );
+    for (table, former_key) in tables {
+        assert_rowid_table_key(&connection, table, former_key);
     }
 
     let columns = table_columns(&connection, "message_embeddings");
@@ -1506,13 +1419,8 @@ async fn storage_offloads_database_work() {
     );
 }
 
-#[test]
-fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index() {
-    let connection = Storage::in_memory().unwrap();
-    AccountRepository::upsert(&connection, &account()).unwrap();
-    MessageRepository::write_full_state(&connection, &message()).unwrap();
-
-    let attachments = vec![
+fn sample_attachments() -> Vec<Attachment> {
+    vec![
         Attachment {
             attachment_id: "att-2".into(),
             filename: "second.pdf".into(),
@@ -1527,23 +1435,45 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
             size: 100,
             position: 0,
         },
-    ];
+    ]
+}
+
+fn assert_no_foreign_key_violations(connection: &rusqlite::Connection) {
+    let mut statement = connection.prepare("PRAGMA foreign_key_check").unwrap();
+    let violations = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        violations.is_empty(),
+        "unexpected FK violations: {violations:?}"
+    );
+}
+
+#[test]
+fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    MessageRepository::write_full_state(&connection, &message()).unwrap();
+
     AttachmentRepository::replace_for_message(
         &connection,
         MessageKey {
             account_id: "account",
             message_id: "message",
         },
-        &attachments,
+        &sample_attachments(),
     )
     .unwrap();
 
     let stored = AttachmentRepository::for_message(&connection, "account", "message").unwrap();
+    let ids: Vec<_> = stored
+        .iter()
+        .map(|value| value.attachment_id.as_str())
+        .collect();
     assert_eq!(
-        stored
-            .iter()
-            .map(|value| value.attachment_id.as_str())
-            .collect::<Vec<_>>(),
+        ids,
         vec!["att-1", "att-2"],
         "attachments must read back ordered by sender position, not insertion order"
     );
@@ -1562,27 +1492,14 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
         "first.pdf"
     );
 
-    let mut statement = connection.prepare("PRAGMA foreign_key_check").unwrap();
-    let violations = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap();
-    assert!(
-        violations.is_empty(),
-        "unexpected FK violations: {violations:?}"
-    );
+    assert_no_foreign_key_violations(&connection);
 
     let cascade_plan = query_plan(
         &connection,
         "EXPLAIN QUERY PLAN DELETE FROM message_attachments WHERE account_id='account' AND message_id='message'",
     );
-    assert!(cascade_plan
-        .iter()
-        .any(|step| step.contains("message_attachments") || step.contains("SEARCH")));
-    assert!(!cascade_plan
-        .iter()
-        .any(|step| step.contains("SCAN message_attachments")));
+    assert!(plan_has(&cascade_plan, "message_attachments") || plan_has(&cascade_plan, "SEARCH"));
+    assert!(!plan_has(&cascade_plan, "SCAN message_attachments"));
 
     MessageRepository::delete(&connection, "account", "message").unwrap();
     assert!(

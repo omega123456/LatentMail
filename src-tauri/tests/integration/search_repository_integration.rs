@@ -145,6 +145,63 @@ fn a_bare_term_present_only_in_the_body_is_found() {
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 }
 
+fn search_page(
+    connection: &rusqlite::Connection,
+    parsed: &latentmail_lib::search::query::ParsedQuery,
+    scope: &latentmail_lib::search::scope::ScopeFilter,
+) -> Vec<latentmail_lib::storage::ThreadListRow> {
+    SearchRepository::search(
+        connection,
+        SearchPageQuery {
+            account_id: "account",
+            parsed: parsed,
+            scope: scope,
+            cursor: None,
+            limit: 10,
+            direction: ThreadPageDirection::default(),
+        },
+    )
+    .unwrap()
+}
+
+fn collect_paginated_thread_ids(
+    connection: &rusqlite::Connection,
+    parsed: &latentmail_lib::search::query::ParsedQuery,
+    scope: &latentmail_lib::search::scope::ScopeFilter,
+) -> Vec<String> {
+    let mut collected = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = SearchRepository::search(
+            connection,
+            SearchPageQuery {
+                account_id: "account",
+                parsed: parsed,
+                scope: scope,
+                cursor: cursor.clone(),
+                limit: 2,
+                direction: ThreadPageDirection::default(),
+            },
+        )
+        .unwrap();
+        if page.is_empty() {
+            break;
+        }
+        for row in &page {
+            collected.push(row.thread.id.clone());
+        }
+        let last = page.last().unwrap();
+        cursor = Some(ThreadPageCursor {
+            latest_at: last.thread.latest_at,
+            thread_id: last.thread.id.clone(),
+        });
+        if page.len() < 2 {
+            break;
+        }
+    }
+    collected
+}
+
 #[test]
 fn a_search_result_counts_trashed_messages_only_in_the_trash_scope() {
     let connection = setup();
@@ -181,35 +238,13 @@ fn a_search_result_counts_trashed_messages_only_in_the_trash_scope() {
     let parsed = parse("quarterly", now()).unwrap();
 
     let default_scope = resolve(&SearchScope::Default);
-    let rows = SearchRepository::search(
-        &connection,
-        SearchPageQuery {
-            account_id: "account",
-            parsed: &parsed,
-            scope: &default_scope,
-            cursor: None,
-            limit: 10,
-            direction: ThreadPageDirection::default(),
-        },
-    )
-    .unwrap();
+    let rows = search_page(&connection, &parsed, &default_scope);
     assert_eq!(rows[0].thread.message_count, 2);
 
     let trash_scope = resolve(&SearchScope::Label {
         label_id: "TRASH".into(),
     });
-    let rows = SearchRepository::search(
-        &connection,
-        SearchPageQuery {
-            account_id: "account",
-            parsed: &parsed,
-            scope: &trash_scope,
-            cursor: None,
-            limit: 10,
-            direction: ThreadPageDirection::default(),
-        },
-    )
-    .unwrap();
+    let rows = search_page(&connection, &parsed, &trash_scope);
     assert_eq!(rows[0].thread.message_count, 3);
 }
 
@@ -422,36 +457,7 @@ fn matches_deduplicate_to_threads_order_newest_first_and_paginate_without_loss()
     .unwrap();
     assert_eq!(total, 5);
 
-    let mut collected = Vec::new();
-    let mut cursor = None;
-    loop {
-        let page = SearchRepository::search(
-            &connection,
-            SearchPageQuery {
-                account_id: "account",
-                parsed: &parsed,
-                scope: &scope,
-                cursor: cursor.clone(),
-                limit: 2,
-                direction: ThreadPageDirection::default(),
-            },
-        )
-        .unwrap();
-        if page.is_empty() {
-            break;
-        }
-        for row in &page {
-            collected.push(row.thread.id.clone());
-        }
-        let last = page.last().unwrap();
-        cursor = Some(ThreadPageCursor {
-            latest_at: last.thread.latest_at,
-            thread_id: last.thread.id.clone(),
-        });
-        if page.len() < 2 {
-            break;
-        }
-    }
+    let collected = collect_paginated_thread_ids(&connection, &parsed, &scope);
 
     let unique: HashSet<&String> = collected.iter().collect();
     assert_eq!(unique.len(), 5);

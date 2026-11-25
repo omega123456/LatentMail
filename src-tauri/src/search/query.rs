@@ -285,6 +285,12 @@ impl QueryAccumulator {
         }
     }
 
+    fn push_non_empty_literal(&mut self, value: String, negated: bool) {
+        if !value.trim().is_empty() {
+            self.terms.push_literal(value, negated);
+        }
+    }
+
     fn apply_token(&mut self, token: RawToken) {
         let RawToken {
             negated,
@@ -292,9 +298,7 @@ impl QueryAccumulator {
             value,
         } = token;
         let Some(key) = key else {
-            if !value.trim().is_empty() {
-                self.terms.push_literal(value, negated);
-            }
+            self.push_non_empty_literal(value, negated);
             return;
         };
         if let Some((_, handler)) = TOKEN_HANDLERS

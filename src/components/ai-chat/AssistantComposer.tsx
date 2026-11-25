@@ -7,6 +7,120 @@ import { ICON_SIZE } from '@/components/shared/icon-size';
 const sendClass =
   'grid size-8 shrink-0 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary';
 
+function useAutoResizePrompt(promptRef: RefObject<HTMLTextAreaElement | null>, draft: string) {
+  useLayoutEffect(() => {
+    const prompt = promptRef.current;
+    if (!prompt) return;
+    prompt.style.height = 'auto';
+    prompt.style.height = `${prompt.scrollHeight + prompt.offsetHeight - prompt.clientHeight}px`;
+  }, [draft, promptRef]);
+}
+
+function ComposerActionButton({
+  streaming,
+  canSend,
+  onSend,
+  onStop,
+}: {
+  streaming: boolean;
+  canSend: boolean;
+  onSend: () => void;
+  onStop: () => void;
+}) {
+  if (streaming) {
+    return (
+      <button
+        type="button"
+        aria-label="Stop answering"
+        title="Stop answering"
+        onClick={onStop}
+        className={`${sendClass} bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container`}
+      >
+        <Square aria-hidden="true" size={ICON_SIZE.sm} fill="currentColor" />
+      </button>
+    );
+  }
+  const enabledTone = canSend
+    ? 'bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary'
+    : 'cursor-not-allowed bg-surface-container-high text-outline dark:bg-dark-surface-container-high dark:text-dark-outline';
+  return (
+    <button
+      type="button"
+      aria-label="Send question"
+      title="Send question"
+      disabled={!canSend}
+      onClick={onSend}
+      className={`${sendClass} ${enabledTone}`}
+    >
+      <ArrowUp aria-hidden="true" size={ICON_SIZE.base} />
+    </button>
+  );
+}
+
+function ComposerStatusBar({
+  streaming,
+  draftLength,
+  over,
+  canSend,
+  onSend,
+  onStop,
+}: {
+  streaming: boolean;
+  draftLength: number;
+  over: boolean;
+  canSend: boolean;
+  onSend: () => void;
+  onStop: () => void;
+}) {
+  const counterTone = over
+    ? 'font-bold text-error dark:text-dark-error'
+    : 'text-outline dark:text-dark-outline';
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-label-sm font-normal text-outline dark:text-dark-outline">
+        {streaming ? 'Answering…' : 'Enter sends · Shift+Enter for a new line'}
+      </span>
+      <span
+        data-testid="assistant-counter"
+        className={`ml-auto font-mono text-label-sm tabular-nums ${counterTone}`}
+      >
+        {draftLength} / {QUESTION_LIMIT}
+      </span>
+      <ComposerActionButton
+        streaming={streaming}
+        canSend={canSend}
+        onSend={onSend}
+        onStop={onStop}
+      />
+    </div>
+  );
+}
+
+function handlePromptKeyDown(
+  event: KeyboardEvent<HTMLTextAreaElement>,
+  actions: {
+    canSend: boolean;
+    onSend: () => void;
+    historyPrevious: () => void;
+    historyNext: () => void;
+  },
+) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    if (actions.canSend) actions.onSend();
+    return;
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    actions.historyPrevious();
+    return;
+  }
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    actions.historyNext();
+  }
+}
+
 export function AssistantComposer({
   inputRef,
 }: {
@@ -22,34 +136,11 @@ export function AssistantComposer({
   const historyPrevious = useAssistantStore((assistant) => assistant.historyPrevious);
   const historyNext = useAssistantStore((assistant) => assistant.historyNext);
 
-  useLayoutEffect(() => {
-    const prompt = promptRef.current;
-    if (!prompt) return;
-    prompt.style.height = 'auto';
-    prompt.style.height = `${prompt.scrollHeight + prompt.offsetHeight - prompt.clientHeight}px`;
-  }, [draft, promptRef]);
+  useAutoResizePrompt(promptRef, draft);
 
   const streaming = isStreaming(messages);
-  const length = draft.trim().length;
   const over = draft.length > QUESTION_LIMIT;
-  const canSend = length > 0 && !over && !streaming;
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      if (canSend) ask(draft);
-      return;
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      historyPrevious();
-      return;
-    }
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      historyNext();
-    }
-  };
+  const canSend = draft.trim().length > 0 && !over && !streaming;
 
   return (
     <div className="grid gap-1.5 border-t border-outline-variant px-3 pb-3 pt-2.5 dark:border-dark-outline-variant">
@@ -62,50 +153,24 @@ export function AssistantComposer({
         disabled={streaming}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={onKeyDown}
+        onKeyDown={(event) =>
+          handlePromptKeyDown(event, {
+            canSend: canSend,
+            onSend: () => ask(draft),
+            historyPrevious: historyPrevious,
+            historyNext: historyNext,
+          })
+        }
         className="min-h-ai-prompt-min max-h-ai-prompt-max"
       />
-      <div className="flex items-center gap-2">
-        <span className="text-label-sm font-normal text-outline dark:text-dark-outline">
-          {streaming ? 'Answering…' : 'Enter sends · Shift+Enter for a new line'}
-        </span>
-        <span
-          data-testid="assistant-counter"
-          className={`ml-auto font-mono text-label-sm tabular-nums ${
-            over
-              ? 'font-bold text-error dark:text-dark-error'
-              : 'text-outline dark:text-dark-outline'
-          }`}
-        >
-          {draft.length} / {QUESTION_LIMIT}
-        </span>
-        {streaming ? (
-          <button
-            type="button"
-            aria-label="Stop answering"
-            title="Stop answering"
-            onClick={stop}
-            className={`${sendClass} bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container`}
-          >
-            <Square aria-hidden="true" size={ICON_SIZE.sm} fill="currentColor" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            aria-label="Send question"
-            title="Send question"
-            disabled={!canSend}
-            onClick={() => ask(draft)}
-            className={`${sendClass} ${
-              canSend
-                ? 'bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary'
-                : 'cursor-not-allowed bg-surface-container-high text-outline dark:bg-dark-surface-container-high dark:text-dark-outline'
-            }`}
-          >
-            <ArrowUp aria-hidden="true" size={ICON_SIZE.base} />
-          </button>
-        )}
-      </div>
+      <ComposerStatusBar
+        streaming={streaming}
+        draftLength={draft.length}
+        over={over}
+        canSend={canSend}
+        onSend={() => ask(draft)}
+        onStop={stop}
+      />
     </div>
   );
 }

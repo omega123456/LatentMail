@@ -122,27 +122,36 @@ impl ThinkFilter {
     pub fn push(&mut self, delta: &str) -> String {
         self.pending.push_str(delta);
         let mut visible = String::new();
-        loop {
-            let tags = self.active_tags();
-            match first_tag(&self.pending, &tags) {
-                Some(span) => {
-                    if !self.inside {
-                        visible.push_str(&self.pending[..span.start]);
-                    }
-                    self.pending.replace_range(..span.start + span.length, "");
-                    self.inside = !self.inside;
-                }
-                None => {
-                    let held = self.pending.len() - partial_tag_len(&self.pending, &tags);
-                    if !self.inside {
-                        visible.push_str(&self.pending[..held]);
-                    }
-                    self.pending.replace_range(..held, "");
-                    return visible;
-                }
-            }
-        }
+        while self.consume_next_tag(&mut visible) {}
+        self.release_untagged_text(&mut visible);
+        visible
     }
+
+    fn consume_next_tag(&mut self, visible: &mut String) -> bool {
+        let tags = self.active_tags();
+        let Some(span) = first_tag(&self.pending, &tags) else {
+            return false;
+        };
+        self.emit_unless_inside(visible, span.start);
+        self.pending.replace_range(..span.start + span.length, "");
+        self.inside = !self.inside;
+        true
+    }
+
+    fn release_untagged_text(&mut self, visible: &mut String) {
+        let tags = self.active_tags();
+        let held = self.pending.len() - partial_tag_len(&self.pending, &tags);
+        self.emit_unless_inside(visible, held);
+        self.pending.replace_range(..held, "");
+    }
+
+    fn emit_unless_inside(&self, visible: &mut String, end: usize) {
+        if self.inside {
+            return;
+        }
+        visible.push_str(&self.pending[..end]);
+    }
+
     pub fn flush(&mut self) -> String {
         if self.inside {
             self.pending.clear();
@@ -196,46 +205,51 @@ impl Service<HttpRequestFactory> for StatusPreservingTransport {
     }
 
     fn call(&mut self, factory: HttpRequestFactory) -> Self::Future {
-        let client = self.client.clone();
-        let authorized = self.authorized;
-        Box::pin(async move {
-            let mut request = factory.build().await?;
-            if !authorized {
-                request.headers_mut().remove(AUTHORIZATION);
-            }
-            let streaming = asks_for_a_stream(&request);
-            let route = format!("{} {}", request.method(), request.url());
-            tracing::debug!(
-                target: "ai",
-                "request {route} {}",
-                preview(request.body().and_then(reqwest::Body::as_bytes).unwrap_or_default())
-            );
-            let response = client.execute(request).await.map_err(|error| {
-                tracing::debug!(target: "ai", "request {route} failed: {error}");
-                OpenAIError::Reqwest(error)
-            })?;
-            let status = response.status();
-            let parts = parts_of(&response);
-            if !status.is_success() {
-                let body = response.text().await.unwrap_or_default();
-                tracing::debug!(target: "ai", "response {route} {status} {}", preview(body.as_bytes()));
-                return Err(status_error(status, body));
-            }
-            if streaming {
-                tracing::debug!(target: "ai", "response {route} {status} streaming");
-                return Ok(rebuilt(
-                    parts,
-                    reqwest::Body::wrap_stream(with_trailing_sentinel(
-                        response.bytes_stream(),
-                        route,
-                    )),
-                ));
-            }
-            let body = response.bytes().await.map_err(OpenAIError::Reqwest)?;
-            tracing::debug!(target: "ai", "response {route} {status} {}", preview(&body));
-            Ok(rebuilt(parts, reqwest::Body::from(body)))
-        })
+        Box::pin(forward_preserving_status(
+            self.client.clone(),
+            self.authorized,
+            factory,
+        ))
     }
+}
+
+async fn forward_preserving_status(
+    client: reqwest::Client,
+    authorized: bool,
+    factory: HttpRequestFactory,
+) -> Result<Response, OpenAIError> {
+    let mut request = factory.build().await?;
+    if !authorized {
+        request.headers_mut().remove(AUTHORIZATION);
+    }
+    let streaming = asks_for_a_stream(&request);
+    let route = format!("{} {}", request.method(), request.url());
+    tracing::debug!(
+        target: "ai",
+        "request {route} {}",
+        preview(request.body().and_then(reqwest::Body::as_bytes).unwrap_or_default())
+    );
+    let response = client.execute(request).await.map_err(|error| {
+        tracing::debug!(target: "ai", "request {route} failed: {error}");
+        OpenAIError::Reqwest(error)
+    })?;
+    let status = response.status();
+    let parts = parts_of(&response);
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        tracing::debug!(target: "ai", "response {route} {status} {}", preview(body.as_bytes()));
+        return Err(status_error(status, body));
+    }
+    if streaming {
+        tracing::debug!(target: "ai", "response {route} {status} streaming");
+        return Ok(rebuilt(
+            parts,
+            reqwest::Body::wrap_stream(with_trailing_sentinel(response.bytes_stream(), route)),
+        ));
+    }
+    let body = response.bytes().await.map_err(OpenAIError::Reqwest)?;
+    tracing::debug!(target: "ai", "response {route} {status} {}", preview(&body));
+    Ok(rebuilt(parts, reqwest::Body::from(body)))
 }
 
 const PREVIEW_EDGE: usize = 4096;
@@ -296,22 +310,30 @@ fn with_trailing_sentinel(
     route: String,
 ) -> impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static {
     futures_util::stream::unfold(Some(Box::pin(stream)), move |state| {
-        let route = route.clone();
-        async move {
-            let mut stream = state?;
-            match stream.next().await {
-                Some(Ok(bytes)) => {
-                    tracing::debug!(target: "ai", "stream {route} {}", preview(&bytes));
-                    Some((Ok(bytes), Some(stream)))
-                }
-                Some(Err(error)) => {
-                    tracing::debug!(target: "ai", "stream {route} failed: {error}");
-                    Some((Err(error), Some(stream)))
-                }
-                None => Some((Ok(Bytes::from_static(TRUNCATION_SENTINEL_FRAME)), None)),
-            }
-        }
+        next_stream_frame(state, route.clone())
     })
+}
+
+async fn next_stream_frame<ByteStream>(
+    state: Option<Pin<Box<ByteStream>>>,
+    route: String,
+) -> Option<(reqwest::Result<Bytes>, Option<Pin<Box<ByteStream>>>)>
+where
+    ByteStream: Stream<Item = reqwest::Result<Bytes>> + Send,
+{
+    let mut stream = state?;
+    let Some(item) = stream.next().await else {
+        return Some((Ok(Bytes::from_static(TRUNCATION_SENTINEL_FRAME)), None));
+    };
+    log_stream_item(&route, &item);
+    Some((item, Some(stream)))
+}
+
+fn log_stream_item(route: &str, item: &reqwest::Result<Bytes>) {
+    match item {
+        Ok(bytes) => tracing::debug!(target: "ai", "stream {route} {}", preview(bytes)),
+        Err(error) => tracing::debug!(target: "ai", "stream {route} failed: {error}"),
+    }
 }
 
 #[derive(Clone)]
@@ -430,70 +452,98 @@ impl Provider {
                 |body| async move { self.client.chat().create_stream_byot(body).await },
             )
             .await?;
-        let mut think = ThinkFilter::default();
-        let mut delivered = false;
-        let mut reasoned = false;
-        let mut truncated = false;
-        while let Some(item) = stream.next().await {
-            if request.cancel.load(Ordering::SeqCst) {
-                return Ok(());
-            }
-            let chunk = item.map_err(provider_error)?;
-            if chunk.stream_ended_without_done_marker {
-                tracing::debug!(target: "ai", "chat stream ended without a done marker");
-                return Err(ProviderError::Response);
-            }
-            let Some(choice) = chunk.choices.into_iter().next() else {
-                continue;
-            };
-            reasoned |= choice.reasoned();
-            truncated |= choice.truncated();
-            let Some(text) = choice
-                .delta
-                .and_then(|delta| delta.content)
-                .filter(|text| !text.is_empty())
-            else {
-                continue;
-            };
-            delivered = true;
-            let visible = think.push(&text);
-            if !visible.is_empty() {
-                on_delta(&visible);
-            }
+        let mut progress = StreamProgress::default();
+        while let Some(item) = next_uncancelled_item(&mut stream, request.cancel).await {
+            progress.absorb(item.map_err(provider_error)?, on_delta)?;
         }
         if request.cancel.load(Ordering::SeqCst) {
             return Ok(());
         }
-        let tail = think.flush();
-        if !tail.is_empty() {
-            on_delta(&tail);
-        }
-        if delivered {
-            return Ok(());
-        }
-        Err(empty_answer(reasoned, truncated))
+        progress.finish(on_delta)
     }
     async fn send<T, F, Fut>(&self, request: SendRequest<'_>, call: F) -> Result<T, ProviderError>
     where
         F: Fn(Value) -> Fut,
         Fut: std::future::Future<Output = Result<T, OpenAIError>>,
     {
-        loop {
-            let tier = self.reasoning_tier.load(Ordering::SeqCst);
-            match call(chat_body(&request, tier)).await {
-                Ok(value) => return Ok(value),
-                Err(error) => {
-                    let should_step_down =
-                        rejects_the_request(&error) && tier < LAST_REASONING_TIER;
-                    if should_step_down {
-                        self.reasoning_tier.store(tier + 1, Ordering::SeqCst);
-                        continue;
-                    }
-                    return Err(provider_error(error));
-                }
-            }
+        let mut tier = self.reasoning_tier.load(Ordering::SeqCst);
+        let mut attempt = call(chat_body(&request, tier)).await;
+        while should_step_down(&attempt, tier) {
+            self.reasoning_tier.store(tier + 1, Ordering::SeqCst);
+            tier = self.reasoning_tier.load(Ordering::SeqCst);
+            attempt = call(chat_body(&request, tier)).await;
         }
+        attempt.map_err(provider_error)
     }
+}
+
+fn should_step_down<T>(attempt: &Result<T, OpenAIError>, tier: usize) -> bool {
+    let rejected = matches!(attempt, Err(error) if rejects_the_request(error));
+    rejected && tier < LAST_REASONING_TIER
+}
+
+async fn next_uncancelled_item(
+    stream: &mut StreamResponse<StreamChunk>,
+    cancel: &AtomicBool,
+) -> Option<Result<StreamChunk, OpenAIError>> {
+    let item = stream.next().await?;
+    if cancel.load(Ordering::SeqCst) {
+        return None;
+    }
+    Some(item)
+}
+
+#[derive(Default)]
+struct StreamProgress {
+    think: ThinkFilter,
+    delivered: bool,
+    reasoned: bool,
+    truncated: bool,
+}
+
+impl StreamProgress {
+    fn absorb(
+        &mut self,
+        chunk: StreamChunk,
+        on_delta: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<(), ProviderError> {
+        if chunk.stream_ended_without_done_marker {
+            tracing::debug!(target: "ai", "chat stream ended without a done marker");
+            return Err(ProviderError::Response);
+        }
+        let Some(choice) = chunk.choices.into_iter().next() else {
+            return Ok(());
+        };
+        self.reasoned |= choice.reasoned();
+        self.truncated |= choice.truncated();
+        let Some(text) = choice
+            .delta
+            .and_then(|delta| delta.content)
+            .filter(|text| !text.is_empty())
+        else {
+            return Ok(());
+        };
+        self.delivered = true;
+        let visible = self.think.push(&text);
+        emit_if_visible(&visible, on_delta);
+        Ok(())
+    }
+
+    fn finish(mut self, on_delta: &mut (dyn FnMut(&str) + Send)) -> Result<(), ProviderError> {
+        let tail = self.think.flush();
+        emit_if_visible(&tail, on_delta);
+        if self.delivered {
+            return Ok(());
+        }
+        Err(empty_answer(self.reasoned, self.truncated))
+    }
+}
+
+fn emit_if_visible(text: &str, on_delta: &mut (dyn FnMut(&str) + Send)) {
+    if text.is_empty() {
+        return;
+    }
+    on_delta(text);
 }
 
 fn chat_body(request: &SendRequest<'_>, tier: usize) -> Value {

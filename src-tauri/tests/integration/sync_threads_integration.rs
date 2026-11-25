@@ -262,17 +262,86 @@ async fn list_threads_backward_returns_the_rows_adjacent_to_the_cursor() {
     assert_eq!(previous.id, "t5");
 }
 
-#[tokio::test]
-async fn list_threads_paginates_newest_first_and_filters_by_label() {
+fn open_account_storage() -> (Storage, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
     seed_account(&connection);
+    drop(connection);
+    (storage, directory)
+}
+
+fn inbox_label(message_count: i64) -> Label {
+    Label {
+        account_id: "account".into(),
+        id: "INBOX".into(),
+        name: "Inbox".into(),
+        kind: "system".into(),
+        color: None,
+        message_count: message_count,
+    }
+}
+
+fn message_stub(id: &str, thread_id: &str, sent_at: i64) -> Message {
+    Message {
+        account_id: "account".into(),
+        id: id.into(),
+        thread_id: thread_id.into(),
+        rfc_message_id: None,
+        sender: "alice@example.com".into(),
+        recipients: "me@example.com".into(),
+        subject: format!("Subject {thread_id}"),
+        sent_at: sent_at,
+        snippet: "hi".into(),
+        html_body: None,
+        plain_body: Some("hi".into()),
+        has_attachments: false,
+        is_unread: false,
+        is_starred: false,
+        history_id: sent_at,
+        truncated_body: None,
+        html_presence: HtmlPresence::Absent,
+    }
+}
+
+fn add_label(connection: &rusqlite::Connection, message_id: &str, label_id: &str) {
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: message_id,
+        },
+        LabelMembershipChange {
+            label_id: label_id,
+            present: true,
+        },
+    )
+    .unwrap();
+}
+
+async fn load_thread_conversation(
+    application: &tauri::App<tauri::test::MockRuntime>,
+    thread_id: &str,
+) -> latentmail_lib::sync::ConversationDto {
+    load_conversation(
+        AppServices::new(application.handle()),
+        CommandPayload(LoadConversationRequest {
+            account_id: "account".into(),
+            thread_id: thread_id.into(),
+            image_policy: None,
+            entry_scope: None,
+        }),
+    )
+    .await
+    .unwrap()
+}
+
+fn seed_paginated_threads(connection: &rusqlite::Connection) {
     for (id, at) in [("t1", 1), ("t2", 2), ("t3", 3)] {
-        ThreadRepository::upsert(&connection, &thread(id, at, id == "t2")).unwrap();
+        ThreadRepository::upsert(connection, &thread(id, at, id == "t2")).unwrap();
     }
     LabelRepository::upsert(
-        &connection,
+        connection,
         &Label {
             account_id: "account".into(),
             id: "Label_Project".into(),
@@ -284,23 +353,9 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     )
     .unwrap();
     let latest = Message {
-        account_id: "account".into(),
-        id: "m2".into(),
-        thread_id: "t2".into(),
-        rfc_message_id: None,
-        sender: "alice@example.com".into(),
-        recipients: "me@example.com".into(),
-        subject: "Subject t2".into(),
-        sent_at: 2,
         snippet: "latest snippet".into(),
-        html_body: None,
         plain_body: None,
-        has_attachments: false,
-        is_unread: false,
-        is_starred: false,
-        history_id: 2,
-        truncated_body: None,
-        html_presence: HtmlPresence::Absent,
+        ..message_stub("m2", "t2", 2)
     };
     let older = Message {
         id: "m2-old".into(),
@@ -309,36 +364,64 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
         ..latest.clone()
     };
     for message in [older, latest] {
-        MessageRepository::write_full_state(&connection, &message).unwrap();
-        MessageRepository::set_label_membership(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: &message.id,
-            },
-            LabelMembershipChange {
-                label_id: "Label_Project",
-                present: true,
-            },
-        )
-        .unwrap();
+        MessageRepository::write_full_state(connection, &message).unwrap();
+        add_label(connection, &message.id, "Label_Project");
     }
-    drop(connection);
-    let application = app();
-    application.manage(storage);
+}
 
-    let first_page = list_threads(
+struct AccountThreadPageRequest {
+    cursor: Option<ThreadCursor>,
+    direction: Option<ThreadPageDirection>,
+}
+
+async fn list_account_thread_page(
+    application: &tauri::App<tauri::test::MockRuntime>,
+    page: AccountThreadPageRequest,
+) -> latentmail_lib::sync::ThreadPage {
+    list_threads(
         AppServices::new(application.handle()),
         CommandPayload(ListThreadsRequest {
             account_id: "account".into(),
             label_id: None,
-            cursor: None,
-            direction: None,
+            cursor: page.cursor,
+            direction: page.direction,
             limit: Some(2),
         }),
     )
     .await
-    .unwrap();
+    .unwrap()
+}
+
+async fn subject_search_total(application: &tauri::App<tauri::test::MockRuntime>) -> i64 {
+    search_total(
+        AppServices::new(application.handle()),
+        CommandPayload(SearchTotalRequest {
+            account_id: "account".into(),
+            query: "subject".into(),
+            scope: None,
+        }),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn list_threads_paginates_newest_first_and_filters_by_label() {
+    let (storage, _directory) = open_account_storage();
+    let connection = storage.connection().unwrap();
+    seed_paginated_threads(&connection);
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+
+    let first_page = list_account_thread_page(
+        &application,
+        AccountThreadPageRequest {
+            cursor: None,
+            direction: None,
+        },
+    )
+    .await;
     assert_eq!(first_page.items.len(), 2);
     assert_eq!(first_page.items[0].id, "t3");
     assert_eq!(first_page.items[1].id, "t2");
@@ -348,57 +431,35 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     let cursor = first_page.next_cursor.clone().expect("more pages remain");
     assert_eq!(cursor.id, "t2");
 
-    let second_page = list_threads(
-        AppServices::new(application.handle()),
-        CommandPayload(ListThreadsRequest {
-            account_id: "account".into(),
-            label_id: None,
+    let second_page = list_account_thread_page(
+        &application,
+        AccountThreadPageRequest {
             cursor: Some(cursor),
             direction: None,
-            limit: Some(2),
-        }),
+        },
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(second_page.items.len(), 1);
     assert_eq!(second_page.items[0].id, "t1");
     assert!(second_page.next_cursor.is_none());
     let previous = second_page
         .previous_cursor
         .expect("a prior page remains available");
-    let restored_page = list_threads(
-        AppServices::new(application.handle()),
-        CommandPayload(ListThreadsRequest {
-            account_id: "account".into(),
-            label_id: None,
+    let restored_page = list_account_thread_page(
+        &application,
+        AccountThreadPageRequest {
             cursor: Some(previous),
             direction: Some(ThreadPageDirection::Backward),
-            limit: Some(2),
-        }),
+        },
     )
-    .await
-    .unwrap();
-    assert_eq!(
-        restored_page
-            .items
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<Vec<_>>(),
-        ["t3", "t2"],
-    );
-    assert_eq!(
-        search_total(
-            AppServices::new(application.handle()),
-            CommandPayload(SearchTotalRequest {
-                account_id: "account".into(),
-                query: "subject".into(),
-                scope: None
-            })
-        )
-        .await
-        .unwrap(),
-        1,
-    );
+    .await;
+    let restored_ids: Vec<_> = restored_page
+        .items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(restored_ids, ["t3", "t2"]);
+    assert_eq!(subject_search_total(&application).await, 1);
 }
 
 #[tokio::test]
@@ -413,66 +474,23 @@ async fn list_threads_cursor_type_round_trips_through_serde() {
     assert_eq!(round_tripped, cursor);
 }
 
-#[tokio::test]
-async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let connection = storage.connection().unwrap();
-    seed_account(&connection);
-    LabelRepository::upsert(
-        &connection,
-        &Label {
-            account_id: "account".into(),
-            id: "INBOX".into(),
-            name: "Inbox".into(),
-            kind: "system".into(),
-            color: None,
-            message_count: 0,
-        },
-    )
-    .unwrap();
-    ThreadRepository::upsert(&connection, &thread("t1", 1, false)).unwrap();
-    MessageRepository::write_full_state(
-        &connection,
-        &Message {
-            account_id: "account".into(),
-            id: "m1".into(),
-            thread_id: "t1".into(),
-            rfc_message_id: None,
-            sender: "alice@example.com".into(),
-            recipients: "me@example.com, cc@example.com".into(),
-            subject: "Subject t1".into(),
-            sent_at: 1,
-            snippet: "hi".into(),
-            html_body: Some(r#"<p>hi</p><img src="cid:img1"><script>alert(1)</script>"#.into()),
-            plain_body: Some("hi".into()),
-            has_attachments: false,
-            is_unread: false,
-            is_starred: false,
-            history_id: 1,
-            truncated_body: None,
-            html_presence: HtmlPresence::Absent,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "m1",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
+fn seed_sanitized_conversation(connection: &rusqlite::Connection) {
+    LabelRepository::upsert(connection, &inbox_label(0)).unwrap();
+    ThreadRepository::upsert(connection, &thread("t1", 1, false)).unwrap();
+    let stored = Message {
+        recipients: "me@example.com, cc@example.com".into(),
+        html_body: Some(r#"<p>hi</p><img src="cid:img1"><script>alert(1)</script>"#.into()),
+        ..message_stub("m1", "t1", 1)
+    };
+    MessageRepository::write_full_state(connection, &stored).unwrap();
+    add_label(connection, "m1", "INBOX");
+    let key = MessageKey {
+        account_id: "account",
+        message_id: "m1",
+    };
     MessageRepository::set_recipient_roles(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "m1",
-        },
+        connection,
+        key,
         RecipientRolesUpdate {
             to: "me@example.com",
             cc: "cc@example.com",
@@ -481,21 +499,10 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
         },
     )
     .unwrap();
-    MessageRepository::set_draft_id(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "m1",
-        },
-        "draft-1",
-    )
-    .unwrap();
+    MessageRepository::set_draft_id(connection, key, "draft-1").unwrap();
     MessageRepository::replace_inline_parts(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "m1",
-        },
+        connection,
+        key,
         &[InlinePart {
             content_id: "img1".into(),
             mime_type: "image/png".into(),
@@ -503,21 +510,18 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
         }],
     )
     .unwrap();
+}
+
+#[tokio::test]
+async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
+    let (storage, _directory) = open_account_storage();
+    let connection = storage.connection().unwrap();
+    seed_sanitized_conversation(&connection);
     drop(connection);
     let application = app();
     application.manage(storage);
 
-    let conversation = load_conversation(
-        AppServices::new(application.handle()),
-        CommandPayload(LoadConversationRequest {
-            account_id: "account".into(),
-            thread_id: "t1".into(),
-            image_policy: None,
-            entry_scope: None,
-        }),
-    )
-    .await
-    .unwrap();
+    let conversation = load_thread_conversation(&application, "t1").await;
 
     assert_eq!(conversation.subject, "Subject t1");
     assert_eq!(conversation.messages.len(), 1);
@@ -546,50 +550,23 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
 
 #[tokio::test]
 async fn conversation_returns_only_the_newest_body_and_cached_reads_target_one_message() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let (storage, _directory) = open_account_storage();
     let connection = storage.connection().unwrap();
-    seed_account(&connection);
     ThreadRepository::upsert(&connection, &thread("t1", 2, false)).unwrap();
     for (id, sent_at, html) in [("m1", 1, "<p>Older</p>"), ("m2", 2, "<p>Newest</p>")] {
-        MessageRepository::write_full_state(
-            &connection,
-            &Message {
-                account_id: "account".into(),
-                id: id.into(),
-                thread_id: "t1".into(),
-                rfc_message_id: None,
-                sender: "alice@example.com".into(),
-                recipients: "me@example.com".into(),
-                subject: "Subject t1".into(),
-                sent_at: sent_at,
-                snippet: html.into(),
-                html_body: Some(html.into()),
-                plain_body: None,
-                has_attachments: false,
-                is_unread: false,
-                is_starred: false,
-                history_id: sent_at,
-                truncated_body: None,
-                html_presence: HtmlPresence::Present,
-            },
-        )
-        .unwrap();
+        let stored = Message {
+            snippet: html.into(),
+            html_body: Some(html.into()),
+            plain_body: None,
+            html_presence: HtmlPresence::Present,
+            ..message_stub(id, "t1", sent_at)
+        };
+        MessageRepository::write_full_state(&connection, &stored).unwrap();
     }
     drop(connection);
     let application = app();
     application.manage(storage);
-    let conversation = load_conversation(
-        AppServices::new(application.handle()),
-        CommandPayload(LoadConversationRequest {
-            account_id: "account".into(),
-            thread_id: "t1".into(),
-            image_policy: None,
-            entry_scope: None,
-        }),
-    )
-    .await
-    .unwrap();
+    let conversation = load_thread_conversation(&application, "t1").await;
     assert_eq!(conversation.messages.len(), 2);
     assert!(conversation.messages[0].html_body.is_none());
     assert_eq!(
@@ -613,34 +590,14 @@ async fn conversation_returns_only_the_newest_body_and_cached_reads_target_one_m
 
 #[tokio::test]
 async fn load_conversation_carries_attachment_metadata_on_the_dto() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let (storage, _directory) = open_account_storage();
     let connection = storage.connection().unwrap();
-    seed_account(&connection);
     ThreadRepository::upsert(&connection, &thread("t1", 1, false)).unwrap();
-    MessageRepository::write_full_state(
-        &connection,
-        &Message {
-            account_id: "account".into(),
-            id: "m1".into(),
-            thread_id: "t1".into(),
-            rfc_message_id: None,
-            sender: "alice@example.com".into(),
-            recipients: "me@example.com".into(),
-            subject: "Subject t1".into(),
-            sent_at: 1,
-            snippet: "hi".into(),
-            html_body: None,
-            plain_body: Some("hi".into()),
-            has_attachments: true,
-            is_unread: false,
-            is_starred: false,
-            history_id: 1,
-            truncated_body: None,
-            html_presence: HtmlPresence::Absent,
-        },
-    )
-    .unwrap();
+    let stored = Message {
+        has_attachments: true,
+        ..message_stub("m1", "t1", 1)
+    };
+    MessageRepository::write_full_state(&connection, &stored).unwrap();
     AttachmentRepository::replace_for_message(
         &connection,
         MessageKey {
@@ -660,17 +617,7 @@ async fn load_conversation_carries_attachment_metadata_on_the_dto() {
     let application = app();
     application.manage(storage);
 
-    let conversation = load_conversation(
-        AppServices::new(application.handle()),
-        CommandPayload(LoadConversationRequest {
-            account_id: "account".into(),
-            thread_id: "t1".into(),
-            image_policy: None,
-            entry_scope: None,
-        }),
-    )
-    .await
-    .unwrap();
+    let conversation = load_thread_conversation(&application, "t1").await;
 
     assert_eq!(conversation.messages.len(), 1);
     let attachments = &conversation.messages[0].attachments;
@@ -684,76 +631,52 @@ async fn load_conversation_carries_attachment_metadata_on_the_dto() {
 
 #[tokio::test]
 async fn load_conversation_flags_html_sanitized_past_the_size_cap_as_truncated() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let (storage, _directory) = open_account_storage();
     let connection = storage.connection().unwrap();
-    seed_account(&connection);
-    LabelRepository::upsert(
-        &connection,
-        &Label {
-            account_id: "account".into(),
-            id: "INBOX".into(),
-            name: "Inbox".into(),
-            kind: "system".into(),
-            color: None,
-            message_count: 0,
-        },
-    )
-    .unwrap();
+    LabelRepository::upsert(&connection, &inbox_label(0)).unwrap();
     ThreadRepository::upsert(&connection, &thread("t1", 1, false)).unwrap();
     let huge_html = format!("<p>{}</p>", "a".repeat(600_000));
-    MessageRepository::write_full_state(
-        &connection,
-        &Message {
-            account_id: "account".into(),
-            id: "m1".into(),
-            thread_id: "t1".into(),
-            rfc_message_id: None,
-            sender: "alice@example.com".into(),
-            recipients: "me@example.com".into(),
-            subject: "Subject t1".into(),
-            sent_at: 1,
-            snippet: "hi".into(),
-            html_body: Some(huge_html),
-            plain_body: Some("hi".into()),
-            has_attachments: false,
-            is_unread: false,
-            is_starred: false,
-            history_id: 1,
-            truncated_body: None,
-            html_presence: HtmlPresence::Present,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "m1",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
+    let stored = Message {
+        html_body: Some(huge_html),
+        html_presence: HtmlPresence::Present,
+        ..message_stub("m1", "t1", 1)
+    };
+    MessageRepository::write_full_state(&connection, &stored).unwrap();
+    add_label(&connection, "m1", "INBOX");
     drop(connection);
     let application = app();
     application.manage(storage);
 
-    let conversation = load_conversation(
-        AppServices::new(application.handle()),
-        CommandPayload(LoadConversationRequest {
-            account_id: "account".into(),
-            thread_id: "t1".into(),
-            image_policy: None,
-            entry_scope: None,
-        }),
-    )
-    .await
-    .unwrap();
+    let conversation = load_thread_conversation(&application, "t1").await;
 
     assert!(conversation.messages[0].truncated);
+}
+
+async fn mount_empty_sync_mocks(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-token", "token_type": "Bearer"
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/profile"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "emailAddress": "me@example.com", "messagesTotal": 0, "threadsTotal": 0, "historyId": "1"
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
+        .mount(server)
+        .await;
 }
 
 #[tokio::test]
@@ -761,43 +684,18 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let auth_service = AuthService::new(storage.clone());
-    let account_id = {
-        auth_service
-            .save_account(SaveAccountRequest {
-                email: "me@example.com".into(),
-                refresh_token: "refresh-token".into(),
-                target: None,
-            })
-            .await
-            .unwrap();
-        auth_service.accounts().await.unwrap()[0].id.clone()
-    };
+    auth_service
+        .save_account(SaveAccountRequest {
+            email: "me@example.com".into(),
+            refresh_token: "refresh-token".into(),
+            target: None,
+        })
+        .await
+        .unwrap();
+    let account_id = auth_service.accounts().await.unwrap()[0].id.clone();
 
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "access_token": "fresh-token", "token_type": "Bearer"
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "emailAddress": "me@example.com", "messagesTotal": 0, "threadsTotal": 0, "historyId": "1"
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
-        .mount(&server)
-        .await;
+    mount_empty_sync_mocks(&server).await;
     std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
     std::env::set_var(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
@@ -806,10 +704,9 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
     std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token(&account_id, "refresh-token").unwrap();
 
-    let sync_engine = engine(&storage);
     let application = app();
     application.manage(auth_service);
-    application.manage(sync_engine);
+    application.manage(engine(&storage));
 
     let status = trigger_sync(
         AppServices::new(application.handle()),
@@ -877,100 +774,7 @@ async fn initialize_manages_the_storage_the_read_commands_resolve() {
     assert!(application.try_state::<Storage>().is_some());
 }
 
-#[tokio::test]
-async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
-    let seconds = 1_755_000_000;
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let connection = storage.connection().unwrap();
-    seed_account(&connection);
-    LabelRepository::upsert(
-        &connection,
-        &Label {
-            account_id: "account".into(),
-            id: "INBOX".into(),
-            name: "Inbox".into(),
-            kind: "system".into(),
-            color: None,
-            message_count: 1,
-        },
-    )
-    .unwrap();
-    MessageRepository::write_full_state(
-        &connection,
-        &Message {
-            account_id: "account".into(),
-            id: "m1".into(),
-            thread_id: "t1".into(),
-            rfc_message_id: None,
-            sender: "alice@example.com".into(),
-            recipients: "me@example.com".into(),
-            subject: "Subject t1".into(),
-            sent_at: seconds,
-            snippet: "hi".into(),
-            html_body: None,
-            plain_body: Some("hi".into()),
-            has_attachments: false,
-            is_unread: false,
-            is_starred: false,
-            history_id: 1,
-            truncated_body: None,
-            html_presence: HtmlPresence::Absent,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "m1",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
-    ThreadRepository::recompute(&connection, "account", "t1").unwrap();
-    drop(connection);
-    let application = app();
-    application.manage(storage);
-
-    let page = list_threads(
-        AppServices::new(application.handle()),
-        CommandPayload(ListThreadsRequest {
-            account_id: "account".into(),
-            label_id: Some("INBOX".into()),
-            cursor: None,
-            direction: None,
-            limit: None,
-        }),
-    )
-    .await
-    .unwrap();
-    let conversation = load_conversation(
-        AppServices::new(application.handle()),
-        CommandPayload(LoadConversationRequest {
-            account_id: "account".into(),
-            thread_id: "t1".into(),
-            image_policy: None,
-            entry_scope: None,
-        }),
-    )
-    .await
-    .unwrap();
-
-    let expected_millis = chrono::DateTime::from_timestamp(seconds, 0)
-        .unwrap()
-        .timestamp_millis();
-    assert_eq!(page.items[0].latest_at, expected_millis);
-    assert_eq!(conversation.messages[0].sent_at, expected_millis);
-
-    assert_eq!(page.next_cursor.map(|cursor| cursor.latest_at), None);
-}
-
-#[tokio::test]
-async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_direct_call() {
+async fn mount_fetch_body_server() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
@@ -993,6 +797,51 @@ async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_dir
         })))
         .mount(&server)
         .await;
+    server
+}
+
+#[tokio::test]
+async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
+    let seconds = 1_755_000_000;
+    let (storage, _directory) = open_account_storage();
+    let connection = storage.connection().unwrap();
+    LabelRepository::upsert(&connection, &inbox_label(1)).unwrap();
+    let stored = Message {
+        history_id: 1,
+        ..message_stub("m1", "t1", seconds)
+    };
+    MessageRepository::write_full_state(&connection, &stored).unwrap();
+    add_label(&connection, "m1", "INBOX");
+    ThreadRepository::recompute(&connection, "account", "t1").unwrap();
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+
+    let page = list_threads(
+        AppServices::new(application.handle()),
+        CommandPayload(ListThreadsRequest {
+            account_id: "account".into(),
+            label_id: Some("INBOX".into()),
+            cursor: None,
+            direction: None,
+            limit: None,
+        }),
+    )
+    .await
+    .unwrap();
+    let conversation = load_thread_conversation(&application, "t1").await;
+
+    let expected_millis = chrono::DateTime::from_timestamp(seconds, 0)
+        .unwrap()
+        .timestamp_millis();
+    assert_eq!(page.items[0].latest_at, expected_millis);
+    assert_eq!(conversation.messages[0].sent_at, expected_millis);
+    assert_eq!(page.next_cursor.map(|cursor| cursor.latest_at), None);
+}
+
+#[tokio::test]
+async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_direct_call() {
+    let server = mount_fetch_body_server().await;
     std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
     std::env::set_var(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
@@ -1001,40 +850,24 @@ async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_dir
     std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
 
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let (storage, _directory) = open_account_storage();
     let connection = storage.connection().unwrap();
-    seed_account(&connection);
     LabelRepository::ensure_placeholder(&connection, "account", "INBOX").unwrap();
-    MessageRepository::write_full_state(
-        &connection,
-        &Message {
-            account_id: "account".into(),
-            id: "m1".into(),
-            thread_id: "t1".into(),
-            rfc_message_id: None,
-            sender: "Alice <a@example.com>".into(),
-            recipients: "me@example.com".into(),
-            subject: "Subject".into(),
-            sent_at: 0,
-            snippet: "hello".into(),
-            html_body: None,
-            plain_body: None,
-            has_attachments: false,
-            is_unread: false,
-            is_starred: false,
-            history_id: 1,
-            truncated_body: None,
-            html_presence: HtmlPresence::NeverFetched,
-        },
-    )
-    .unwrap();
+    let stored = Message {
+        sender: "Alice <a@example.com>".into(),
+        subject: "Subject".into(),
+        snippet: "hello".into(),
+        plain_body: None,
+        history_id: 1,
+        html_presence: HtmlPresence::NeverFetched,
+        ..message_stub("m1", "t1", 0)
+    };
+    MessageRepository::write_full_state(&connection, &stored).unwrap();
     drop(connection);
 
-    let sync_engine = engine(&storage);
     let application = app();
     application.manage(AuthService::new(storage.clone()));
-    application.manage(sync_engine);
+    application.manage(engine(&storage));
     application.manage(storage.clone());
     let received = Arc::new(std::sync::Mutex::new(None));
     let received_for_listener = Arc::clone(&received);

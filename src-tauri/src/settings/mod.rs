@@ -161,21 +161,7 @@ impl SettingsService {
     }
 
     pub async fn read(&self) -> Result<Settings, StorageError> {
-        self.storage
-            .run(|connection| {
-                let values = SettingRepository::list(connection)?
-                    .into_iter()
-                    .map(|entry| (entry.key, entry.value))
-                    .collect::<HashMap<_, _>>();
-                let mut settings = Settings::default();
-                for (key, value) in values {
-                    if key != WINDOW_STATE_KEY {
-                        settings.apply(&key, serde_json::from_str(&value).unwrap_or(Value::Null));
-                    }
-                }
-                Ok(settings)
-            })
-            .await
+        self.storage.run(load_settings_from_connection).await
     }
 
     pub async fn write(&self, key: String, value: Value) -> Result<(), String> {
@@ -333,6 +319,20 @@ impl Settings {
         };
         applier(self, value)
     }
+}
+
+fn load_settings_from_connection(connection: &rusqlite::Connection) -> rusqlite::Result<Settings> {
+    let mut settings = Settings::default();
+    for entry in SettingRepository::list(connection)? {
+        if entry.key == WINDOW_STATE_KEY {
+            continue;
+        }
+        settings.apply(
+            &entry.key,
+            serde_json::from_str(&entry.value).unwrap_or(Value::Null),
+        );
+    }
+    Ok(settings)
 }
 
 fn set_value<T: for<'a> Deserialize<'a>>(target: &mut T, value: Value) -> bool {

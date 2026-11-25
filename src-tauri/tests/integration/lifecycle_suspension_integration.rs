@@ -39,6 +39,29 @@ fn production_settling_delay_matches_the_platform() {
     );
 }
 
+async fn increment_counter(calls: Arc<AtomicUsize>) {
+    calls.fetch_add(1, Ordering::Relaxed);
+}
+
+async fn increment_and_succeed(
+    calls: Arc<AtomicUsize>,
+) -> Result<(), latentmail_lib::queue::QueueError> {
+    calls.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+async fn wait_for_done(queue: &QueueEngine, expected: usize) {
+    while queue.summary().done != expected {
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_calls(calls: &AtomicUsize, expected: usize) {
+    while calls.load(Ordering::Relaxed) != expected {
+        tokio::task::yield_now().await;
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn suspension_is_independent_from_user_pause_and_resume_work_waits_for_settling() {
     let queue = QueueEngine::no_op();
@@ -47,12 +70,7 @@ async fn suspension_is_independent_from_user_pause_and_resume_work_waits_for_set
     let lifecycle = Lifecycle::new(
         Arc::clone(&queue),
         Duration::milliseconds(10),
-        Arc::new(move || {
-            let calls = Arc::clone(&calls_for_work);
-            Box::pin(async move {
-                calls.fetch_add(1, Ordering::Relaxed);
-            })
-        }),
+        Arc::new(move || Box::pin(increment_counter(Arc::clone(&calls_for_work)))),
     );
     lifecycle.handle(PowerSignal::Suspend).await;
     assert!(queue.summary().suspended);
@@ -96,11 +114,10 @@ async fn suspension_emits_summary_and_holds_new_work() {
         == &latentmail_lib::events::QUEUE_SUMMARY
         && payload["suspended"] == true));
     queue.set_suspended(false);
-    tokio::time::timeout(Duration::seconds(1).to_std().unwrap(), async {
-        while queue.summary().done != 1 {
-            tokio::task::yield_now().await;
-        }
-    })
+    tokio::time::timeout(
+        Duration::seconds(1).to_std().unwrap(),
+        wait_for_done(&queue, 1),
+    )
     .await
     .unwrap();
 }
@@ -112,13 +129,7 @@ async fn clearing_user_pause_does_not_release_suspended_work() {
     let queue = QueueEngine::new(
         250,
         250,
-        Arc::new(move |_| {
-            let calls = Arc::clone(&calls_for_executor);
-            Box::pin(async move {
-                calls.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            })
-        }),
+        Arc::new(move |_| Box::pin(increment_and_succeed(Arc::clone(&calls_for_executor)))),
     );
     queue.pause();
     queue.set_suspended(true);
@@ -128,11 +139,10 @@ async fn clearing_user_pause_does_not_release_suspended_work() {
     assert_eq!(calls.load(Ordering::Relaxed), 0);
     assert!(queue.summary().suspended);
     queue.set_suspended(false);
-    tokio::time::timeout(Duration::seconds(1).to_std().unwrap(), async {
-        while calls.load(Ordering::Relaxed) != 1 {
-            tokio::task::yield_now().await;
-        }
-    })
+    tokio::time::timeout(
+        Duration::seconds(1).to_std().unwrap(),
+        wait_for_calls(&calls, 1),
+    )
     .await
     .unwrap();
 }

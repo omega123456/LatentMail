@@ -51,22 +51,24 @@ impl Lifecycle {
                 tracing::info!(target: "power", "system is going to sleep, suspending the queue");
                 self.queue.set_suspended(true);
             }
-            PowerSignal::Resume => {
-                let Ok(delay) = self.settling_delay.to_std() else {
-                    return;
-                };
-                tracing::info!(
-                    target: "power",
-                    "system woke up, waiting {}s for the network to settle",
-                    self.settling_delay.num_seconds()
-                );
-                tokio::time::sleep(delay).await;
-                tracing::info!(target: "power", "resuming the queue after wake");
-                self.queue.set_suspended(false);
-                if !self.queue.summary().paused {
-                    (self.resume_work)().await;
-                }
-            }
+            PowerSignal::Resume => self.handle_resume().await,
+        }
+    }
+
+    async fn handle_resume(&self) {
+        let Ok(delay) = self.settling_delay.to_std() else {
+            return;
+        };
+        tracing::info!(
+            target: "power",
+            "system woke up, waiting {}s for the network to settle",
+            self.settling_delay.num_seconds()
+        );
+        tokio::time::sleep(delay).await;
+        tracing::info!(target: "power", "resuming the queue after wake");
+        self.queue.set_suspended(false);
+        if !self.queue.summary().paused {
+            (self.resume_work)().await;
         }
     }
 

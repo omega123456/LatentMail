@@ -90,17 +90,114 @@ function ModelTriggerSummary({
   );
 }
 
-export function ModelCardList({
-  accountEmail,
+function ModelFilterBar({
+  filterRef,
+  navigatingRef,
   label,
-  kind,
-  models,
+  accountEmail,
+  filter,
+  visibleCount,
+  catalogueCount,
+  canToggleAll,
+  showAll,
+  onFilterChange,
+  onToggleShowAll,
+}: {
+  filterRef: React.RefObject<HTMLInputElement | null>;
+  navigatingRef: React.RefObject<boolean>;
+  label: string;
+  accountEmail: string;
+  filter: string;
+  visibleCount: number;
+  catalogueCount: number;
+  canToggleAll: boolean;
+  showAll: boolean;
+  onFilterChange: (next: string) => void;
+  onToggleShowAll: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 border-b border-settings-outline-variant/40 px-1 pb-1.5 dark:border-dark-settings-outline-variant">
+      <TextInput
+        ref={filterRef}
+        aria-label={`Filter ${label} models for ${accountEmail}`}
+        value={filter}
+        onChange={(event) => {
+          navigatingRef.current = false;
+          onFilterChange(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+            navigatingRef.current = true;
+            return;
+          }
+          if (event.key !== 'Escape') event.stopPropagation();
+        }}
+        placeholder="Filter models…"
+        className="min-w-0 flex-1"
+      />
+      <span className="shrink-0 text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
+        {formatCatalogueCount(filter, visibleCount, catalogueCount)}
+      </span>
+      {canToggleAll && (
+        <button type="button" onClick={onToggleShowAll} className={`shrink-0 ${settingsLinkMuted}`}>
+          {showAll ? `${label} only` : 'Show all'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ModelOptionList({
+  visible,
+  firstItemRef,
   selectedId,
   selectedDimension,
-  confirm,
-  loadingId,
-  onChange,
 }: {
+  visible: AiModel[];
+  firstItemRef: React.RefObject<HTMLDivElement | null>;
+  selectedId: string | null;
+  selectedDimension: number | null | undefined;
+}) {
+  return (
+    <>
+      <SelectPrimitive.ScrollUpButton className={scrollButtonClass}>
+        <ChevronUp aria-hidden="true" className="size-4" />
+      </SelectPrimitive.ScrollUpButton>
+      <SelectPrimitive.Viewport className="flex max-h-52 flex-col gap-0.5 overflow-y-auto">
+        {visible.map((model, index) => (
+          <SelectPrimitive.Item
+            key={model.id}
+            value={model.id}
+            ref={index === 0 ? firstItemRef : undefined}
+            onPointerMove={(event) => event.preventDefault()}
+            className={itemClass}
+          >
+            <span className="min-w-0 flex-1">
+              <SelectPrimitive.ItemText>
+                <span className="block truncate text-settings-desc font-semibold">{model.id}</span>
+              </SelectPrimitive.ItemText>
+              <span className="block truncate text-settings-meta opacity-80">
+                {modelDetail(model, selectedId, selectedDimension)}
+              </span>
+            </span>
+            <SelectPrimitive.ItemIndicator>
+              <Check
+                aria-label="Selected"
+                size={ICON_SIZE.md}
+                className="shrink-0 text-settings-primary dark:text-dark-settings-primary"
+              />
+            </SelectPrimitive.ItemIndicator>
+          </SelectPrimitive.Item>
+        ))}
+      </SelectPrimitive.Viewport>
+      <SelectPrimitive.ScrollDownButton className={scrollButtonClass}>
+        <ChevronDown aria-hidden="true" className="size-4" />
+      </SelectPrimitive.ScrollDownButton>
+    </>
+  );
+}
+
+type ModelCardListProps = {
   accountEmail: string;
   label: string;
   kind: 'chat' | 'embedding';
@@ -110,132 +207,122 @@ export function ModelCardList({
   confirm?: ReactNode;
   loadingId?: string | null;
   onChange: (id: string) => void;
-}) {
+};
+
+function useModelCatalogue(props: ModelCardListProps) {
   const [filter, setFilter] = useState('');
   const [showAll, setShowAll] = useState(false);
-  const filterRef = useRef<HTMLInputElement>(null);
-  const firstItemRef = useRef<HTMLDivElement>(null);
-  const navigatingRef = useRef(false);
-  const ofKind = useMemo(() => modelsOfKind(models, kind, selectedId), [kind, models, selectedId]);
-  const catalogue = showAll ? models : ofKind;
+  const ofKind = useMemo(
+    () => modelsOfKind(props.models, props.kind, props.selectedId),
+    [props.kind, props.models, props.selectedId],
+  );
+  const catalogue = showAll ? props.models : ofKind;
   const visible = useMemo(
     () => catalogue.filter((model) => model.id.toLowerCase().includes(filter.toLowerCase())),
     [catalogue, filter],
   );
-  const selected = models.find((model) => model.id === selectedId) ?? null;
-  const isLoading = Boolean(loadingId);
-  const shown = resolveShownModel({ loadingId, selected, selectedId, selectedDimension });
+  const selected = props.models.find((model) => model.id === props.selectedId) ?? null;
+  const shown = resolveShownModel({
+    loadingId: props.loadingId,
+    selected: selected,
+    selectedId: props.selectedId,
+    selectedDimension: props.selectedDimension,
+  });
+  return {
+    filter: filter,
+    setFilter: setFilter,
+    showAll: showAll,
+    setShowAll: setShowAll,
+    ofKind: ofKind,
+    catalogue: catalogue,
+    visible: visible,
+    shown: shown,
+  };
+}
+
+function ModelSelectDropdown({
+  props,
+  state,
+  navigatingRef,
+}: {
+  props: ModelCardListProps;
+  state: ReturnType<typeof useModelCatalogue>;
+  navigatingRef: React.RefObject<boolean>;
+}) {
+  const filterRef = useRef<HTMLInputElement>(null);
+  const firstItemRef = useRef<HTMLDivElement>(null);
+  return (
+    <SelectPrimitive.Portal>
+      <SelectPrimitive.Content
+        position="popper"
+        sideOffset={DROPDOWN_SIDE_OFFSET_PX}
+        className={contentClass}
+        style={{ minWidth: 'var(--radix-select-trigger-width)' }}
+        onFocusCapture={(event) => {
+          if (event.target === filterRef.current) return;
+          if (!navigatingRef.current) queueMicrotask(() => filterRef.current?.focus());
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowUp' && document.activeElement === firstItemRef.current) {
+            event.preventDefault();
+            navigatingRef.current = false;
+            filterRef.current?.focus();
+          }
+        }}
+      >
+        <ModelFilterBar
+          filterRef={filterRef}
+          navigatingRef={navigatingRef}
+          label={props.label}
+          accountEmail={props.accountEmail}
+          filter={state.filter}
+          visibleCount={state.visible.length}
+          catalogueCount={state.catalogue.length}
+          canToggleAll={state.ofKind.length !== props.models.length}
+          showAll={state.showAll}
+          onFilterChange={state.setFilter}
+          onToggleShowAll={() => state.setShowAll((wasShowingAll) => !wasShowingAll)}
+        />
+        <ModelOptionList
+          visible={state.visible}
+          firstItemRef={firstItemRef}
+          selectedId={props.selectedId}
+          selectedDimension={props.selectedDimension}
+        />
+      </SelectPrimitive.Content>
+    </SelectPrimitive.Portal>
+  );
+}
+
+export function ModelCardList(props: ModelCardListProps) {
+  const navigatingRef = useRef(false);
+  const state = useModelCatalogue(props);
+  const isLoading = Boolean(props.loadingId);
 
   return (
     <div className="flex flex-col gap-2.25">
       <SelectPrimitive.Root
-        value={selectedId ?? ''}
-        onValueChange={onChange}
+        value={props.selectedId ?? ''}
+        onValueChange={props.onChange}
         onOpenChange={(next) => {
           navigatingRef.current = false;
           if (!next) {
-            setFilter('');
-            setShowAll(false);
+            state.setFilter('');
+            state.setShowAll(false);
           }
         }}
       >
         <SelectPrimitive.Trigger
-          aria-label={`${label} model for ${accountEmail}`}
+          aria-label={`${props.label} model for ${props.accountEmail}`}
           aria-busy={isLoading}
           disabled={isLoading}
           className={`flex items-center justify-between gap-3 text-left disabled:cursor-progress disabled:opacity-70 ${triggerClass}`}
         >
-          <ModelTriggerSummary shown={shown} isLoading={isLoading} />
+          <ModelTriggerSummary shown={state.shown} isLoading={isLoading} />
         </SelectPrimitive.Trigger>
-        <SelectPrimitive.Portal>
-          <SelectPrimitive.Content
-            position="popper"
-            sideOffset={DROPDOWN_SIDE_OFFSET_PX}
-            className={contentClass}
-            style={{ minWidth: 'var(--radix-select-trigger-width)' }}
-            onFocusCapture={(event) => {
-              if (event.target === filterRef.current) return;
-              if (!navigatingRef.current) queueMicrotask(() => filterRef.current?.focus());
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowUp' && document.activeElement === firstItemRef.current) {
-                event.preventDefault();
-                navigatingRef.current = false;
-                filterRef.current?.focus();
-              }
-            }}
-          >
-            <div className="flex items-center gap-2 border-b border-settings-outline-variant/40 px-1 pb-1.5 dark:border-dark-settings-outline-variant">
-              <TextInput
-                ref={filterRef}
-                aria-label={`Filter ${label} models for ${accountEmail}`}
-                value={filter}
-                onChange={(event) => {
-                  navigatingRef.current = false;
-                  setFilter(event.target.value);
-                }}
-                onKeyDown={(event) => {
-                  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-                    navigatingRef.current = true;
-                    return;
-                  }
-                  if (event.key !== 'Escape') event.stopPropagation();
-                }}
-                placeholder="Filter models…"
-                className="min-w-0 flex-1"
-              />
-              <span className="shrink-0 text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
-                {formatCatalogueCount(filter, visible.length, catalogue.length)}
-              </span>
-              {ofKind.length !== models.length && (
-                <button
-                  type="button"
-                  onClick={() => setShowAll((wasShowingAll) => !wasShowingAll)}
-                  className={`shrink-0 ${settingsLinkMuted}`}
-                >
-                  {showAll ? `${label} only` : 'Show all'}
-                </button>
-              )}
-            </div>
-            <SelectPrimitive.ScrollUpButton className={scrollButtonClass}>
-              <ChevronUp aria-hidden="true" className="size-4" />
-            </SelectPrimitive.ScrollUpButton>
-            <SelectPrimitive.Viewport className="flex max-h-52 flex-col gap-0.5 overflow-y-auto">
-              {visible.map((model, index) => (
-                <SelectPrimitive.Item
-                  key={model.id}
-                  value={model.id}
-                  ref={index === 0 ? firstItemRef : undefined}
-                  onPointerMove={(event) => event.preventDefault()}
-                  className={itemClass}
-                >
-                  <span className="min-w-0 flex-1">
-                    <SelectPrimitive.ItemText>
-                      <span className="block truncate text-settings-desc font-semibold">
-                        {model.id}
-                      </span>
-                    </SelectPrimitive.ItemText>
-                    <span className="block truncate text-settings-meta opacity-80">
-                      {modelDetail(model, selectedId, selectedDimension)}
-                    </span>
-                  </span>
-                  <SelectPrimitive.ItemIndicator>
-                    <Check
-                      aria-label="Selected"
-                      size={ICON_SIZE.md}
-                      className="shrink-0 text-settings-primary dark:text-dark-settings-primary"
-                    />
-                  </SelectPrimitive.ItemIndicator>
-                </SelectPrimitive.Item>
-              ))}
-            </SelectPrimitive.Viewport>
-            <SelectPrimitive.ScrollDownButton className={scrollButtonClass}>
-              <ChevronDown aria-hidden="true" className="size-4" />
-            </SelectPrimitive.ScrollDownButton>
-          </SelectPrimitive.Content>
-        </SelectPrimitive.Portal>
+        <ModelSelectDropdown props={props} state={state} navigatingRef={navigatingRef} />
       </SelectPrimitive.Root>
-      {confirm}
+      {props.confirm}
     </div>
   );
 }

@@ -196,6 +196,32 @@ async fn a_label_deleted_remotely_is_removed_locally_and_reported_as_a_change() 
     assert_eq!(changed_flag(&events), Some(serde_json::json!(true)));
 }
 
+struct ThreadLabelSeed<'a> {
+    message_id: &'a str,
+    thread_id: &'a str,
+    labels: &'a [&'a str],
+}
+
+fn seed_labelled_thread(connection: &rusqlite::Connection, seed: ThreadLabelSeed<'_>) {
+    MessageRepository::write_full_state(connection, &seed_message(seed.message_id, seed.thread_id))
+        .unwrap();
+    for label_id in seed.labels {
+        MessageRepository::set_label_membership(
+            connection,
+            MessageKey {
+                account_id: "account",
+                message_id: seed.message_id,
+            },
+            LabelMembershipChange {
+                label_id: label_id,
+                present: true,
+            },
+        )
+        .unwrap();
+    }
+    ThreadRepository::recompute(connection, "account", seed.thread_id).unwrap();
+}
+
 #[tokio::test]
 async fn deleting_a_remote_label_drops_its_thread_label_rows() {
     let server = MockServer::start().await;
@@ -209,82 +235,24 @@ async fn deleting_a_remote_label_drops_its_thread_label_rows() {
         seed_label("user", "Label_9", "Invoices"),
     ]);
     let connection = storage.connection().unwrap();
-    MessageRepository::write_full_state(&connection, &seed_message("m1", "t1")).unwrap();
-    MessageRepository::set_label_membership(
+    seed_labelled_thread(
         &connection,
-        MessageKey {
-            account_id: "account",
+        ThreadLabelSeed {
             message_id: "m1",
+            thread_id: "t1",
+            labels: &["INBOX", "Label_9"],
         },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "m1",
-        },
-        LabelMembershipChange {
-            label_id: "Label_9",
-            present: true,
-        },
-    )
-    .unwrap();
-    ThreadRepository::recompute(&connection, "account", "t1").unwrap();
-    assert_eq!(
-        ThreadRepository::list_paginated(
-            &connection,
-            ThreadPageQuery {
-                account_id: "account",
-                label_id: Some("Label_9"),
-                cursor: None,
-                limit: 10,
-                direction: ThreadPageDirection::default()
-            }
-        )
-        .unwrap()
-        .len(),
-        1
     );
     drop(connection);
+    assert_eq!(labelled_thread_count(&storage, "Label_9"), 1);
 
     engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
         .unwrap();
 
-    let connection = storage.connection().unwrap();
-    assert!(ThreadRepository::list_paginated(
-        &connection,
-        ThreadPageQuery {
-            account_id: "account",
-            label_id: Some("Label_9"),
-            cursor: None,
-            limit: 10,
-            direction: ThreadPageDirection::default()
-        }
-    )
-    .unwrap()
-    .is_empty());
-    assert_eq!(
-        ThreadRepository::list_paginated(
-            &connection,
-            ThreadPageQuery {
-                account_id: "account",
-                label_id: Some("INBOX"),
-                cursor: None,
-                limit: 10,
-                direction: ThreadPageDirection::default()
-            }
-        )
-        .unwrap()
-        .len(),
-        1
-    );
+    assert_eq!(labelled_thread_count(&storage, "Label_9"), 0);
+    assert_eq!(labelled_thread_count(&storage, "INBOX"), 1);
 }
 
 #[tokio::test]
@@ -372,10 +340,21 @@ fn labelled_thread_count(storage: &Storage, label_id: &str) -> usize {
     .len()
 }
 
-#[tokio::test]
-async fn a_remote_delete_after_a_local_delete_still_prunes_the_last_label() {
+fn delete_label_locally(storage: &Storage, label_id: &str) {
+    let connection = storage.connection().unwrap();
+    let transaction = connection.unchecked_transaction().unwrap();
+    let touched: std::collections::HashSet<String> =
+        LabelRepository::threads_with_label(&transaction, "account", label_id)
+            .unwrap()
+            .into_iter()
+            .collect();
+    LabelRepository::delete(&transaction, "account", label_id).unwrap();
+    ThreadRepository::recompute_many(&transaction, "account", &touched).unwrap();
+    transaction.commit().unwrap();
+}
+
+async fn mount_label_deletion_sequence(server: &MockServer) {
     let inbox = serde_json::json!({"id": "INBOX", "name": "INBOX", "type": "system"});
-    let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(LabelSequence(Mutex::new(VecDeque::from(vec![
@@ -393,9 +372,15 @@ async fn a_remote_delete_after_a_local_delete_still_prunes_the_last_label() {
             serde_json::json!([inbox, remote_label("Label_3", "three")]),
             serde_json::json!([inbox]),
         ]))))
-        .mount(&server)
+        .mount(server)
         .await;
-    mount_quiet_endpoints(&server).await;
+    mount_quiet_endpoints(server).await;
+}
+
+#[tokio::test]
+async fn a_remote_delete_after_a_local_delete_still_prunes_the_last_label() {
+    let server = MockServer::start().await;
+    mount_label_deletion_sequence(&server).await;
 
     let (engine, storage, _directory, _events) = engine_with_labels(&[
         seed_label("system", "INBOX", "INBOX"),
@@ -407,32 +392,14 @@ async fn a_remote_delete_after_a_local_delete_still_prunes_the_last_label() {
     for (index, label) in ["Label_1", "Label_2", "Label_3"].iter().enumerate() {
         let message = format!("m{index}");
         let thread = format!("t{index}");
-        MessageRepository::write_full_state(&connection, &seed_message(&message, &thread)).unwrap();
-        MessageRepository::set_label_membership(
+        seed_labelled_thread(
             &connection,
-            MessageKey {
-                account_id: "account",
+            ThreadLabelSeed {
                 message_id: &message,
+                thread_id: &thread,
+                labels: &["INBOX", label],
             },
-            LabelMembershipChange {
-                label_id: "INBOX",
-                present: true,
-            },
-        )
-        .unwrap();
-        MessageRepository::set_label_membership(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: &message,
-            },
-            LabelMembershipChange {
-                label_id: label,
-                present: true,
-            },
-        )
-        .unwrap();
-        ThreadRepository::recompute(&connection, "account", &thread).unwrap();
+        );
     }
     drop(connection);
     let client = || GmailClient::with_base_url("token", server.uri());
@@ -448,17 +415,7 @@ async fn a_remote_delete_after_a_local_delete_still_prunes_the_last_label() {
     drop(connection);
     assert_eq!(labelled_thread_count(&storage, "Label_1"), 0);
 
-    let connection = storage.connection().unwrap();
-    let transaction = connection.unchecked_transaction().unwrap();
-    let touched: std::collections::HashSet<String> =
-        LabelRepository::threads_with_label(&transaction, "account", "Label_2")
-            .unwrap()
-            .into_iter()
-            .collect();
-    LabelRepository::delete(&transaction, "account", "Label_2").unwrap();
-    ThreadRepository::recompute_many(&transaction, "account", &touched).unwrap();
-    transaction.commit().unwrap();
-    drop(connection);
+    delete_label_locally(&storage, "Label_2");
 
     engine.run_sync("account", client()).await.unwrap();
     engine.run_sync("account", client()).await.unwrap();

@@ -88,15 +88,90 @@ function UpdateStatusCard({
   );
 }
 
+function UpdateReleaseNotes({ version, notes }: { version: string | undefined; notes: string[] }) {
+  if (notes.length === 0) return null;
+  return (
+    <div
+      data-testid="updates-notes"
+      className="flex flex-col gap-2 rounded-control bg-settings-container-low px-4 py-3.5 dark:bg-dark-settings-container-low"
+    >
+      <p className="text-settings-desc font-semibold text-settings-ink dark:text-dark-settings-ink">
+        What is new in {version}
+      </p>
+      <ul className="flex flex-col gap-1 text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
+        {notes.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function UpdateBuildInfo({ currentVersion }: { currentVersion: string }) {
+  return (
+    <div className="flex flex-col">
+      <SubsectionHeading>This build</SubsectionHeading>
+      <dl className="flex flex-col">
+        <div className="flex items-center justify-between py-1.5">
+          <dt className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
+            Version
+          </dt>
+          <dd className="font-mono text-settings-desc text-settings-ink dark:text-dark-settings-ink">
+            {currentVersion}
+          </dd>
+        </div>
+        <div className="flex items-center justify-between py-1.5">
+          <dt className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
+            Update feed
+          </dt>
+          <dd className="font-mono text-settings-desc text-settings-ink dark:text-dark-settings-ink">
+            omega123456/LatentMail
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function AutomaticUpdateSettings() {
+  const updateCheckInterval = useLayoutStore((layout) => layout.updateCheckInterval);
+  const setUpdateCheckInterval = useLayoutStore((layout) => layout.setUpdateCheckInterval);
+  const installUpdateOnQuit = useLayoutStore((layout) => layout.installUpdateOnQuit);
+  const setInstallUpdateOnQuit = useLayoutStore((layout) => layout.setInstallUpdateOnQuit);
+  return (
+    <div className="flex flex-col">
+      <SubsectionHeading>Automatic checks</SubsectionHeading>
+      <SettingRow
+        label="Check for updates"
+        description="How often LatentMail looks for a new version."
+      >
+        <Select
+          ariaLabel="Check for updates"
+          value={updateCheckInterval}
+          onChange={setUpdateCheckInterval}
+          options={UPDATE_INTERVAL_OPTIONS}
+          className={settingsTriggerClass}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Install on quit"
+        description="Apply a downloaded update the next time you close LatentMail."
+      >
+        <SettingSwitch
+          checked={installUpdateOnQuit}
+          onChange={setInstallUpdateOnQuit}
+          label="Install on quit"
+        />
+      </SettingRow>
+    </div>
+  );
+}
+
 export function UpdatesSection() {
   const { data, dataUpdatedAt, isFetching, refetch } = useAppUpdateQuery();
   const installMutation = useInstallUpdateMutation();
   const showSuccess = useToastStore((toaster) => toaster.showSuccess);
   const showError = useToastStore((toaster) => toaster.showError);
-  const updateCheckInterval = useLayoutStore((layout) => layout.updateCheckInterval);
-  const setUpdateCheckInterval = useLayoutStore((layout) => layout.setUpdateCheckInterval);
-  const installUpdateOnQuit = useLayoutStore((layout) => layout.installUpdateOnQuit);
-  const setInstallUpdateOnQuit = useLayoutStore((layout) => layout.setInstallUpdateOnQuit);
 
   const available = data?.available ?? null;
   const currentVersion = data?.currentVersion ?? '…';
@@ -127,70 +202,10 @@ export function UpdatesSection() {
         onInstall={() => installMutation.mutate()}
         onCheckNow={checkForUpdates}
       />
-
-      {notes.length > 0 && (
-        <div
-          data-testid="updates-notes"
-          className="flex flex-col gap-2 rounded-control bg-settings-container-low px-4 py-3.5 dark:bg-dark-settings-container-low"
-        >
-          <p className="text-settings-desc font-semibold text-settings-ink dark:text-dark-settings-ink">
-            What is new in {available?.version}
-          </p>
-          <ul className="flex flex-col gap-1 text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
-            {notes.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="flex flex-col">
-        <SubsectionHeading>Automatic checks</SubsectionHeading>
-        <SettingRow
-          label="Check for updates"
-          description="How often LatentMail looks for a new version."
-        >
-          <Select
-            ariaLabel="Check for updates"
-            value={updateCheckInterval}
-            onChange={setUpdateCheckInterval}
-            options={UPDATE_INTERVAL_OPTIONS}
-            className={settingsTriggerClass}
-          />
-        </SettingRow>
-        <SettingRow
-          label="Install on quit"
-          description="Apply a downloaded update the next time you close LatentMail."
-        >
-          <SettingSwitch
-            checked={installUpdateOnQuit}
-            onChange={setInstallUpdateOnQuit}
-            label="Install on quit"
-          />
-        </SettingRow>
-      </div>
+      <UpdateReleaseNotes version={available?.version} notes={notes} />
+      <AutomaticUpdateSettings />
       <SettingsDivider />
-      <div className="flex flex-col">
-        <SubsectionHeading>This build</SubsectionHeading>
-        <dl className="flex flex-col">
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
-              Version
-            </dt>
-            <dd className="font-mono text-settings-desc text-settings-ink dark:text-dark-settings-ink">
-              {currentVersion}
-            </dd>
-          </div>
-          <div className="flex items-center justify-between py-1.5">
-            <dt className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
-              Update feed
-            </dt>
-            <dd className="font-mono text-settings-desc text-settings-ink dark:text-dark-settings-ink">
-              omega123456/LatentMail
-            </dd>
-          </div>
-        </dl>
-      </div>
+      <UpdateBuildInfo currentVersion={currentVersion} />
     </SettingsSection>
   );
 }

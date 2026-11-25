@@ -54,14 +54,67 @@ fn tiny_svg() -> Vec<u8> {
     br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="teal"/></svg>"#.to_vec()
 }
 
-async fn wait_until<F, Fut>(mut condition: F)
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
+fn listen_avatar_resolved(
+    application: &tauri::App<tauri::test::MockRuntime>,
+) -> Arc<Mutex<Option<String>>> {
+    use tauri::Listener;
+    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let received_for_listener = Arc::clone(&received);
+    application
+        .handle()
+        .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
+            *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
+        });
+    received
+}
+
+async fn wait_for_event(received: &Arc<Mutex<Option<String>>>) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while received.lock().unwrap().is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "condition never became true within the test budget"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+async fn wait_for_sender_avatar(
+    service: &AvatarService,
+    handle: &Arc<dyn AvatarEmitter>,
+    domain: &str,
+) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
-        if condition().await {
+        let ready = service
+            .read_sender_avatar(handle.clone(), domain.into())
+            .await
+            .unwrap()
+            .is_some();
+        if ready {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "condition never became true within the test budget"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+async fn wait_for_account_avatar(
+    service: &AvatarService,
+    handle: &Arc<dyn AvatarEmitter>,
+    account_id: &str,
+) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let ready = service
+            .read_account_avatar(handle.clone(), account_id.into())
+            .await
+            .unwrap()
+            .is_some();
+        if ready {
             return;
         }
         assert!(
@@ -90,18 +143,7 @@ async fn read_sender_avatar_answers_from_cache_and_schedules_resolution_on_a_mis
         .unwrap();
     assert_eq!(first, None);
 
-    wait_until(|| {
-        let service = &service;
-        let handle = handle.clone();
-        async move {
-            service
-                .read_sender_avatar(handle, "svc-example.com".into())
-                .await
-                .unwrap()
-                .is_some()
-        }
-    })
-    .await;
+    wait_for_sender_avatar(&service, &handle, "svc-example.com").await;
 
     let resolved = service
         .read_sender_avatar(handle.clone(), "svc-example.com".into())
@@ -124,17 +166,7 @@ async fn read_sender_avatar_records_a_miss_when_no_record_exists() {
     let (service, cache, _settings, _storage, _directory) = service();
     let application = app();
     let handle = emitter(&application);
-
-    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let received_for_listener = Arc::clone(&received);
-    {
-        use tauri::Listener;
-        application
-            .handle()
-            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
-                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
-            });
-    }
+    let received = listen_avatar_resolved(&application);
 
     let first = service
         .read_sender_avatar(handle.clone(), "no-record.svc-example.com".into())
@@ -142,11 +174,7 @@ async fn read_sender_avatar_records_a_miss_when_no_record_exists() {
         .unwrap();
     assert_eq!(first, None);
 
-    wait_until(|| {
-        let received = Arc::clone(&received);
-        async move { received.lock().unwrap().is_some() }
-    })
-    .await;
+    wait_for_event(&received).await;
 
     let key = hash_key("no-record.svc-example.com");
     assert_eq!(
@@ -241,17 +269,7 @@ async fn read_account_avatar_records_a_miss_when_the_photo_download_fails() {
     let (service, cache, _settings, storage, _directory) = service();
     let application = app();
     let handle = emitter(&application);
-
-    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let received_for_listener = Arc::clone(&received);
-    {
-        use tauri::Listener;
-        application
-            .handle()
-            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
-                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
-            });
-    }
+    let received = listen_avatar_resolved(&application);
     storage
         .run(|connection| {
             AccountRepository::upsert(
@@ -279,11 +297,7 @@ async fn read_account_avatar_records_a_miss_when_the_photo_download_fails() {
         None
     );
 
-    wait_until(|| {
-        let received = Arc::clone(&received);
-        async move { received.lock().unwrap().is_some() }
-    })
-    .await;
+    wait_for_event(&received).await;
 
     let key = hash_key("acct-3");
     assert_eq!(
@@ -324,18 +338,7 @@ async fn read_account_avatar_answers_from_cache_and_schedules_acquisition_on_a_m
         .unwrap();
     assert_eq!(first, None);
 
-    wait_until(|| {
-        let service = &service;
-        let handle = handle.clone();
-        async move {
-            service
-                .read_account_avatar(handle, "acct-1".into())
-                .await
-                .unwrap()
-                .is_some()
-        }
-    })
-    .await;
+    wait_for_account_avatar(&service, &handle, "acct-1").await;
 
     let resolved = service
         .read_account_avatar(handle, "acct-1".into())
@@ -349,17 +352,7 @@ async fn read_account_avatar_records_a_miss_when_the_account_has_no_remote_photo
     let (service, cache, _settings, storage, _directory) = service();
     let application = app();
     let handle = emitter(&application);
-
-    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let received_for_listener = Arc::clone(&received);
-    {
-        use tauri::Listener;
-        application
-            .handle()
-            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
-                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
-            });
-    }
+    let received = listen_avatar_resolved(&application);
     storage
         .run(|connection| {
             AccountRepository::upsert(
@@ -387,11 +380,7 @@ async fn read_account_avatar_records_a_miss_when_the_account_has_no_remote_photo
         None
     );
 
-    wait_until(|| {
-        let received = Arc::clone(&received);
-        async move { received.lock().unwrap().is_some() }
-    })
-    .await;
+    wait_for_event(&received).await;
 
     let key = hash_key("acct-2");
     assert_eq!(
@@ -431,27 +420,14 @@ async fn resolution_complete_emits_avatar_resolved_with_pipeline_key_and_outcome
     );
     set_fake_download("https://cdn.emits-event.example/logo.svg", tiny_svg());
 
-    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let received_for_listener = Arc::clone(&received);
-    {
-        use tauri::Listener;
-        application
-            .handle()
-            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
-                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
-            });
-    }
+    let received = listen_avatar_resolved(&application);
 
     service
         .read_sender_avatar(handle, "emits-event.example".into())
         .await
         .unwrap();
 
-    wait_until(|| {
-        let received = Arc::clone(&received);
-        async move { received.lock().unwrap().is_some() }
-    })
-    .await;
+    wait_for_event(&received).await;
 
     let payload = received
         .lock()
@@ -493,27 +469,14 @@ async fn resolution_complete_emits_the_raw_account_id_for_the_account_pipeline()
         .await
         .unwrap();
 
-    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let received_for_listener = Arc::clone(&received);
-    {
-        use tauri::Listener;
-        application
-            .handle()
-            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
-                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
-            });
-    }
+    let received = listen_avatar_resolved(&application);
 
     service
         .read_account_avatar(handle, "acct-event".into())
         .await
         .unwrap();
 
-    wait_until(|| {
-        let received = Arc::clone(&received);
-        async move { received.lock().unwrap().is_some() }
-    })
-    .await;
+    wait_for_event(&received).await;
 
     let payload = received
         .lock()
@@ -546,18 +509,7 @@ async fn concurrent_requests_for_the_same_domain_collapse_through_the_full_servi
     assert_eq!(first.unwrap(), None);
     assert_eq!(second.unwrap(), None);
 
-    wait_until(|| {
-        let service = &service;
-        let handle = handle.clone();
-        async move {
-            service
-                .read_sender_avatar(handle, "collapse.example".into())
-                .await
-                .unwrap()
-                .is_some()
-        }
-    })
-    .await;
+    wait_for_sender_avatar(&service, &handle, "collapse.example").await;
 }
 
 #[tokio::test]

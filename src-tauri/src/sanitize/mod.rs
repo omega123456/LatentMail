@@ -65,6 +65,66 @@ pub fn sanitize_for_export(html: &str, cid_sources: &HashMap<String, String>) ->
     clean(html, cid_sources, false)
 }
 
+const ALLOWED_GENERIC_ATTRIBUTES: &[&str] = &[
+    "style",
+    "class",
+    "id",
+    "align",
+    "valign",
+    "width",
+    "height",
+    "bgcolor",
+    "border",
+    "cellpadding",
+    "cellspacing",
+    "color",
+    "face",
+    "size",
+    "dir",
+    "nowrap",
+    "role",
+];
+
+const ALLOWED_URL_SCHEMES: &[&str] = &[
+    "http",
+    "https",
+    "mailto",
+    "data",
+    "cid",
+    crate::remote_images::SCHEME,
+];
+
+struct AttributeInput<'element, 'attribute, 'value> {
+    element: &'element str,
+    attribute: &'attribute str,
+    value: &'value str,
+}
+
+fn filter_attribute<'value>(
+    input: AttributeInput<'_, '_, 'value>,
+    context: &ImageFilterContext<'_>,
+) -> Option<Cow<'value, str>> {
+    match (input.element, input.attribute) {
+        ("a", "href")
+            if matches!(
+                input
+                    .value
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .split_once(':'),
+                Some(("data" | "cid", _))
+            ) =>
+        {
+            None
+        }
+        ("img", "src") => image_source(input.value, context).map(Cow::Owned),
+        (_, "style") => {
+            Some(style_images(input.value, context).map_or(Cow::Borrowed(input.value), Cow::Owned))
+        }
+        _ => Some(Cow::Borrowed(input.value)),
+    }
+}
+
 fn clean(html: &str, cid_sources: &HashMap<String, String>, allow_remote: bool) -> SanitizedHtml {
     let cid_sources = cid_sources.clone();
     let outcome = std::sync::Arc::new(ImageOutcome::default());
@@ -74,57 +134,21 @@ fn clean(html: &str, cid_sources: &HashMap<String, String>, allow_remote: bool) 
         .add_tags(&["style", "font"])
         .rm_clean_content_tags(&["style"])
         .add_clean_content_tags(&["title"])
-        .add_generic_attributes(&[
-            "style",
-            "class",
-            "id",
-            "align",
-            "valign",
-            "width",
-            "height",
-            "bgcolor",
-            "border",
-            "cellpadding",
-            "cellspacing",
-            "color",
-            "face",
-            "size",
-            "dir",
-            "nowrap",
-            "role",
-        ])
-        .url_schemes(
-            [
-                "http",
-                "https",
-                "mailto",
-                "data",
-                "cid",
-                crate::remote_images::SCHEME,
-            ]
-            .into(),
-        )
+        .add_generic_attributes(ALLOWED_GENERIC_ATTRIBUTES)
+        .url_schemes(ALLOWED_URL_SCHEMES.iter().copied().collect())
         .attribute_filter(move |element, attribute, value| {
-            let context = ImageFilterContext {
-                cid_sources: &cid_sources,
-                outcome: &outcome_in_filter,
-                allow_remote: allow_remote,
-            };
-            match (element, attribute) {
-                ("a", "href")
-                    if matches!(
-                        value.trim_start().to_ascii_lowercase().split_once(':'),
-                        Some(("data" | "cid", _))
-                    ) =>
-                {
-                    None
-                }
-                ("img", "src") => image_source(value, &context).map(Cow::Owned),
-                (_, "style") => {
-                    Some(style_images(value, &context).map_or(Cow::Borrowed(value), Cow::Owned))
-                }
-                _ => Some(Cow::Borrowed(value)),
-            }
+            filter_attribute(
+                AttributeInput {
+                    element: element,
+                    attribute: attribute,
+                    value: value,
+                },
+                &ImageFilterContext {
+                    cid_sources: &cid_sources,
+                    outcome: &outcome_in_filter,
+                    allow_remote: allow_remote,
+                },
+            )
         });
     let html = builder.clean(html).to_string();
     SanitizedHtml {

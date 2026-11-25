@@ -1,3 +1,4 @@
+use crate::support::fail_first_call_executor;
 use latentmail_lib::ipc::{AppServices, CommandPayload};
 use latentmail_lib::queue::commands::SetQueuePausedPayload;
 use latentmail_lib::queue::{DurableSubmission, QueueConfig};
@@ -62,17 +63,34 @@ fn operation(
     }
 }
 
+fn counting_executor(executed: Arc<AtomicUsize>) -> Executor {
+    Arc::new(move |_| {
+        executed.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    })
+}
+
+fn queue_with_events(
+    events: latentmail_lib::queue::QueueEventSink,
+    executor: Executor,
+) -> Arc<QueueEngine> {
+    QueueEngine::with_config(
+        QueueConfig {
+            rate_per_second: 250,
+            burst: 250,
+            events: events,
+            ..QueueConfig::default()
+        },
+        executor,
+    )
+}
+
 #[tokio::test]
 async fn cancelling_before_execution_evicts_the_hook_and_unwinds_pending_counters() {
     let (release_sender, release_receiver) = oneshot::channel::<()>();
     let evicted = Arc::new(std::sync::Mutex::new(Some(release_sender)));
     let evicted_for_hook = Arc::clone(&evicted);
     let executed = Arc::new(AtomicUsize::new(0));
-    let executed_for_executor = Arc::clone(&executed);
-    let executor: Executor = Arc::new(move |_| {
-        executed_for_executor.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(()) })
-    });
     let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::with_config(
         QueueConfig {
@@ -83,7 +101,7 @@ async fn cancelling_before_execution_evicts_the_hook_and_unwinds_pending_counter
                 evicted_for_hook.lock().unwrap().take();
             }),
         },
-        executor,
+        counting_executor(Arc::clone(&executed)),
     );
 
     let before = queue.summary().pending;
@@ -482,76 +500,98 @@ async fn cancel_queue_operation_command_reports_true_without_touching_storage_fo
     queue.resume();
 }
 
-#[tokio::test]
-async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds() {
+struct StoredOperationSeed<'a> {
+    id: &'a str,
+    account_id: &'a str,
+    lane: &'a str,
+    kind: &'a str,
+    entity_key: &'a str,
+    status: &'a str,
+    attempts: i64,
+    error: Option<&'a str>,
+}
+
+fn stored_operation(seed: StoredOperationSeed<'_>) -> Operation {
+    Operation {
+        id: seed.id.into(),
+        account_id: seed.account_id.into(),
+        lane: seed.lane.into(),
+        kind: seed.kind.into(),
+        entity_key: seed.entity_key.into(),
+        payload: "{}".into(),
+        status: seed.status.into(),
+        attempts: seed.attempts,
+        next_attempt_at: None,
+        error: seed.error.map(str::to_owned),
+        created_at: 1,
+        updated_at: 1,
+    }
+}
+
+fn storage_with_accounts(accounts: &[&str]) -> (Storage, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
-    AccountRepository::upsert(&connection, &account("account")).unwrap();
-    OperationRepository::upsert(
-        &connection,
-        &Operation {
-            id: "sync-failed".into(),
-            account_id: "account".into(),
-            lane: "background".into(),
-            kind: "sync".into(),
-            entity_key: "sync:account".into(),
-            payload: "{}".into(),
-            status: "failed".into(),
-            attempts: 3,
-            next_attempt_at: None,
-            error: Some("boom".into()),
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
-    OperationRepository::upsert(
-        &connection,
-        &Operation {
-            id: "send-still-active".into(),
-            account_id: "account".into(),
-            lane: "interactive".into(),
-            kind: "send".into(),
-            entity_key: "draft:send-still-active".into(),
-            payload: "{}".into(),
-            status: "active".into(),
-            attempts: 0,
-            next_attempt_at: None,
-            error: None,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
+    for id in accounts {
+        AccountRepository::upsert(&connection, &account(id)).unwrap();
+    }
     drop(connection);
+    (storage, directory)
+}
 
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_for_executor = Arc::clone(&calls);
-    let executor: Executor = Arc::new(move |operation: QueueOperation| {
-        let calls = Arc::clone(&calls_for_executor);
-        Box::pin(async move {
-            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                return Err(latentmail_lib::queue::QueueError::Permanent);
-            }
-            let _ = operation;
-            Ok(())
+async fn mark_failed(storage: &Storage, id: &str) {
+    let operation_id = id.to_owned();
+    storage
+        .run(move |connection| {
+            OperationRepository::mark_terminal(
+                connection,
+                &operation_id,
+                TerminalOutcome {
+                    status: "failed",
+                    error: Some("boom"),
+                },
+            )
         })
-    });
-    let (events, mut events_receiver) = events_channel();
-    let queue = QueueEngine::with_config(
-        QueueConfig {
-            rate_per_second: 250,
-            burst: 250,
-            events: events,
-            ..QueueConfig::default()
-        },
-        executor,
-    );
+        .await
+        .unwrap();
+}
 
+fn seed_unretryable_operations(storage: &Storage) {
+    let connection = storage.connection().unwrap();
+    OperationRepository::upsert(
+        &connection,
+        &stored_operation(StoredOperationSeed {
+            id: "sync-failed",
+            account_id: "account",
+            lane: "background",
+            kind: "sync",
+            entity_key: "sync:account",
+            status: "failed",
+            attempts: 3,
+            error: Some("boom"),
+        }),
+    )
+    .unwrap();
+    OperationRepository::upsert(
+        &connection,
+        &stored_operation(StoredOperationSeed {
+            id: "send-still-active",
+            account_id: "account",
+            lane: "interactive",
+            kind: "send",
+            entity_key: "draft:send-still-active",
+            status: "active",
+            attempts: 0,
+            error: None,
+        }),
+    )
+    .unwrap();
+}
+
+async fn admit_send_retry(queue: &Arc<QueueEngine>, storage: &Storage) {
     admit_durable(
-        &queue,
-        &storage,
+        queue,
+        storage,
         DurableSubmission {
             operation: QueueOperation {
                 id: "send-retry".into(),
@@ -568,89 +608,75 @@ async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds(
     )
     .await
     .unwrap();
-    wait_for_item_status(&mut events_receiver, "send-retry", "failed").await;
-    storage
-        .run(|connection| {
-            OperationRepository::mark_terminal(
-                connection,
-                "send-retry",
-                TerminalOutcome {
-                    status: "failed",
-                    error: Some("boom"),
-                },
-            )
-        })
+}
+
+async fn assert_retry_is_refused(app: &tauri::App<tauri::test::MockRuntime>, operation_id: &str) {
+    let retried = retry_queue_operation(AppServices::new(app.handle()), operation_id.into())
         .await
         .unwrap();
+    assert!(!retried, "{operation_id}");
+}
+
+#[tokio::test]
+async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds() {
+    let (storage, _directory) = storage_with_accounts(&["account"]);
+    seed_unretryable_operations(&storage);
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (events, mut events_receiver) = events_channel();
+    let queue = queue_with_events(
+        events,
+        fail_first_call_executor(
+            Arc::clone(&calls),
+            latentmail_lib::queue::QueueError::Permanent,
+        ),
+    );
+
+    admit_send_retry(&queue, &storage).await;
+    wait_for_item_status(&mut events_receiver, "send-retry", "failed").await;
+    mark_failed(&storage, "send-retry").await;
 
     let app = app();
     app.manage(Arc::clone(&queue));
     app.manage(storage.clone());
 
-    let refused = retry_queue_operation(AppServices::new(app.handle()), "sync-failed".into())
-        .await
-        .unwrap();
-    assert!(!refused);
-
-    let missing = retry_queue_operation(AppServices::new(app.handle()), "does-not-exist".into())
-        .await
-        .unwrap();
-    assert!(!missing);
-
-    let still_active =
-        retry_queue_operation(AppServices::new(app.handle()), "send-still-active".into())
+    for operation_id in ["sync-failed", "does-not-exist", "send-still-active"] {
+        assert_retry_is_refused(&app, operation_id).await;
+    }
+    assert!(
+        retry_queue_operation(AppServices::new(app.handle()), "send-retry".into())
             .await
-            .unwrap();
-    assert!(!still_active);
-
-    let retried = retry_queue_operation(AppServices::new(app.handle()), "send-retry".into())
-        .await
-        .unwrap();
-    assert!(retried);
+            .unwrap()
+    );
     wait_for_item_status(&mut events_receiver, "send-retry", "done").await;
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
 async fn retry_failed_operations_retries_every_failed_durable_row_optionally_scoped() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let (storage, _directory) = storage_with_accounts(&["account-1", "account-2"]);
     let connection = storage.connection().unwrap();
-    AccountRepository::upsert(&connection, &account("account-1")).unwrap();
-    AccountRepository::upsert(&connection, &account("account-2")).unwrap();
     for (id, account_id) in [("send-a1", "account-1"), ("send-a2", "account-2")] {
+        let entity_key = format!("draft:{id}");
         OperationRepository::upsert(
             &connection,
-            &Operation {
-                id: id.into(),
-                account_id: account_id.into(),
-                lane: "interactive".into(),
-                kind: "send".into(),
-                entity_key: format!("draft:{id}"),
-                payload: "{}".into(),
-                status: "failed".into(),
+            &stored_operation(StoredOperationSeed {
+                id: id,
+                account_id: account_id,
+                lane: "interactive",
+                kind: "send",
+                entity_key: &entity_key,
+                status: "failed",
                 attempts: 1,
-                next_attempt_at: None,
-                error: Some("boom".into()),
-                created_at: 1,
-                updated_at: 1,
-            },
+                error: Some("boom"),
+            }),
         )
         .unwrap();
     }
     drop(connection);
 
-    let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
     let (events, mut events_receiver) = events_channel();
-    let queue = QueueEngine::with_config(
-        QueueConfig {
-            rate_per_second: 250,
-            burst: 250,
-            events: events,
-            ..QueueConfig::default()
-        },
-        executor,
-    );
+    let queue = queue_with_events(events, Arc::new(|_| Box::pin(async { Ok(()) })));
 
     let app = app();
     app.manage(Arc::clone(&queue));
@@ -662,19 +688,7 @@ async fn retry_failed_operations_retries_every_failed_durable_row_optionally_sco
     assert_eq!(scoped, 1);
     wait_for_item_status(&mut events_receiver, "send-a1", "done").await;
 
-    storage
-        .run(|connection| {
-            OperationRepository::mark_terminal(
-                connection,
-                "send-a1",
-                TerminalOutcome {
-                    status: "failed",
-                    error: Some("boom"),
-                },
-            )
-        })
-        .await
-        .unwrap();
+    mark_failed(&storage, "send-a1").await;
 
     let all = retry_failed_operations(AppServices::new(app.handle()), None)
         .await
@@ -770,6 +784,21 @@ async fn set_queue_paused_command_reports_whether_it_took_effect() {
     assert!(released);
 }
 
+async fn wait_for_first_operation_id(queue: &QueueEngine, account_id: &str) -> String {
+    loop {
+        let snapshot = queue.snapshot().await;
+        let found = snapshot
+            .iter()
+            .find(|entry| entry.account_id == account_id)
+            .and_then(|entry| entry.lanes.iter().flat_map(|lane| &lane.operations).next())
+            .map(|record| record.id.clone());
+        if let Some(id) = found {
+            return id;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 #[tokio::test]
 async fn the_production_cancellation_hook_wired_in_initialize_evicts_a_real_work_registry_entry() {
     let home = tempfile::tempdir().unwrap();
@@ -808,18 +837,7 @@ async fn the_production_cancellation_hook_wired_in_initialize_evicts_a_real_work
     );
     let trigger = tokio::spawn(async move { sync_engine.run_sync("account", client).await });
 
-    let operation_id = loop {
-        let snapshot = queue.snapshot().await;
-        if let Some(id) = snapshot
-            .iter()
-            .find(|entry| entry.account_id == "account")
-            .and_then(|entry| entry.lanes.iter().flat_map(|lane| &lane.operations).next())
-            .map(|record| record.id.clone())
-        {
-            break id;
-        }
-        tokio::task::yield_now().await;
-    };
+    let operation_id = wait_for_first_operation_id(&queue, "account").await;
 
     let applied = queue.cancel(&operation_id).await;
     assert!(applied.is_some());

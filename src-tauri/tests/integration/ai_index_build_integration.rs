@@ -233,17 +233,17 @@ async fn model_change_unpauses_the_owning_index_before_rebuilding() {
     );
 }
 
+async fn failing_embed_step(calls: Arc<AtomicUsize>) -> Result<(), QueueError> {
+    calls.fetch_add(1, Ordering::SeqCst);
+    Err(QueueError::Http(429))
+}
+
 #[tokio::test(start_paused = true)]
 async fn embedding_operations_fail_without_queue_retry_or_gmail_cost() {
     let calls = Arc::new(AtomicUsize::new(0));
     let executor_calls = Arc::clone(&calls);
-    let executor: Executor = Arc::new(move |_| {
-        let calls = Arc::clone(&executor_calls);
-        Box::pin(async move {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Err(QueueError::Http(429))
-        })
-    });
+    let executor: Executor =
+        Arc::new(move |_| Box::pin(failing_embed_step(Arc::clone(&executor_calls))));
     let queue = QueueEngine::new(1, 0, executor);
     queue
         .enqueue(QueueOperation {
@@ -300,6 +300,119 @@ fn message(account_id: &str, id: &str) -> Message {
     }
 }
 
+fn make_sync(storage: &Storage) -> (Arc<SyncEngine>, Arc<QueueEngine>) {
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine(250, 250, registry.clone());
+    let sync = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: Arc::clone(&queue),
+        registry: registry,
+        events: noop_event_sink(),
+    });
+    (sync, queue)
+}
+
+fn configure_account_embed(connection: &rusqlite::Connection, account_id: &str, base_url: &str) {
+    AccountAiConfigRepository::set_enabled(connection, account_id, true).unwrap();
+    AccountAiConfigRepository::set_base_url(connection, account_id, base_url).unwrap();
+    AccountAiConfigRepository::set_embedding_model(
+        connection,
+        account_id,
+        EmbeddingModelSpec {
+            model: "embed",
+            dimensions: 2,
+        },
+    )
+    .unwrap();
+}
+
+fn write_first_backlog_vector(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    vector: Vec<f32>,
+) {
+    let backlog = EmbeddingRepository::backlog(connection, account_id, 10).unwrap();
+    EmbeddingRepository::write(
+        connection,
+        account_id,
+        &[MessageEmbedding {
+            message_seq: backlog[0].message_seq,
+            chunk_index: 0,
+            vector: vector,
+        }],
+    )
+    .unwrap();
+}
+
+async fn is_complete_with_count(
+    service: &AiService,
+    account_id: &str,
+    expected_indexed: i64,
+) -> bool {
+    let current = status(service, account_id.into()).await.unwrap();
+    current.state == IndexState::Complete && current.indexed == expected_indexed
+}
+
+async fn wait_for_complete_count(service: &AiService, account_id: &str, expected_indexed: i64) {
+    tokio::time::timeout(Duration::from_millis(1500), async {
+        while !is_complete_with_count(service, account_id, expected_indexed).await {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn has_index_state(service: &AiService, account_id: &str, expected: IndexState) -> bool {
+    status(service, account_id.into()).await.unwrap().state == expected
+}
+
+async fn wait_for_index_state(service: &AiService, account_id: &str, expected: IndexState) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !has_index_state(service, account_id, expected).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn count_account_vectors(connection: &rusqlite::Connection, account_id: &str) -> i64 {
+    let sequence: i64 = connection
+        .query_row(
+            "SELECT seq FROM accounts WHERE id=?1",
+            [account_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM {}",
+                EmbeddingRepository::table_name(sequence)
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn seed_rebuild_storage(storage: &Storage, base_url: &str) {
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(&connection, &account("rebuild")).unwrap();
+    AccountRepository::upsert(&connection, &account("other")).unwrap();
+    for id in ["first", "second"] {
+        MessageRepository::write_full_state(&connection, &message("rebuild", id)).unwrap();
+    }
+    MessageRepository::write_full_state(&connection, &message("other", "kept")).unwrap();
+    configure_account_embed(&connection, "rebuild", base_url);
+    AccountAiConfigRepository::set_index_paused(&connection, "rebuild", true).unwrap();
+    EmbeddingRepository::create(&connection, "rebuild", 2).unwrap();
+    EmbeddingRepository::create(&connection, "other", 2).unwrap();
+    write_first_backlog_vector(&connection, "rebuild", vec![9.0, 9.0]);
+    write_first_backlog_vector(&connection, "other", vec![3.0, 3.0]);
+}
+
 #[tokio::test]
 async fn rebuild_recreates_only_its_account_and_restarts_the_embedding_chain() {
     let server = MockServer::start().await;
@@ -312,63 +425,12 @@ async fn rebuild_recreates_only_its_account_and_restarts_the_embedding_chain() {
         .await;
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.db")).unwrap();
-    let connection = storage.connection().unwrap();
-    AccountRepository::upsert(&connection, &account("rebuild")).unwrap();
-    AccountRepository::upsert(&connection, &account("other")).unwrap();
-    for id in ["first", "second"] {
-        MessageRepository::write_full_state(&connection, &message("rebuild", id)).unwrap();
-    }
-    MessageRepository::write_full_state(&connection, &message("other", "kept")).unwrap();
-    let base_url = format!("{}/v1/", server.uri());
-    AccountAiConfigRepository::set_enabled(&connection, "rebuild", true).unwrap();
-    AccountAiConfigRepository::set_base_url(&connection, "rebuild", &base_url).unwrap();
-    AccountAiConfigRepository::set_embedding_model(
-        &connection,
-        "rebuild",
-        EmbeddingModelSpec {
-            model: "embed",
-            dimensions: 2,
-        },
-    )
-    .unwrap();
-    AccountAiConfigRepository::set_index_paused(&connection, "rebuild", true).unwrap();
-    EmbeddingRepository::create(&connection, "rebuild", 2).unwrap();
-    EmbeddingRepository::create(&connection, "other", 2).unwrap();
-    let first = EmbeddingRepository::backlog(&connection, "rebuild", 1).unwrap();
-    EmbeddingRepository::write(
-        &connection,
-        "rebuild",
-        &[MessageEmbedding {
-            message_seq: first[0].message_seq,
-            chunk_index: 0,
-            vector: vec![9.0, 9.0],
-        }],
-    )
-    .unwrap();
-    let other = EmbeddingRepository::backlog(&connection, "other", 1).unwrap();
-    EmbeddingRepository::write(
-        &connection,
-        "other",
-        &[MessageEmbedding {
-            message_seq: other[0].message_seq,
-            chunk_index: 0,
-            vector: vec![3.0, 3.0],
-        }],
-    )
-    .unwrap();
-    drop(connection);
+    seed_rebuild_storage(&storage, &format!("{}/v1/", server.uri()));
     credentials::save("rebuild", "test-key").unwrap();
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
-    let registry = WorkRegistry::new();
-    let queue = create_queue_engine(250, 250, registry.clone());
-    let sync = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: queue,
-        registry: registry,
-        events: noop_event_sink(),
-    });
+    let (sync, _queue) = make_sync(&storage);
     let service = AiService::new(storage.clone());
     service
         .set_index_error("rebuild", "previous error".into())
@@ -386,17 +448,7 @@ async fn rebuild_recreates_only_its_account_and_restarts_the_embedding_chain() {
     )
     .await
     .unwrap();
-    tokio::time::timeout(Duration::from_millis(1500), async {
-        loop {
-            let current = status(&service, "rebuild".into()).await.unwrap();
-            if current.state == IndexState::Complete && current.indexed == 2 {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_complete_count(&service, "rebuild", 2).await;
     let connection = storage.connection().unwrap();
     assert!(
         !AccountAiConfigRepository::get(&connection, "rebuild")
@@ -428,13 +480,7 @@ async fn a_running_index_stalled_by_removal_reports_partial_then_complete_progre
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
-    let registry = WorkRegistry::new();
-    let sync = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: create_queue_engine(250, 250, registry.clone()),
-        registry: registry,
-        events: noop_event_sink(),
-    });
+    let (sync, _queue) = make_sync(&storage);
 
     service.begin_removal("stall").unwrap();
     service
@@ -456,17 +502,7 @@ async fn a_running_index_stalled_by_removal_reports_partial_then_complete_progre
     );
 
     let connection = storage.connection().unwrap();
-    let backlog = EmbeddingRepository::backlog(&connection, "stall", 10).unwrap();
-    EmbeddingRepository::write(
-        &connection,
-        "stall",
-        &[MessageEmbedding {
-            message_seq: backlog[0].message_seq,
-            chunk_index: 0,
-            vector: vec![1.0, 1.0],
-        }],
-    )
-    .unwrap();
+    write_first_backlog_vector(&connection, "stall", vec![1.0, 1.0]);
     drop(connection);
     service
         .set_index_state("stall", IndexState::Building)
@@ -599,6 +635,44 @@ async fn embed_with_retry_recovers_after_a_transient_server_error() {
     assert_eq!(vectors, vec![vec![1.0, 2.0]]);
 }
 
+async fn configure_failing_service(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    service: &AiService,
+    base_url: String,
+) {
+    service
+        .set_enabled(
+            app.handle(),
+            EnabledUpdate {
+                account_id: "failing".into(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+    service
+        .set_base_url(
+            app.handle(),
+            BaseUrlUpdate {
+                account_id: "failing".into(),
+                base_url: base_url,
+            },
+        )
+        .await
+        .unwrap();
+    service
+        .set_embedding_model(
+            app.handle(),
+            EmbeddingModelUpdate {
+                account_id: "failing".into(),
+                model: "embed".into(),
+                dimensions: 2,
+            },
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn a_persistently_failing_provider_interrupts_the_index_and_records_the_error() {
     let server = MockServer::start().await;
@@ -617,46 +691,9 @@ async fn a_persistently_failing_provider_interrupts_the_index_and_records_the_er
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
-    service
-        .set_enabled(
-            app.handle(),
-            EnabledUpdate {
-                account_id: "failing".into(),
-                enabled: true,
-            },
-        )
-        .await
-        .unwrap();
-    service
-        .set_base_url(
-            app.handle(),
-            BaseUrlUpdate {
-                account_id: "failing".into(),
-                base_url: format!("{}/v1", server.uri()),
-            },
-        )
-        .await
-        .unwrap();
-    service
-        .set_embedding_model(
-            app.handle(),
-            EmbeddingModelUpdate {
-                account_id: "failing".into(),
-                model: "embed".into(),
-                dimensions: 2,
-            },
-        )
-        .await
-        .unwrap();
+    configure_failing_service(&app, &service, format!("{}/v1", server.uri())).await;
     credentials::save("failing", "key").unwrap();
-    let registry = WorkRegistry::new();
-    let queue = create_queue_engine(250, 250, registry.clone());
-    let sync = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: queue.clone(),
-        registry: registry,
-        events: noop_event_sink(),
-    });
+    let (sync, queue) = make_sync(&storage);
     enqueue(
         IndexContext {
             app: app.handle().clone(),
@@ -670,16 +707,7 @@ async fn a_persistently_failing_provider_interrupts_the_index_and_records_the_er
     queue
         .wait_for_account_lane("failing", Lane::Embedding)
         .await;
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if status(&service, "failing".into()).await.unwrap().state == IndexState::Interrupted {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_index_state(&service, "failing", IndexState::Interrupted).await;
     assert!(service.index_error("failing").unwrap().is_some());
     credentials::clear("failing").unwrap();
 }
@@ -808,18 +836,7 @@ async fn a_message_the_provider_rejects_is_skipped_instead_of_interrupting_the_i
         },
     )
     .unwrap();
-    AccountAiConfigRepository::set_enabled(&connection, "skip", true).unwrap();
-    AccountAiConfigRepository::set_base_url(&connection, "skip", &format!("{}/v1/", server.uri()))
-        .unwrap();
-    AccountAiConfigRepository::set_embedding_model(
-        &connection,
-        "skip",
-        EmbeddingModelSpec {
-            model: "embed",
-            dimensions: 2,
-        },
-    )
-    .unwrap();
+    configure_account_embed(&connection, "skip", &format!("{}/v1/", server.uri()));
     drop(connection);
     credentials::save("skip", "key").unwrap();
     let app = tauri::test::mock_builder()
@@ -830,22 +847,7 @@ async fn a_message_the_provider_rejects_is_skipped_instead_of_interrupting_the_i
     build(app.handle(), &service, "skip".into()).await.unwrap();
 
     let connection = storage.connection().unwrap();
-    let sequence: i64 = connection
-        .query_row("SELECT seq FROM accounts WHERE id='skip'", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    let vectors: i64 = connection
-        .query_row(
-            &format!(
-                "SELECT COUNT(*) FROM {}",
-                EmbeddingRepository::table_name(sequence)
-            ),
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(vectors, 1);
+    assert_eq!(count_account_vectors(&connection, "skip"), 1);
     assert_eq!(
         EmbeddingRepository::counts(&connection, "skip")
             .unwrap()
@@ -959,15 +961,6 @@ async fn a_queued_build_without_an_api_root_reports_unavailable_instead_of_runni
     queue
         .wait_for_account_lane("rootless", Lane::Embedding)
         .await;
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if status(&service, "rootless".into()).await.unwrap().state == IndexState::Unavailable {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_index_state(&service, "rootless", IndexState::Unavailable).await;
     assert!(service.index_error("rootless").unwrap().is_none());
 }

@@ -40,6 +40,32 @@ export function validateLabelName(
   return null;
 }
 
+function LabelColorRadioGroup({
+  colorId,
+  onChange,
+}: {
+  colorId: LabelColorId;
+  onChange: (id: LabelColorId) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <div role="radiogroup" aria-label="Label colour" className="flex flex-wrap gap-1">
+        {LABEL_COLOR_PALETTE.map((swatch) => (
+          <button
+            key={swatch.id}
+            type="button"
+            role="radio"
+            aria-checked={colorId === swatch.id}
+            aria-label={swatch.name}
+            onClick={() => onChange(swatch.id)}
+            className={`size-6 cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-primary ${swatch.dotClass} ${colorId === swatch.id ? 'ring-2 ring-primary ring-offset-1 dark:ring-dark-primary' : ''}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export type LabelFormProps = {
   mode: 'create' | 'rename';
   initialName?: string;
@@ -49,37 +75,24 @@ export type LabelFormProps = {
   onCancel: () => void;
 };
 
-export function LabelForm({
-  mode,
-  initialName = '',
-  initialColorId = LABEL_COLOR_PALETTE[0].id,
-  existingNames,
-  onSubmit,
-  onCancel,
-}: LabelFormProps) {
+export function LabelForm(props: LabelFormProps) {
+  const { initialName = '', initialColorId = LABEL_COLOR_PALETTE[0].id } = props;
   const [name, setName] = useState(initialName);
   const [colorId, setColorId] = useState<LabelColorId>(initialColorId);
   const [touched, setTouched] = useState(false);
-  const error = touched
-    ? validateLabelName(name, existingNames, mode === 'rename' ? initialName : undefined)
-    : null;
-
+  const excludeName = props.mode === 'rename' ? initialName : undefined;
+  const error = touched ? validateLabelName(name, props.existingNames, excludeName) : null;
   const nameFieldId = useId();
 
   const submit = () => {
     setTouched(true);
-    const validationError = validateLabelName(
-      name,
-      existingNames,
-      mode === 'rename' ? initialName : undefined,
-    );
-    if (validationError) return;
-    onSubmit({ name: name.trim(), colorId: colorId });
+    if (validateLabelName(name, props.existingNames, excludeName)) return;
+    props.onSubmit({ name: name.trim(), colorId: colorId });
   };
 
   return (
     <form
-      aria-label={mode === 'create' ? 'Create label' : 'Edit label'}
+      aria-label={props.mode === 'create' ? 'Create label' : 'Edit label'}
       className="flex flex-col gap-2 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-2 dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
       onSubmit={(event) => {
         event.preventDefault();
@@ -96,21 +109,7 @@ export function LabelForm({
         onBlur={() => setTouched(true)}
         placeholder="Label name"
       />
-      <div className="flex items-center gap-2">
-        <div role="radiogroup" aria-label="Label colour" className="flex flex-wrap gap-1">
-          {LABEL_COLOR_PALETTE.map((swatch) => (
-            <button
-              key={swatch.id}
-              type="button"
-              role="radio"
-              aria-checked={colorId === swatch.id}
-              aria-label={swatch.name}
-              onClick={() => setColorId(swatch.id)}
-              className={`size-6 cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-primary ${swatch.dotClass} ${colorId === swatch.id ? 'ring-2 ring-primary ring-offset-1 dark:ring-dark-primary' : ''}`}
-            />
-          ))}
-        </div>
-      </div>
+      <LabelColorRadioGroup colorId={colorId} onChange={setColorId} />
       {error && (
         <p role="alert" className="text-label-sm text-error dark:text-dark-error">
           {error}
@@ -119,7 +118,7 @@ export function LabelForm({
       <div className="flex justify-end gap-2">
         <button
           type="button"
-          onClick={onCancel}
+          onClick={props.onCancel}
           className="cursor-pointer rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
         >
           Cancel
@@ -128,7 +127,7 @@ export function LabelForm({
           type="submit"
           className="cursor-pointer rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
         >
-          {mode === 'create' ? 'Create' : 'Save'}
+          {props.mode === 'create' ? 'Create' : 'Save'}
         </button>
       </div>
     </form>

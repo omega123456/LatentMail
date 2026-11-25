@@ -287,10 +287,7 @@ impl OperationRunner {
         let _entity = lock.lock().await;
         let permits = Arc::clone(&self.permits);
         let _permit = permits.acquire().await.expect("semaphore remains open");
-        loop {
-            if !self.prepare_attempt().await {
-                return;
-            }
+        while self.prepare_attempt().await {
             match self.execute_attempt().await {
                 AttemptOutcome::Finished => return,
                 AttemptOutcome::RetryAfter(delay) => tokio::time::sleep(delay).await,
@@ -446,12 +443,8 @@ impl QueueEngine {
             Lane::Traversal => queue.traversal,
             Lane::Embedding => queue.embedding,
         };
-        if sender.send(operation).await.is_err() {
-            if lane == Lane::Interactive {
-                self.finish_interactive(&account_id).await;
-            }
-            self.counters.pending.fetch_sub(1, Ordering::Relaxed);
-            self.registry.discard(&id);
+        if let Err(send_error) = sender.send(operation).await {
+            self.abandon_enqueue(&send_error.0).await;
             return Err("queue stopped");
         }
         self.emit(QueueItemEvent {
@@ -461,6 +454,14 @@ impl QueueEngine {
             status: "queued",
         });
         Ok(())
+    }
+
+    async fn abandon_enqueue(&self, operation: &QueueOperation) {
+        if operation.lane == Lane::Interactive {
+            self.finish_interactive(&operation.account_id).await;
+        }
+        self.counters.pending.fetch_sub(1, Ordering::Relaxed);
+        self.registry.discard(&operation.id);
     }
 
     pub fn pause(&self) {
@@ -510,28 +511,28 @@ impl QueueEngine {
             PauseScope::Global => self.set_global_paused(paused),
             PauseScope::Account { account_id } => {
                 let changed = self.registry.set_account_paused(account_id, paused);
-                if changed && !paused {
-                    self.resumed.notify_waiters();
-                }
-                changed
+                self.wake_if_resumed(changed, paused)
             }
             PauseScope::Lane { account_id, lane } => {
-                let changed = self.registry.set_lane_paused(
-                    LaneTarget {
-                        account_id: account_id,
-                        lane: *lane,
-                    },
-                    paused,
-                );
-                if changed && !paused {
-                    self.resumed.notify_waiters();
-                }
-                changed
+                let target = LaneTarget {
+                    account_id: account_id,
+                    lane: *lane,
+                };
+                let changed = self.registry.set_lane_paused(target, paused);
+                self.wake_if_resumed(changed, paused)
             }
         };
         if changed {
             self.interactive_drained.notify_waiters();
             self.emit_summary();
+        }
+        changed
+    }
+
+    fn wake_if_resumed(&self, changed: bool, paused: bool) -> bool {
+        let resumed = changed && !paused;
+        if resumed {
+            self.resumed.notify_waiters();
         }
         changed
     }
@@ -615,12 +616,8 @@ impl QueueEngine {
             .await
             .map_err(|error| error.to_string())?;
         let mut retried = 0usize;
-        for row in rows {
-            if let Some(operation) = recovered_queue_operation(&row) {
-                if self.enqueue(operation).await.is_ok() {
-                    retried += 1;
-                }
-            }
+        for operation in rows.iter().filter_map(recovered_queue_operation) {
+            retried += usize::from(self.enqueue(operation).await.is_ok());
         }
         Ok(retried)
     }
@@ -633,15 +630,13 @@ impl QueueEngine {
         else {
             return;
         };
-        for lane in account.lanes {
-            for operation in lane.operations {
-                if matches!(
-                    operation.status,
-                    OperationStatus::Queued | OperationStatus::Retrying
-                ) {
-                    self.cancel(&operation.id).await;
-                }
-            }
+        let waiting_operations = account
+            .lanes
+            .into_iter()
+            .flat_map(|lane| lane.operations)
+            .filter(|operation| is_waiting(operation.status));
+        for operation in waiting_operations {
+            self.cancel(&operation.id).await;
         }
     }
 
@@ -666,24 +661,23 @@ impl QueueEngine {
     }
 
     pub async fn wait_for_account_lane(self: &Arc<Self>, account_id: &str, lane: Lane) {
-        loop {
-            let active = self
-                .snapshot()
-                .await
-                .into_iter()
-                .find(|account| account.account_id == account_id)
-                .and_then(|account| {
-                    account
-                        .lanes
-                        .into_iter()
-                        .find(|snapshot| snapshot.lane == lane)
-                })
-                .is_some_and(|snapshot| snapshot.active > 0 || snapshot.backlog > 0);
-            if !active {
-                return;
-            }
+        while self.account_lane_busy(account_id, lane).await {
             tokio::task::yield_now().await;
         }
+    }
+
+    async fn account_lane_busy(&self, account_id: &str, lane: Lane) -> bool {
+        self.snapshot()
+            .await
+            .into_iter()
+            .find(|account| account.account_id == account_id)
+            .and_then(|account| {
+                account
+                    .lanes
+                    .into_iter()
+                    .find(|snapshot| snapshot.lane == lane)
+            })
+            .is_some_and(|snapshot| snapshot.active > 0 || snapshot.backlog > 0)
     }
 
     pub fn clear_history(&self, account_id: Option<&str>) {
@@ -766,23 +760,8 @@ impl QueueEngine {
         }
     }
 
-    fn spawn_lane(self: &Arc<Self>, mut receiver: mpsc::Receiver<QueueOperation>, lane: Lane) {
-        let engine = Arc::downgrade(self);
-        tokio::spawn(async move {
-            let permits = Arc::new(Semaphore::new(lane.capacity()));
-            while let Some(operation) = receiver.recv().await {
-                let Some(engine) = Weak::upgrade(&engine) else {
-                    break;
-                };
-                engine.wait_until_resumed().await;
-                let runner = OperationRunner {
-                    engine: Arc::clone(&engine),
-                    operation: operation,
-                    permits: Arc::clone(&permits),
-                };
-                tokio::spawn(runner.run());
-            }
-        });
+    fn spawn_lane(self: &Arc<Self>, receiver: mpsc::Receiver<QueueOperation>, lane: Lane) {
+        tokio::spawn(run_lane(Arc::downgrade(self), receiver, lane));
     }
 
     async fn entity_lock(&self, operation: &QueueOperation) -> Arc<Mutex<()>> {
@@ -795,47 +774,55 @@ impl QueueEngine {
     }
 
     pub async fn wait_until_resumed(&self) {
-        loop {
-            let notified = self.resumed.notified();
-            if !self.paused.load(Ordering::Acquire) && !self.suspended() {
-                return;
-            }
+        let mut notified = self.resumed.notified();
+        while self.is_halted() {
             notified.await;
+            notified = self.resumed.notified();
         }
+    }
+
+    fn is_halted(&self) -> bool {
+        self.paused.load(Ordering::Acquire) || self.suspended()
     }
 
     async fn wait_until_resumed_for(&self, operation: &QueueOperation) {
-        loop {
-            let notified = self.resumed.notified();
-            let paused = self.paused.load(Ordering::Acquire)
-                || self.suspended()
-                || self
-                    .registry
-                    .is_scope_paused(&operation.account_id, operation.lane);
-            if !paused {
-                return;
-            }
+        let mut notified = self.resumed.notified();
+        while self.is_halted_for(operation) {
             notified.await;
+            notified = self.resumed.notified();
         }
     }
 
+    fn is_halted_for(&self, operation: &QueueOperation) -> bool {
+        let scope_paused = self
+            .registry
+            .is_scope_paused(&operation.account_id, operation.lane);
+        self.is_halted() || scope_paused
+    }
+
     async fn wait_for_interactive(&self, operation: &QueueOperation) {
-        if matches!(
+        let yields_to_interactive = matches!(
             operation.lane,
             Lane::Background | Lane::Traversal | Lane::Embedding
-        ) {
-            loop {
-                let notified = self.interactive_drained.notified();
-                if self
-                    .registry
-                    .is_scope_paused(&operation.account_id, Lane::Interactive)
-                    || !self.has_interactive(&operation.account_id).await
-                {
-                    return;
-                }
-                notified.await;
-            }
+        );
+        if !yields_to_interactive {
+            return;
         }
+        let mut notified = self.interactive_drained.notified();
+        while self.interactive_work_ahead_of(operation).await {
+            notified.await;
+            notified = self.interactive_drained.notified();
+        }
+    }
+
+    async fn interactive_work_ahead_of(&self, operation: &QueueOperation) -> bool {
+        let interactive_paused = self
+            .registry
+            .is_scope_paused(&operation.account_id, Lane::Interactive);
+        if interactive_paused {
+            return false;
+        }
+        self.has_interactive(&operation.account_id).await
     }
 
     async fn bucket_for(&self, account_id: &str) -> Arc<TokenBucket> {
@@ -861,12 +848,51 @@ impl QueueEngine {
         let mut pending = self.interactive_pending.lock().await;
         if let Some(count) = pending.get_mut(account_id) {
             *count -= 1;
-            if *count == 0 {
-                pending.remove(account_id);
-            }
+        }
+        let drained = pending.get(account_id) == Some(&0);
+        if drained {
+            pending.remove(account_id);
         }
         self.interactive_drained.notify_waiters();
     }
+}
+
+fn is_waiting(status: OperationStatus) -> bool {
+    matches!(status, OperationStatus::Queued | OperationStatus::Retrying)
+}
+
+struct LaneDelivery {
+    operation: QueueOperation,
+    engine: Arc<QueueEngine>,
+}
+
+async fn run_lane(
+    engine: Weak<QueueEngine>,
+    mut receiver: mpsc::Receiver<QueueOperation>,
+    lane: Lane,
+) {
+    let permits = Arc::new(Semaphore::new(lane.capacity()));
+    while let Some(delivery) = next_lane_delivery(&mut receiver, &engine).await {
+        delivery.engine.wait_until_resumed().await;
+        let runner = OperationRunner {
+            engine: delivery.engine,
+            operation: delivery.operation,
+            permits: Arc::clone(&permits),
+        };
+        tokio::spawn(runner.run());
+    }
+}
+
+async fn next_lane_delivery(
+    receiver: &mut mpsc::Receiver<QueueOperation>,
+    engine: &Weak<QueueEngine>,
+) -> Option<LaneDelivery> {
+    let operation = receiver.recv().await?;
+    let engine = Weak::upgrade(engine)?;
+    Some(LaneDelivery {
+        operation: operation,
+        engine: engine,
+    })
 }
 
 pub fn retry_delay(attempt: u8) -> Duration {

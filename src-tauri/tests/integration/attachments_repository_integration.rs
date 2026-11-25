@@ -128,9 +128,10 @@ fn an_existing_message_acquires_attachment_rows_on_its_next_sync_even_though_the
     );
 }
 
-#[tokio::test]
-async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_message() {
-    let server = wiremock::MockServer::start().await;
+async fn mount_single_message_backfill(
+    server: &wiremock::MockServer,
+    message_payload: serde_json::Value,
+) {
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/profile"))
         .respond_with(
@@ -141,7 +142,7 @@ async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_mess
                 "historyId": "1"
             })),
         )
-        .mount(&server)
+        .mount(server)
         .await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/messages"))
@@ -150,37 +151,49 @@ async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_mess
                 "messages": [{ "id": "m1", "threadId": "t1" }]
             })),
         )
-        .mount(&server)
+        .mount(server)
         .await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/messages/m1"))
-        .respond_with(
-            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "m1",
-                "threadId": "t1",
-                "historyId": "1",
-                "payload": {
-                    "mimeType": "multipart/mixed",
-                    "parts": [
-                        { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
-                        {
-                            "mimeType": "application/pdf",
-                            "filename": "report.pdf",
-                            "body": { "attachmentId": "gmail-att-1", "size": 2048 }
-                        }
-                    ]
-                }
-            })),
-        )
-        .mount(&server)
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(message_payload))
+        .mount(server)
         .await;
+}
 
+fn open_account_storage() -> (tempfile::TempDir, Storage) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
     AccountRepository::upsert(&connection, &account()).unwrap();
     drop(connection);
+    (directory, storage)
+}
 
+#[tokio::test]
+async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_message() {
+    let server = wiremock::MockServer::start().await;
+    mount_single_message_backfill(
+        &server,
+        serde_json::json!({
+            "id": "m1",
+            "threadId": "t1",
+            "historyId": "1",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
+                    {
+                        "mimeType": "application/pdf",
+                        "filename": "report.pdf",
+                        "body": { "attachmentId": "gmail-att-1", "size": 2048 }
+                    }
+                ]
+            }
+        }),
+    )
+    .await;
+
+    let (_directory, storage) = open_account_storage();
     let client = latentmail_lib::gmail::GmailClient::with_base_url("token", server.uri());
     run_backfill_step(BackfillStepContext {
         storage: &storage,
@@ -204,56 +217,28 @@ async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_mess
 #[tokio::test]
 async fn backfill_seeds_cache_bytes_for_an_inline_data_attachment_with_no_interactive_fetch() {
     let server = wiremock::MockServer::start().await;
-    wiremock::Mock::given(wiremock::matchers::method("GET"))
-        .and(wiremock::matchers::path("/users/me/profile"))
-        .respond_with(
-            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "emailAddress": "me@example.com",
-                "messagesTotal": 1,
-                "threadsTotal": 1,
-                "historyId": "1"
-            })),
-        )
-        .mount(&server)
-        .await;
-    wiremock::Mock::given(wiremock::matchers::method("GET"))
-        .and(wiremock::matchers::path("/users/me/messages"))
-        .respond_with(
-            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "messages": [{ "id": "m1", "threadId": "t1" }]
-            })),
-        )
-        .mount(&server)
-        .await;
-    wiremock::Mock::given(wiremock::matchers::method("GET"))
-        .and(wiremock::matchers::path("/users/me/messages/m1"))
-        .respond_with(
-            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "m1",
-                "threadId": "t1",
-                "historyId": "1",
-                "payload": {
-                    "mimeType": "multipart/mixed",
-                    "parts": [
-                        { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
-                        {
-                            "mimeType": "image/jpeg",
-                            "filename": "photo.jpg",
-                            "body": { "data": "cGhvdG8" }
-                        }
-                    ]
-                }
-            })),
-        )
-        .mount(&server)
-        .await;
+    mount_single_message_backfill(
+        &server,
+        serde_json::json!({
+            "id": "m1",
+            "threadId": "t1",
+            "historyId": "1",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
+                    {
+                        "mimeType": "image/jpeg",
+                        "filename": "photo.jpg",
+                        "body": { "data": "cGhvdG8" }
+                    }
+                ]
+            }
+        }),
+    )
+    .await;
 
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let connection = storage.connection().unwrap();
-    AccountRepository::upsert(&connection, &account()).unwrap();
-    drop(connection);
-
+    let (_directory, storage) = open_account_storage();
     let cache_dir = tempfile::tempdir().unwrap();
     let cache = AttachmentCache::new(cache_dir.path()).unwrap();
 

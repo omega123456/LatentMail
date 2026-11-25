@@ -1,2 +1,4 @@
 allowed-idents-below-min-chars = []
 too-many-arguments-threshold = 3
+excessive-nesting-threshold = 3
+too-many-lines-threshold = 60

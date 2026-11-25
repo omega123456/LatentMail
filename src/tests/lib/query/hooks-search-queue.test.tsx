@@ -1,0 +1,326 @@
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  RETAINED_THREAD_PAGES,
+  useCancelQueueOperationMutation,
+  useClearQueueHistoryMutation,
+  useParseSearchQueryQuery,
+  useQueueOperationsQuery,
+  useRetryFailedOperationsMutation,
+  useRetryQueueOperationMutation,
+  useSearchThreadsQuery,
+  useSetQueuePausedMutation,
+  useThreadsQuery,
+} from '@/lib/query/hooks';
+import {
+  useDeleteThreadsMutation,
+  useMoveThreadsMutation,
+  useTriageMutation,
+} from '@/lib/query/mutations';
+import { queryKeys } from '@/lib/query/keys';
+import { useSearchStore } from '@/stores/search';
+import { useToastStore } from '@/stores/toast';
+import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
+import { resetHookTestStores, thread, wrapper } from '@/tests/lib/query/hooks-helpers';
+
+const PAGES_AFTER_FIRST_FETCH = 2;
+
+beforeEach(() => {
+  resetHookTestStores();
+});
+
+describe('search query hooks', () => {
+  it('retains five mailbox and search pages and restores the previous page', async () => {
+    const calls: Array<{ command: string; request: unknown }> = [];
+    const page = (cursor: { latestAt: number; id: string } | null) => {
+      const index = cursor?.latestAt ?? 0;
+      return {
+        items: [{ ...thread, id: `thread-${index}` }],
+        nextCursor:
+          index < RETAINED_THREAD_PAGES ? { latestAt: index + 1, id: String(index + 1) } : null,
+        previousCursor: index > 0 ? { latestAt: index - 1, id: String(index - 1) } : null,
+      };
+    };
+    ipc.override('list_threads', (request) => {
+      calls.push({ command: 'list_threads', request: request });
+      return page(request.cursor ?? null);
+    });
+    ipc.override('search_threads', (request) => {
+      calls.push({ command: 'search_threads', request: request });
+      return page(request.cursor ?? null);
+    });
+    const client = new QueryClient();
+    const { result } = renderHook(
+      () => ({
+        mailbox: useThreadsQuery('account', 'INBOX'),
+        search: useSearchThreadsQuery('account', 'from:anna', { kind: 'default' }),
+      }),
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() =>
+      expect(result.current.mailbox.isSuccess && result.current.search.isSuccess).toBe(true),
+    );
+    expect(result.current.mailbox.hasNextPage).toBe(true);
+    expect(result.current.search.hasNextPage).toBe(true);
+    for (let index = 0; index < RETAINED_THREAD_PAGES; index += 1) {
+      await act(async () => {
+        await result.current.mailbox.fetchNextPage();
+      });
+      expect(
+        client.getQueryData<{ pages: unknown[] }>(queryKeys.threads('account', 'INBOX'))?.pages,
+      ).toHaveLength(Math.min(RETAINED_THREAD_PAGES, index + PAGES_AFTER_FIRST_FETCH));
+      await act(async () => {
+        await result.current.search.fetchNextPage();
+      });
+      expect(
+        client.getQueryData<{
+          pages: unknown[];
+        }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages,
+      ).toHaveLength(Math.min(RETAINED_THREAD_PAGES, index + PAGES_AFTER_FIRST_FETCH));
+    }
+    expect(
+      client.getQueryData<{ pages: unknown[] }>(queryKeys.threads('account', 'INBOX'))?.pages,
+    ).toHaveLength(RETAINED_THREAD_PAGES);
+    expect(
+      client.getQueryData<{
+        pages: unknown[];
+      }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages,
+    ).toHaveLength(RETAINED_THREAD_PAGES);
+    await act(async () => {
+      await result.current.mailbox.fetchPreviousPage();
+      await result.current.search.fetchPreviousPage();
+    });
+    expect(
+      client.getQueryData<{
+        pages: Array<{ items: (typeof thread)[] }>;
+      }>(queryKeys.threads('account', 'INBOX'))?.pages[0].items[0].id,
+    ).toBe('thread-0');
+    expect(
+      client.getQueryData<{
+        pages: Array<{ items: (typeof thread)[] }>;
+      }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0].items[0].id,
+    ).toBe('thread-0');
+    expect(calls).toContainEqual({
+      command: 'list_threads',
+      request: expect.objectContaining({
+        cursor: { latestAt: 0, id: '0' },
+        direction: 'backward',
+      }),
+    });
+    expect(calls).toContainEqual({
+      command: 'search_threads',
+      request: expect.objectContaining({
+        cursor: { latestAt: 0, id: '0' },
+        direction: 'backward',
+      }),
+    });
+  });
+
+  it('stays idle without a non-blank query and fetches once one is supplied', async () => {
+    ipc.override('search_threads', { items: [], nextCursor: null });
+    const client = new QueryClient();
+    const { result, rerender } = renderHook(
+      ({ query }: { query: string }) =>
+        useSearchThreadsQuery('account', query, { kind: 'default' }),
+      { wrapper: wrapper(client), initialProps: { query: '' } },
+    );
+    expect(result.current.fetchStatus).toBe('idle');
+    rerender({ query: 'from:anna' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+
+  it('parses a query only once it is non-blank', async () => {
+    ipc.override('parse_search_query', {
+      hasTextTerm: true,
+      from: 'anna',
+      to: null,
+      subject: null,
+      includes: [],
+      excludes: [],
+      predicates: [],
+    });
+    const client = new QueryClient();
+    const { result, rerender } = renderHook(
+      ({ query }: { query: string }) => useParseSearchQueryQuery(query),
+      { wrapper: wrapper(client), initialProps: { query: '' } },
+    );
+    expect(result.current.fetchStatus).toBe('idle');
+    rerender({ query: 'from:anna' });
+    await waitFor(() => expect(result.current.data?.from).toBe('anna'));
+  });
+});
+
+describe('search optimistic removal', () => {
+  const sentThread = {
+    ...thread,
+    id: 'thread-sent',
+    isUnread: false,
+  };
+
+  function seedSearchCache(client: QueryClient) {
+    client.setQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' }), {
+      pages: [{ items: [sentThread], nextCursor: null }],
+      pageParams: [null],
+    });
+    client.setQueryData(queryKeys.searchTotal('account', 'from:anna', { kind: 'default' }), 1);
+  }
+
+  it('removes a row from the default-scoped search cache when it is deleted, mirroring the Sent-mailbox rule', async () => {
+    const client = new QueryClient();
+    seedSearchCache(client);
+    act(() => useSearchStore.setState({ scope: { kind: 'default' } }));
+    const { result } = renderHook(() => useDeleteThreadsMutation('account'), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => {
+      await result.current.mutateAsync({ threadIds: ['thread-sent'] });
+    });
+    const page = client.getQueryData<{
+      pages: Array<{ items: (typeof sentThread)[] }>;
+    }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0];
+    expect(page?.items).toHaveLength(0);
+    expect(
+      client.getQueryData(queryKeys.searchTotal('account', 'from:anna', { kind: 'default' })),
+    ).toBe(0);
+  });
+
+  it('keeps a row in a Trash-scoped search when it is deleted', async () => {
+    const client = new QueryClient();
+    client.setQueryData(
+      queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }),
+      {
+        pages: [{ items: [sentThread], nextCursor: null }],
+        pageParams: [null],
+      },
+    );
+    act(() => useSearchStore.setState({ scope: { kind: 'label', labelId: 'TRASH' } }));
+    const { result } = renderHook(() => useDeleteThreadsMutation('account'), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => {
+      await result.current.mutateAsync({ threadIds: ['thread-sent'] });
+    });
+    const page = client.getQueryData<{ pages: Array<{ items: (typeof sentThread)[] }> }>(
+      queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }),
+    )?.pages[0];
+    expect(page?.items).toHaveLength(1);
+  });
+
+  it('removes a row from a default-scoped search when it is moved to Spam', async () => {
+    const client = new QueryClient();
+    seedSearchCache(client);
+    act(() => useSearchStore.setState({ scope: { kind: 'default' } }));
+    const { result } = renderHook(() => useMoveThreadsMutation('account'), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => {
+      await result.current.mutateAsync({ threadIds: ['thread-sent'], destination: 'SPAM' });
+    });
+    const page = client.getQueryData<{
+      pages: Array<{ items: (typeof sentThread)[] }>;
+    }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0];
+    expect(page?.items).toHaveLength(0);
+  });
+
+  it('keeps star/read changes visible in the search cache rather than removing the row', async () => {
+    const client = new QueryClient();
+    seedSearchCache(client);
+    act(() => useSearchStore.setState({ scope: { kind: 'default' } }));
+    const { result } = renderHook(() => useTriageMutation('account'), { wrapper: wrapper(client) });
+    await act(async () => {
+      await result.current.mutateAsync({
+        threadIds: ['thread-sent'],
+        add: ['STARRED'],
+        remove: [],
+      });
+    });
+    const page = client.getQueryData<{
+      pages: Array<{ items: { id: string; isStarred: boolean }[] }>;
+    }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0];
+    expect(page?.items).toHaveLength(1);
+    expect(page?.items[0].isStarred).toBe(true);
+  });
+});
+
+describe('queue hooks', () => {
+  it('reads the queue snapshot', async () => {
+    const client = new QueryClient();
+    ipc.override('read_queue_operations', []);
+    const { result } = renderHook(() => useQueueOperationsQuery(), { wrapper: wrapper(client) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([]);
+  });
+
+  it('cancels an operation and reports whether it applied', async () => {
+    const client = new QueryClient();
+    ipc.override('cancel_queue_operation', false);
+    const { result } = renderHook(() => useCancelQueueOperationMutation(), {
+      wrapper: wrapper(client),
+    });
+    const applied = await act(async () => result.current.mutateAsync('op-1'));
+    expect(applied).toBe(false);
+  });
+
+  it('retries a single operation', async () => {
+    const client = new QueryClient();
+    const retry = vi.fn(() => true);
+    ipc.override('retry_queue_operation', retry);
+    const { result } = renderHook(() => useRetryQueueOperationMutation(), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => result.current.mutateAsync('op-1'));
+    expect(retry).toHaveBeenCalledWith({ operationId: 'op-1' });
+  });
+
+  it('retries every failed operation, optionally scoped to an account', async () => {
+    const client = new QueryClient();
+    const retriedCount = 2;
+    const retryAll = vi.fn(() => retriedCount);
+    ipc.override('retry_failed_operations', retryAll);
+    const { result } = renderHook(() => useRetryFailedOperationsMutation(), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => result.current.mutateAsync('account-1'));
+    expect(retryAll).toHaveBeenCalledWith({ accountId: 'account-1' });
+  });
+
+  it('clears queue history', async () => {
+    const client = new QueryClient();
+    const clear = vi.fn();
+    ipc.override('clear_queue_history', clear);
+    const { result } = renderHook(() => useClearQueueHistoryMutation(), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => result.current.mutateAsync(undefined));
+    expect(clear).toHaveBeenCalledWith({ accountId: null });
+  });
+
+  it('sets the paused flag at the requested scope', async () => {
+    const client = new QueryClient();
+    const setPaused = vi.fn(() => true);
+    ipc.override('set_queue_paused', setPaused);
+    const { result } = renderHook(() => useSetQueuePausedMutation(), { wrapper: wrapper(client) });
+    await act(async () => result.current.mutateAsync({ scope: { scope: 'global' }, paused: true }));
+    expect(setPaused).toHaveBeenCalledWith({ scope: { scope: 'global' }, paused: true });
+  });
+
+  it('surfaces a toast when a queue control command fails', async () => {
+    const consoleError = captureConsole('error');
+    const client = new QueryClient();
+    ipc.override('set_queue_paused', () => {
+      throw new Error('boom');
+    });
+    const { result } = renderHook(() => useSetQueuePausedMutation(), { wrapper: wrapper(client) });
+    await act(async () => {
+      await result.current
+        .mutateAsync({ scope: { scope: 'global' }, paused: true })
+        .catch(() => {});
+    });
+    expect(useToastStore.getState().toasts.at(-1)?.message).toBe(
+      'Couldn’t update the pause state.',
+    );
+    expect(consoleError).toHaveBeenCalledWith('ipc set_queue_paused failed: boom');
+  });
+});

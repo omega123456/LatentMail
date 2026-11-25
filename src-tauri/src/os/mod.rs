@@ -83,26 +83,17 @@ impl<'a, R: Runtime> OsInitializer<'a, R> {
     }
 
     fn build_lifecycle(&self) -> Option<Arc<Lifecycle>> {
-        self.app
-            .try_state::<Arc<crate::queue::QueueEngine>>()
-            .map(|queue| {
-                let queue = queue.inner().clone();
-                let handle = self.app.clone();
-                let resume_work = Arc::new(move || {
-                    let app = handle.clone();
-                    Box::pin(async move {
-                        let auth = app.state::<crate::auth::AuthService>().inner().clone();
-                        let engine = app.state::<Arc<crate::sync::SyncEngine>>().inner().clone();
-                        crate::sync::run_periodic_cadence(&app, &auth, &engine).await;
-                    })
-                        as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-                });
-                Arc::new(Lifecycle::new(
-                    queue,
-                    lifecycle::settling_delay(),
-                    resume_work,
-                ))
-            })
+        let queue = self
+            .app
+            .try_state::<Arc<crate::queue::QueueEngine>>()?
+            .inner()
+            .clone();
+        let resume_work = build_resume_work(self.app.clone());
+        Some(Arc::new(Lifecycle::new(
+            queue,
+            lifecycle::settling_delay(),
+            resume_work,
+        )))
     }
 
     fn install_state(self) -> Self {
@@ -122,18 +113,7 @@ impl<'a, R: Runtime> OsInitializer<'a, R> {
             power: std::sync::Mutex::new(None),
         });
         if let Some(lifecycle) = lifecycle {
-            let registration = power::register(Arc::new(move |signal| {
-                let lifecycle = Arc::clone(&lifecycle);
-                tauri::async_runtime::spawn(async move {
-                    lifecycle.handle(signal).await;
-                });
-            }));
-            self.app
-                .state::<OsIntegration>()
-                .power
-                .lock()
-                .expect("power registration lock poisoned")
-                .replace(registration);
+            register_power_lifecycle(self.app, lifecycle);
         }
         self
     }
@@ -169,25 +149,30 @@ impl<'a, R: Runtime> OsInitializer<'a, R> {
     }
 
     fn wire_deep_links(self) -> Self {
-        #[cfg(not(feature = "test-utils"))]
-        {
-            use tauri_plugin_deep_link::DeepLinkExt;
-
-            let handle = self.app.clone();
-            self.app.deep_link().on_open_url(move |event| {
-                for url in event.urls() {
-                    emit_mailto(&handle, url.as_str());
-                }
-            });
-            if let Ok(Some(urls)) = self.app.deep_link().get_current() {
-                for url in urls {
-                    emit_mailto(self.app, url.as_str());
-                }
-            }
-        }
+        wire_platform_deep_links(self.app);
         self
     }
 }
+
+#[cfg(not(feature = "test-utils"))]
+fn wire_platform_deep_links<R: Runtime>(app: &AppHandle<R>) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+
+    let handle = app.clone();
+    app.deep_link().on_open_url(move |event| {
+        for url in event.urls() {
+            emit_mailto(&handle, url.as_str());
+        }
+    });
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        for url in urls {
+            emit_mailto(app, url.as_str());
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+fn wire_platform_deep_links<R: Runtime>(_app: &AppHandle<R>) {}
 
 fn schedule_indicator_refresh<R: Runtime>(app: AppHandle<R>) {
     let integration = app.state::<OsIntegration>();
@@ -243,20 +228,45 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
+async fn run_resume_cadence<R: Runtime>(app: AppHandle<R>) {
+    let auth = app.state::<crate::auth::AuthService>().inner().clone();
+    let engine = app.state::<Arc<crate::sync::SyncEngine>>().inner().clone();
+    crate::sync::run_periodic_cadence(&app, &auth, &engine).await;
+}
+
+fn build_resume_work<R: Runtime>(handle: AppHandle<R>) -> lifecycle::ResumeWork {
+    Arc::new(move || Box::pin(run_resume_cadence(handle.clone())))
+}
+
+fn register_power_lifecycle<R: Runtime>(app: &AppHandle<R>, lifecycle: Arc<Lifecycle>) {
+    let registration = power::register(Arc::new(move |signal| {
+        let lifecycle = Arc::clone(&lifecycle);
+        tauri::async_runtime::spawn(async move {
+            lifecycle.handle(signal).await;
+        });
+    }));
+    app.state::<OsIntegration>()
+        .power
+        .lock()
+        .expect("power registration lock poisoned")
+        .replace(registration);
+}
+
 pub fn emit_mailto<R: Runtime>(app: &AppHandle<R>, value: &str) {
-    if let Some(mailto) = deeplink::parse(value) {
-        window::show_and_focus(app);
-        let integration = app.state::<OsIntegration>();
-        if !integration.frontend_ready.load(Ordering::SeqCst) {
-            let pending = Arc::clone(&integration.pending_mailto);
-            tauri::async_runtime::spawn(async move {
-                pending.lock().await.push(mailto);
-            });
-            return;
-        }
-        let _ = app.emit(
-            crate::events::OS_INTENT,
-            serde_json::json!({ "kind": "mailto", "mailto": mailto }),
-        );
+    let Some(mailto) = deeplink::parse(value) else {
+        return;
+    };
+    window::show_and_focus(app);
+    let integration = app.state::<OsIntegration>();
+    if !integration.frontend_ready.load(Ordering::SeqCst) {
+        let pending = Arc::clone(&integration.pending_mailto);
+        tauri::async_runtime::spawn(async move {
+            pending.lock().await.push(mailto);
+        });
+        return;
     }
+    let _ = app.emit(
+        crate::events::OS_INTENT,
+        serde_json::json!({ "kind": "mailto", "mailto": mailto }),
+    );
 }

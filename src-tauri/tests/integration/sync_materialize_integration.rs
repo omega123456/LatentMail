@@ -30,8 +30,7 @@ fn message(id: &str, thread_id: &str) -> GmailMessage {
     }
 }
 
-#[test]
-fn draft_replacement_tracks_the_stable_draft_id_across_gmail_message_ids() {
+fn connection_with_account() -> rusqlite::Connection {
     let connection = Storage::in_memory().unwrap();
     AccountRepository::upsert(
         &connection,
@@ -47,6 +46,12 @@ fn draft_replacement_tracks_the_stable_draft_id_across_gmail_message_ids() {
         },
     )
     .unwrap();
+    connection
+}
+
+#[test]
+fn draft_replacement_tracks_the_stable_draft_id_across_gmail_message_ids() {
+    let connection = connection_with_account();
 
     materialize::replace_draft(
         &connection,

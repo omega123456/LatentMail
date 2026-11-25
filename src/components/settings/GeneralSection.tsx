@@ -37,128 +37,213 @@ const densityOptions: { value: Density; label: string }[] = [
   { value: 'spacious', label: 'Spacious' },
 ];
 
-export function GeneralSection() {
+function AppearanceDisplayToggles() {
+  const layoutState = useLayoutStore();
+  return (
+    <>
+      <SettingRow label="Zoom" description="Scale the whole interface.">
+        <Select
+          ariaLabel="Zoom"
+          value={String(layoutState.zoomPercent)}
+          onChange={(next) => layoutState.setZoomPercent(Number(next))}
+          options={zoomOptionsPercent.map((percent) => ({
+            value: String(percent),
+            label: `${percent}%`,
+          }))}
+          className={settingsTriggerClass}
+        />
+      </SettingRow>
+      <SettingRow label="Show sender avatars" description="Display a picture beside each sender.">
+        <SettingSwitch
+          checked={layoutState.showSenderAvatars}
+          onChange={layoutState.setShowSenderAvatars}
+          label="Show sender avatars"
+        />
+      </SettingRow>
+      <SettingRow label="Show unread counts" description="Numbers beside mailboxes in the sidebar.">
+        <SettingSwitch
+          checked={layoutState.showUnreadCounts}
+          onChange={layoutState.setShowUnreadCounts}
+          label="Show unread counts"
+        />
+      </SettingRow>
+    </>
+  );
+}
+
+function AppearanceSubsection() {
   const theme = useThemeStore((themeState) => themeState.theme);
   const setTheme = useThemeStore((themeState) => themeState.setTheme);
   const layout = useLayoutStore((layoutState) => layoutState.layout);
   const setLayout = useLayoutStore((layoutState) => layoutState.setLayout);
   const density = useLayoutStore((layoutState) => layoutState.density);
   const setDensity = useLayoutStore((layoutState) => layoutState.setDensity);
-  const showSenderAvatars = useLayoutStore((layoutState) => layoutState.showSenderAvatars);
-  const setShowSenderAvatars = useLayoutStore((layoutState) => layoutState.setShowSenderAvatars);
-  const zoomPercent = useLayoutStore((layoutState) => layoutState.zoomPercent);
-  const setZoomPercent = useLayoutStore((layoutState) => layoutState.setZoomPercent);
-  const showUnreadCounts = useLayoutStore((layoutState) => layoutState.showUnreadCounts);
-  const setShowUnreadCounts = useLayoutStore((layoutState) => layoutState.setShowUnreadCounts);
-  const syncOnStartup = useLayoutStore((layoutState) => layoutState.syncOnStartup);
-  const setSyncOnStartup = useLayoutStore((layoutState) => layoutState.setSyncOnStartup);
-  const syncIntervalSeconds = useLayoutStore((layoutState) => layoutState.syncIntervalSeconds);
-  const setSyncIntervalSeconds = useLayoutStore(
-    (layoutState) => layoutState.setSyncIntervalSeconds,
+  return (
+    <div className="flex flex-col">
+      <SubsectionHeading>Appearance</SubsectionHeading>
+      <SettingRow label="Theme" description="Follow the system or pick one.">
+        <SegmentedControl
+          ariaLabel="Theme"
+          value={theme}
+          onChange={setTheme}
+          options={themeOptions}
+        />
+      </SettingRow>
+      <SettingRow label="Mail layout" description="Where the reading pane sits.">
+        <SegmentedControl
+          ariaLabel="Mail layout"
+          value={layout}
+          onChange={setLayout}
+          options={layoutOptions.map((option) => ({
+            ...option,
+            glyph: <LayoutGlyph layout={option.value} />,
+          }))}
+        />
+      </SettingRow>
+      <SettingRow label="Message density" description="Row height in the message list.">
+        <SegmentedControl
+          ariaLabel="Message density"
+          value={density}
+          onChange={setDensity}
+          options={densityOptions.map((option) => ({
+            ...option,
+            glyph: <DensityGlyph density={option.value} />,
+          }))}
+        />
+      </SettingRow>
+      <AppearanceDisplayToggles />
+    </div>
   );
+}
+
+function RemoteImagesSubsection() {
   const alwaysLoadRemoteImages = useLayoutStore(
     (layoutState) => layoutState.alwaysLoadRemoteImages,
   );
   const setAlwaysLoadRemoteImages = useLayoutStore(
     (layoutState) => layoutState.setAlwaysLoadRemoteImages,
   );
+  return (
+    <div className="flex flex-col">
+      <SubsectionHeading>Remote images</SubsectionHeading>
+      <SettingRow
+        label="Always load remote images"
+        description="Load images from every sender, without asking."
+      >
+        <SettingSwitch
+          checked={alwaysLoadRemoteImages}
+          onChange={setAlwaysLoadRemoteImages}
+          label="Always load remote images"
+        />
+      </SettingRow>
+      <SettingsDivider className="mb-4.5 mt-1.5" />
+      <TrustedSendersList />
+    </div>
+  );
+}
+
+function SyncSubsection() {
+  const syncOnStartup = useLayoutStore((layoutState) => layoutState.syncOnStartup);
+  const setSyncOnStartup = useLayoutStore((layoutState) => layoutState.setSyncOnStartup);
+  const syncIntervalSeconds = useLayoutStore((layoutState) => layoutState.syncIntervalSeconds);
+  const setSyncIntervalSeconds = useLayoutStore(
+    (layoutState) => layoutState.setSyncIntervalSeconds,
+  );
+  return (
+    <div className="flex flex-col">
+      <SubsectionHeading>Synchronisation</SubsectionHeading>
+      <SettingRow
+        label="Sync when LatentMail starts"
+        description="Fetch new mail as soon as the app opens."
+      >
+        <SettingSwitch
+          checked={syncOnStartup}
+          onChange={setSyncOnStartup}
+          label="Sync when LatentMail starts"
+        />
+      </SettingRow>
+      <SettingRow
+        label="Full sync every"
+        description="New mail arrives as soon as it is detected, regardless of this setting."
+      >
+        <Select
+          ariaLabel="Full sync every"
+          value={String(secondsToMinutes(syncIntervalSeconds))}
+          onChange={(next) => setSyncIntervalSeconds(minutesToSeconds(Number(next)))}
+          options={intervalOptionsMinutes.map((minutes) => ({
+            value: String(minutes),
+            label: formatCount(minutes, 'minute'),
+          }))}
+          className={settingsTriggerClass}
+        />
+      </SettingRow>
+    </div>
+  );
+}
+
+function SystemSubsection() {
+  const layoutState = useLayoutStore();
+  return (
+    <div className="flex flex-col">
+      <SubsectionHeading>System</SubsectionHeading>
+      {isWindows() && (
+        <>
+          <SettingRow label="Start at login" description="Open LatentMail when you sign in.">
+            <SettingSwitch
+              checked={layoutState.startAtLogin}
+              onChange={layoutState.setStartAtLogin}
+              label="Start at login"
+            />
+          </SettingRow>
+          <SettingRow
+            label="Close to system tray"
+            description="Keep running when the window closes."
+          >
+            <SettingSwitch
+              checked={layoutState.closeToTray}
+              onChange={layoutState.setCloseToTray}
+              label="Close to system tray"
+            />
+          </SettingRow>
+          <SettingRow
+            label="Start minimized"
+            description={
+              layoutState.closeToTray ? 'Open hidden in the tray.' : 'Requires closing to the tray.'
+            }
+            disabled={!layoutState.closeToTray}
+          >
+            <SettingSwitch
+              checked={layoutState.startMinimized}
+              onChange={layoutState.setStartMinimized}
+              label="Start minimized"
+              disabled={!layoutState.closeToTray}
+            />
+          </SettingRow>
+        </>
+      )}
+      <SettingRow label="Desktop notifications" description="Alert me when new mail arrives.">
+        <SettingSwitch
+          checked={layoutState.desktopNotifications}
+          onChange={layoutState.setDesktopNotifications}
+          label="Desktop notifications"
+        />
+      </SettingRow>
+    </div>
+  );
+}
+
+export function GeneralSection() {
   const prefetchImageAttachments = useLayoutStore(
     (layoutState) => layoutState.prefetchImageAttachments,
   );
   const setPrefetchImageAttachments = useLayoutStore(
     (layoutState) => layoutState.setPrefetchImageAttachments,
   );
-  const startAtLogin = useLayoutStore((layoutState) => layoutState.startAtLogin);
-  const setStartAtLogin = useLayoutStore((layoutState) => layoutState.setStartAtLogin);
-  const closeToTray = useLayoutStore((layoutState) => layoutState.closeToTray);
-  const setCloseToTray = useLayoutStore((layoutState) => layoutState.setCloseToTray);
-  const startMinimized = useLayoutStore((layoutState) => layoutState.startMinimized);
-  const setStartMinimized = useLayoutStore((layoutState) => layoutState.setStartMinimized);
-  const desktopNotifications = useLayoutStore((layoutState) => layoutState.desktopNotifications);
-  const setDesktopNotifications = useLayoutStore(
-    (layoutState) => layoutState.setDesktopNotifications,
-  );
-
   return (
     <SettingsSection title="General" description="Changes apply immediately.">
-      <div className="flex flex-col">
-        <SubsectionHeading>Appearance</SubsectionHeading>
-        <SettingRow label="Theme" description="Follow the system or pick one.">
-          <SegmentedControl
-            ariaLabel="Theme"
-            value={theme}
-            onChange={setTheme}
-            options={themeOptions}
-          />
-        </SettingRow>
-        <SettingRow label="Mail layout" description="Where the reading pane sits.">
-          <SegmentedControl
-            ariaLabel="Mail layout"
-            value={layout}
-            onChange={setLayout}
-            options={layoutOptions.map((option) => ({
-              ...option,
-              glyph: <LayoutGlyph layout={option.value} />,
-            }))}
-          />
-        </SettingRow>
-        <SettingRow label="Message density" description="Row height in the message list.">
-          <SegmentedControl
-            ariaLabel="Message density"
-            value={density}
-            onChange={setDensity}
-            options={densityOptions.map((option) => ({
-              ...option,
-              glyph: <DensityGlyph density={option.value} />,
-            }))}
-          />
-        </SettingRow>
-        <SettingRow label="Zoom" description="Scale the whole interface.">
-          <Select
-            ariaLabel="Zoom"
-            value={String(zoomPercent)}
-            onChange={(next) => setZoomPercent(Number(next))}
-            options={zoomOptionsPercent.map((percent) => ({
-              value: String(percent),
-              label: `${percent}%`,
-            }))}
-            className={settingsTriggerClass}
-          />
-        </SettingRow>
-        <SettingRow label="Show sender avatars" description="Display a picture beside each sender.">
-          <SettingSwitch
-            checked={showSenderAvatars}
-            onChange={setShowSenderAvatars}
-            label="Show sender avatars"
-          />
-        </SettingRow>
-        <SettingRow
-          label="Show unread counts"
-          description="Numbers beside mailboxes in the sidebar."
-        >
-          <SettingSwitch
-            checked={showUnreadCounts}
-            onChange={setShowUnreadCounts}
-            label="Show unread counts"
-          />
-        </SettingRow>
-      </div>
+      <AppearanceSubsection />
       <SettingsDivider />
-      <div className="flex flex-col">
-        <SubsectionHeading>Remote images</SubsectionHeading>
-        <SettingRow
-          label="Always load remote images"
-          description="Load images from every sender, without asking."
-        >
-          <SettingSwitch
-            checked={alwaysLoadRemoteImages}
-            onChange={setAlwaysLoadRemoteImages}
-            label="Always load remote images"
-          />
-        </SettingRow>
-        <SettingsDivider className="mb-4.5 mt-1.5" />
-        <TrustedSendersList />
-      </div>
+      <RemoteImagesSubsection />
       <SettingsDivider />
       <div className="flex flex-col">
         <SubsectionHeading>Attachments</SubsectionHeading>
@@ -174,80 +259,9 @@ export function GeneralSection() {
         </SettingRow>
       </div>
       <SettingsDivider />
-      <div className="flex flex-col">
-        <SubsectionHeading>Synchronisation</SubsectionHeading>
-        <SettingRow
-          label="Sync when LatentMail starts"
-          description="Fetch new mail as soon as the app opens."
-        >
-          <SettingSwitch
-            checked={syncOnStartup}
-            onChange={setSyncOnStartup}
-            label="Sync when LatentMail starts"
-          />
-        </SettingRow>
-        <SettingRow
-          label="Full sync every"
-          description="New mail arrives as soon as it is detected, regardless of this setting."
-        >
-          <Select
-            ariaLabel="Full sync every"
-            value={String(secondsToMinutes(syncIntervalSeconds))}
-            onChange={(next) => setSyncIntervalSeconds(minutesToSeconds(Number(next)))}
-            options={intervalOptionsMinutes.map((minutes) => ({
-              value: String(minutes),
-              label: formatCount(minutes, 'minute'),
-            }))}
-            className={settingsTriggerClass}
-          />
-        </SettingRow>
-      </div>
+      <SyncSubsection />
       <SettingsDivider />
-      <div className="flex flex-col">
-        <SubsectionHeading>System</SubsectionHeading>
-        {isWindows() && (
-          <>
-            <SettingRow label="Start at login" description="Open LatentMail when you sign in.">
-              <SettingSwitch
-                checked={startAtLogin}
-                onChange={setStartAtLogin}
-                label="Start at login"
-              />
-            </SettingRow>
-            <SettingRow
-              label="Close to system tray"
-              description="Keep running when the window closes."
-            >
-              <SettingSwitch
-                checked={closeToTray}
-                onChange={setCloseToTray}
-                label="Close to system tray"
-              />
-            </SettingRow>
-            <SettingRow
-              label="Start minimized"
-              description={
-                closeToTray ? 'Open hidden in the tray.' : 'Requires closing to the tray.'
-              }
-              disabled={!closeToTray}
-            >
-              <SettingSwitch
-                checked={startMinimized}
-                onChange={setStartMinimized}
-                label="Start minimized"
-                disabled={!closeToTray}
-              />
-            </SettingRow>
-          </>
-        )}
-        <SettingRow label="Desktop notifications" description="Alert me when new mail arrives.">
-          <SettingSwitch
-            checked={desktopNotifications}
-            onChange={setDesktopNotifications}
-            label="Desktop notifications"
-          />
-        </SettingRow>
-      </div>
+      <SystemSubsection />
     </SettingsSection>
   );
 }

@@ -6,19 +6,7 @@ import { ICON_SIZE } from '@/components/shared/icon-size';
 const iconButtonClass =
   'inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-secondary hover:bg-surface-container-high hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 dark:text-dark-secondary dark:hover:bg-dark-surface-container-high dark:hover:text-dark-primary';
 
-export function ComposeFooter({
-  editor,
-  onLink,
-  onAttach,
-  onInsertImage,
-  ready,
-  status,
-  failed,
-  onRetry,
-  onSend,
-  sending,
-  blocked,
-}: {
+type ComposeFooterProps = {
   editor: Editor | null;
   onLink: () => void;
   onAttach: () => void;
@@ -30,64 +18,96 @@ export function ComposeFooter({
   onSend: () => void;
   sending: boolean;
   blocked: boolean;
-}) {
+};
+
+function ComposeFooterError({ status, onRetry }: { status: string; onRetry: () => void }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-label-md text-error dark:text-dark-error">
+      <AlertCircle aria-hidden="true" size={ICON_SIZE.lg} className="shrink-0" />
+      <span className="truncate">{status}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="shrink-0 cursor-pointer underline hover:no-underline"
+      >
+        Retry
+      </button>
+    </span>
+  );
+}
+
+function ComposeFooterActions({
+  status,
+  failed,
+  ready,
+  blocked,
+  sending,
+  onAttach,
+  onInsertImage,
+  onSend,
+}: Omit<ComposeFooterProps, 'editor' | 'onLink' | 'onRetry'>) {
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <span
+        className="w-compose-status-w shrink-0 truncate text-label-md text-secondary dark:text-dark-secondary"
+        aria-live="polite"
+      >
+        {failed ? '' : status}
+      </span>
+      <button
+        type="button"
+        aria-label="Attach files"
+        title="Attach files"
+        onClick={onAttach}
+        className={iconButtonClass}
+      >
+        <Paperclip aria-hidden="true" size={ICON_SIZE.lg} />
+      </button>
+      <button
+        type="button"
+        aria-label="Insert image"
+        title="Insert image"
+        onClick={onInsertImage}
+        className={iconButtonClass}
+      >
+        <Image aria-hidden="true" size={ICON_SIZE.lg} />
+      </button>
+      <button
+        type="button"
+        aria-label="Send"
+        title="Send"
+        disabled={!ready || blocked || sending}
+        data-recipient-ready={ready}
+        onClick={onSend}
+        className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-primary-container px-4 py-2 text-label-md text-on-primary-container hover:bg-primary hover:text-on-primary disabled:cursor-not-allowed disabled:opacity-40 dark:bg-dark-primary-container dark:text-dark-on-primary-container dark:hover:bg-dark-primary dark:hover:text-dark-on-primary"
+      >
+        Send
+        <Send aria-hidden="true" size={ICON_SIZE.lg} />
+      </button>
+    </div>
+  );
+}
+
+export function ComposeFooter(props: ComposeFooterProps) {
   return (
     <div className="flex shrink-0 flex-col gap-2 border-t border-outline-variant px-stack-gap-md pb-3.5 pt-2.5 dark:border-dark-outline-variant">
-      {failed && status && (
-        <span className="flex min-w-0 items-center gap-1.5 text-label-md text-error dark:text-dark-error">
-          <AlertCircle aria-hidden="true" size={ICON_SIZE.lg} className="shrink-0" />
-          <span className="truncate">{status}</span>
-          <button
-            type="button"
-            onClick={onRetry}
-            className="shrink-0 cursor-pointer underline hover:no-underline"
-          >
-            Retry
-          </button>
-        </span>
+      {props.failed && props.status && (
+        <ComposeFooterError status={props.status} onRetry={props.onRetry} />
       )}
       <div className="flex items-center justify-between gap-stack-gap-sm">
         <div className="flex shrink-0 items-center rounded-md bg-surface-container-low p-0.5 dark:bg-dark-surface-container-low">
-          <EditorToolbar editor={editor} onLink={onLink} />
+          <EditorToolbar editor={props.editor} onLink={props.onLink} />
         </div>
-        <div className="flex min-w-0 items-center gap-1">
-          <span
-            className="w-compose-status-w shrink-0 truncate text-label-md text-secondary dark:text-dark-secondary"
-            aria-live="polite"
-          >
-            {failed ? '' : status}
-          </span>
-          <button
-            type="button"
-            aria-label="Attach files"
-            title="Attach files"
-            onClick={onAttach}
-            className={iconButtonClass}
-          >
-            <Paperclip aria-hidden="true" size={ICON_SIZE.lg} />
-          </button>
-          <button
-            type="button"
-            aria-label="Insert image"
-            title="Insert image"
-            onClick={onInsertImage}
-            className={iconButtonClass}
-          >
-            <Image aria-hidden="true" size={ICON_SIZE.lg} />
-          </button>
-          <button
-            type="button"
-            aria-label="Send"
-            title="Send"
-            disabled={!ready || blocked || sending}
-            data-recipient-ready={ready}
-            onClick={onSend}
-            className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-primary-container px-4 py-2 text-label-md text-on-primary-container hover:bg-primary hover:text-on-primary disabled:cursor-not-allowed disabled:opacity-40 dark:bg-dark-primary-container dark:text-dark-on-primary-container dark:hover:bg-dark-primary dark:hover:text-dark-on-primary"
-          >
-            Send
-            <Send aria-hidden="true" size={ICON_SIZE.lg} />
-          </button>
-        </div>
+        <ComposeFooterActions
+          status={props.status}
+          failed={props.failed}
+          ready={props.ready}
+          blocked={props.blocked}
+          sending={props.sending}
+          onAttach={props.onAttach}
+          onInsertImage={props.onInsertImage}
+          onSend={props.onSend}
+        />
       </div>
     </div>
   );

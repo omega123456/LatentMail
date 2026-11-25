@@ -67,9 +67,16 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
     );
 }
 
-#[tokio::test]
-async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_click_intents() {
-    let directory = tempfile::tempdir().unwrap();
+fn sample_arrival(thread_id: &str) -> MailArrival {
+    MailArrival {
+        thread_id: thread_id.into(),
+        sender: "Alex <alex@example.com>".into(),
+        subject: "Hello".into(),
+        snippet: "A short preview".into(),
+    }
+}
+
+fn setup_notification_app(directory: &tempfile::TempDir) -> tauri::App<tauri::test::MockRuntime> {
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -77,37 +84,43 @@ async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_cli
         Storage::open(directory.path().join("mail.sqlite")).unwrap(),
     ));
     initialize(app.handle()).unwrap();
-    let arrival = MailArrival {
-        thread_id: "thread-1".into(),
-        sender: "Alex <alex@example.com>".into(),
-        subject: "Hello".into(),
-        snippet: "A short preview".into(),
-    };
+    app
+}
+
+fn emit_arrival(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    account_id: &str,
+    arrival: MailArrival,
+) {
+    app.emit(
+        latentmail_lib::events::MAIL_NEW,
+        latentmail_lib::sync::NewMailEvent {
+            account_id: account_id.into(),
+            thread_ids: vec![arrival.thread_id.clone()],
+            arrivals: vec![arrival],
+        },
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_click_intents() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = setup_notification_app(&directory);
     for index in 0..5 {
-        app.emit(
-            latentmail_lib::events::MAIL_NEW,
-            latentmail_lib::sync::NewMailEvent {
-                account_id: "account-1".into(),
-                thread_ids: vec![format!("thread-{index}")],
-                arrivals: vec![MailArrival {
-                    thread_id: format!("thread-{index}"),
-                    ..arrival.clone()
-                }],
-            },
-        )
-        .unwrap();
+        emit_arrival(
+            &app,
+            "account-1",
+            sample_arrival(&format!("thread-{index}")),
+        );
     }
     tokio::task::yield_now().await;
     tokio::task::yield_now().await;
-    assert_eq!(
-        app.state::<NotificationController>()
-            .pending_count("account-1")
-            .await,
-        5
-    );
+    let notifications = app.state::<NotificationController>();
+    assert_eq!(notifications.pending_count("account-1").await, 5);
     NotificationController::fire_batch_timer(app.handle(), "account-1".into()).await;
     tokio::task::yield_now().await;
-    let records = app.state::<NotificationController>().records().await;
+    let records = notifications.records().await;
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].account_id, "account-1");
     assert_eq!(records[0].arrivals.len(), 5);
@@ -115,28 +128,12 @@ async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_cli
         .write("desktopNotifications".into(), serde_json::json!(false))
         .await
         .unwrap();
-    app.emit(
-        latentmail_lib::events::MAIL_NEW,
-        latentmail_lib::sync::NewMailEvent {
-            account_id: "account-2".into(),
-            thread_ids: vec![arrival.thread_id.clone()],
-            arrivals: vec![arrival],
-        },
-    )
-    .unwrap();
+    emit_arrival(&app, "account-2", sample_arrival("thread-1"));
     tokio::task::yield_now().await;
     tokio::task::yield_now().await;
-    assert_eq!(
-        app.state::<NotificationController>()
-            .pending_count("account-2")
-            .await,
-        1
-    );
+    assert_eq!(notifications.pending_count("account-2").await, 1);
     NotificationController::fire_batch_timer(app.handle(), "account-2".into()).await;
-    assert_eq!(
-        app.state::<NotificationController>().records().await.len(),
-        1
-    );
+    assert_eq!(notifications.records().await.len(), 1);
     let intents = Arc::new(Mutex::new(Vec::new()));
     let received = Arc::clone(&intents);
     app.listen(latentmail_lib::events::OS_INTENT, move |event| {

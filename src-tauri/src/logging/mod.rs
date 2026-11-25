@@ -79,17 +79,20 @@ pub struct LogEntry {
 pub fn parse_entries(contents: &str) -> Vec<LogEntry> {
     let mut entries: Vec<LogEntry> = Vec::new();
     for line in contents.lines() {
-        match parse_entry_line(line) {
-            Some(entry) => entries.push(entry),
-            None => {
-                if let Some(last) = entries.last_mut() {
-                    last.message.push('\n');
-                    last.message.push_str(line);
-                }
-            }
-        }
+        append_log_line(&mut entries, line);
     }
     entries
+}
+
+fn append_log_line(entries: &mut Vec<LogEntry>, line: &str) {
+    if let Some(entry) = parse_entry_line(line) {
+        entries.push(entry);
+        return;
+    }
+    if let Some(last) = entries.last_mut() {
+        last.message.push('\n');
+        last.message.push_str(line);
+    }
 }
 
 fn parse_entry_line(line: &str) -> Option<LogEntry> {

@@ -5,7 +5,7 @@ use latentmail_lib::sync::triage::{
     DeleteMessagesRequest, DeleteThreadsRequest, MoveMessagesRequest, MoveThreadsRequest,
 };
 use latentmail_lib::sync::{LabelDelta, QueueRateConfig, SyncEngineDeps, ThreadMutation};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use latentmail_lib::{
     auth::{save_refresh_token, AuthService},
@@ -24,6 +24,45 @@ use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
+
+fn seed_inbox_message(connection: &rusqlite::Connection, message_id: &str, thread_id: &str) {
+    MessageRepository::write_full_state(
+        connection,
+        &Message {
+            account_id: "account".into(),
+            id: message_id.into(),
+            thread_id: thread_id.into(),
+            rfc_message_id: None,
+            sender: "A".into(),
+            recipients: "B".into(),
+            subject: "Subject".into(),
+            sent_at: 0,
+            snippet: String::new(),
+            html_body: None,
+            plain_body: None,
+            has_attachments: false,
+            is_unread: true,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: message_id,
+        },
+        LabelMembershipChange {
+            label_id: "INBOX",
+            present: true,
+        },
+    )
+    .unwrap();
+    ThreadRepository::recompute(connection, "account", thread_id).unwrap();
+}
 
 fn seeded_engine() -> (Arc<SyncEngine>, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
@@ -46,44 +85,8 @@ fn seeded_engine() -> (Arc<SyncEngine>, tempfile::TempDir) {
     for label in ["INBOX", "UNREAD", "STARRED", "TRASH", "SPAM", "Label_1"] {
         LabelRepository::ensure_placeholder(&connection, "account", label).unwrap();
     }
-    for (message_id, thread_id) in [("message-1", "thread-1"), ("message-2", "thread-2")] {
-        MessageRepository::write_full_state(
-            &connection,
-            &Message {
-                account_id: "account".into(),
-                id: message_id.into(),
-                thread_id: thread_id.into(),
-                rfc_message_id: None,
-                sender: "A".into(),
-                recipients: "B".into(),
-                subject: "Subject".into(),
-                sent_at: 0,
-                snippet: String::new(),
-                html_body: None,
-                plain_body: None,
-                has_attachments: false,
-                is_unread: true,
-                is_starred: false,
-                history_id: 1,
-                truncated_body: None,
-                html_presence: HtmlPresence::Absent,
-            },
-        )
-        .unwrap();
-        MessageRepository::set_label_membership(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: message_id,
-            },
-            LabelMembershipChange {
-                label_id: "INBOX",
-                present: true,
-            },
-        )
-        .unwrap();
-        ThreadRepository::recompute(&connection, "account", thread_id).unwrap();
-    }
+    seed_inbox_message(&connection, "message-1", "thread-1");
+    seed_inbox_message(&connection, "message-2", "thread-2");
     drop(connection);
     let registry = WorkRegistry::new();
     let queue = create_queue_engine_with_events(
@@ -107,93 +110,157 @@ fn seeded_engine() -> (Arc<SyncEngine>, tempfile::TempDir) {
 
 use crate::support::app;
 
-#[tokio::test(start_paused = true)]
-async fn triage_label_deltas_cover_thread_and_bulk_actions() {
-    let server = MockServer::start().await;
+struct LabelDeltaCase<'a> {
+    thread_id: &'a str,
+    add: &'a [&'a str],
+    remove: &'a [&'a str],
+}
+
+async fn mount_triage_batch_mocks(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/users/me/messages/batchModify"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .respond_with(|request: &wiremock::Request| {
             let id = request.url.path().rsplit('/').next().unwrap_or_default();
             ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": id, "threadId": id.replacen("message-", "thread-", 1), "historyId": "2",
-            "labelIds": ["INBOX"], "snippet": "", "internalDate": "0", "payload": { "headers": [] }
-        }))
+                "id": id, "threadId": id.replacen("message-", "thread-", 1), "historyId": "2",
+                "labelIds": ["INBOX"], "snippet": "", "internalDate": "0", "payload": { "headers": [] }
+            }))
         })
-        .mount(&server)
+        .mount(server)
         .await;
-    let (engine, _directory) = seeded_engine();
-    let client = GmailClient::with_base_url("token", server.uri());
-    for (thread, add, remove) in [
-        ("thread-1", vec!["TRASH"], vec![]),
-        ("thread-1", vec!["SPAM"], vec![]),
-        ("thread-1", vec![], vec!["SPAM"]),
-        ("thread-1", vec!["STARRED"], vec![]),
-        ("thread-1", vec![], vec!["UNREAD"]),
-        ("thread-1", vec!["Label_1"], vec![]),
-    ] {
-        engine
-            .mutate(ThreadMutation {
-                account_id: "account".to_owned(),
-                client: client.clone(),
-                thread_id: thread.into(),
-                labels: LabelDelta {
-                    additions: add.into_iter().map(str::to_owned).collect::<HashSet<_>>(),
-                    removals: remove
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect::<HashSet<_>>(),
-                },
-            })
-            .await
-            .unwrap();
-    }
-    let first = engine.mutate(ThreadMutation {
-        account_id: "account".to_owned(),
-        client: client.clone(),
-        thread_id: "thread-1".into(),
-        labels: LabelDelta {
-            additions: HashSet::from(["STARRED".into()]),
-            removals: HashSet::new(),
+}
+
+async fn mutate_delta(engine: &SyncEngine, client: &GmailClient, case: LabelDeltaCase<'_>) {
+    engine
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: client.clone(),
+            thread_id: case.thread_id.into(),
+            labels: LabelDelta {
+                additions: case.add.iter().map(|label| (*label).to_owned()).collect(),
+                removals: case
+                    .remove
+                    .iter()
+                    .map(|label| (*label).to_owned())
+                    .collect(),
+            },
+        })
+        .await
+        .unwrap();
+}
+
+fn sequential_label_delta_cases() -> Vec<LabelDeltaCase<'static>> {
+    vec![
+        LabelDeltaCase {
+            thread_id: "thread-1",
+            add: &["TRASH"],
+            remove: &[],
         },
-    });
-    let second = engine.mutate(ThreadMutation {
-        account_id: "account".to_owned(),
-        client: client,
-        thread_id: "thread-2".into(),
-        labels: LabelDelta {
-            additions: HashSet::from(["STARRED".into()]),
-            removals: HashSet::new(),
+        LabelDeltaCase {
+            thread_id: "thread-1",
+            add: &["SPAM"],
+            remove: &[],
         },
-    });
-    let _ = tokio::join!(first, second);
+        LabelDeltaCase {
+            thread_id: "thread-1",
+            add: &[],
+            remove: &["SPAM"],
+        },
+        LabelDeltaCase {
+            thread_id: "thread-1",
+            add: &["STARRED"],
+            remove: &[],
+        },
+        LabelDeltaCase {
+            thread_id: "thread-1",
+            add: &[],
+            remove: &["UNREAD"],
+        },
+        LabelDeltaCase {
+            thread_id: "thread-1",
+            add: &["Label_1"],
+            remove: &[],
+        },
+    ]
+}
+
+async fn batch_modify_request_bodies(server: &MockServer) -> Vec<serde_json::Value> {
     let requests = server.received_requests().await.unwrap();
-    let bodies = requests
+    requests
         .iter()
         .filter(|request| request.url.path() == "/users/me/messages/batchModify")
         .map(|request| request.body_json::<serde_json::Value>().unwrap())
-        .collect::<Vec<_>>();
-    assert!(bodies
-        .iter()
-        .any(|body| body["addLabelIds"] == serde_json::json!(["TRASH"])));
-    assert!(bodies
-        .iter()
-        .any(|body| body["addLabelIds"] == serde_json::json!(["SPAM"])));
-    assert!(bodies
-        .iter()
-        .any(|body| body["removeLabelIds"] == serde_json::json!(["SPAM"])));
-    assert!(bodies
-        .iter()
-        .any(|body| body["removeLabelIds"] == serde_json::json!(["UNREAD"])));
-    assert!(bodies
-        .iter()
-        .any(|body| body["addLabelIds"] == serde_json::json!(["Label_1"])));
+        .collect()
+}
+
+fn any_body_has(bodies: &[serde_json::Value], field: &str, label_ids: serde_json::Value) -> bool {
+    bodies.iter().any(|body| body[field] == label_ids)
+}
+
+fn assert_bodies_cover_every_delta(bodies: &[serde_json::Value]) {
+    assert!(any_body_has(
+        bodies,
+        "addLabelIds",
+        serde_json::json!(["TRASH"])
+    ));
+    assert!(any_body_has(
+        bodies,
+        "addLabelIds",
+        serde_json::json!(["SPAM"])
+    ));
+    assert!(any_body_has(
+        bodies,
+        "removeLabelIds",
+        serde_json::json!(["SPAM"])
+    ));
+    assert!(any_body_has(
+        bodies,
+        "removeLabelIds",
+        serde_json::json!(["UNREAD"])
+    ));
+    assert!(any_body_has(
+        bodies,
+        "addLabelIds",
+        serde_json::json!(["Label_1"])
+    ));
     assert!(bodies
         .iter()
         .any(|body| body["ids"].as_array().is_some_and(|ids| ids.len() == 2)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn triage_label_deltas_cover_thread_and_bulk_actions() {
+    let server = MockServer::start().await;
+    mount_triage_batch_mocks(&server).await;
+    let (engine, _directory) = seeded_engine();
+    let client = GmailClient::with_base_url("token", server.uri());
+    for case in sequential_label_delta_cases() {
+        mutate_delta(&engine, &client, case).await;
+    }
+    let first = mutate_delta(
+        &engine,
+        &client,
+        LabelDeltaCase {
+            thread_id: "thread-1",
+            add: &["STARRED"],
+            remove: &[],
+        },
+    );
+    let second = mutate_delta(
+        &engine,
+        &client,
+        LabelDeltaCase {
+            thread_id: "thread-2",
+            add: &["STARRED"],
+            remove: &[],
+        },
+    );
+    let _ = tokio::join!(first, second);
+    assert_bodies_cover_every_delta(&batch_modify_request_bodies(&server).await);
 }
 
 #[tokio::test]
@@ -261,19 +328,97 @@ async fn draft_deletion_errors_when_gmail_lists_no_draft_for_the_message() {
     assert!(error.contains("Gmail has no draft for message message-1"));
 }
 
+async fn start_oauth_mock_server(account_id: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
+            ),
+        )
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    save_refresh_token(account_id, "refresh").unwrap();
+    server
+}
+
+fn seed_draft_storage(
+    account_id: &str,
+    message_id: &str,
+    thread_id: &str,
+) -> (tempfile::TempDir, Storage) {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: account_id.into(),
+            email: "draft@example.com".into(),
+            display_name: "Draft".into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 0,
+            updated_at: 0,
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: account_id.into(),
+            id: message_id.into(),
+            thread_id: thread_id.into(),
+            rfc_message_id: None,
+            sender: "A".into(),
+            recipients: "B".into(),
+            subject: "Draft".into(),
+            sent_at: 0,
+            snippet: String::new(),
+            html_body: None,
+            plain_body: None,
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+    drop(connection);
+    (directory, storage)
+}
+
+fn build_draft_app(storage: Storage) -> tauri::App<tauri::test::MockRuntime> {
+    let registry = WorkRegistry::new();
+    let queue = latentmail_lib::sync::create_queue_engine(1_000, 1_000, Arc::clone(&registry));
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    });
+    let app = app();
+    app.manage(storage.clone());
+    app.manage(AuthService::new(storage));
+    app.manage(engine);
+    app
+}
+
 #[test]
 fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
-            ))
-            .mount(&server)
-            .await;
-
+        let server = start_oauth_mock_server("account-draft").await;
         Mock::given(method("GET"))
             .and(path("/users/me/drafts"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -287,82 +432,27 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
             .expect(1)
             .mount(&server)
             .await;
-        std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-        std::env::set_var(
-            "LATENTMAIL_GOOGLE_TOKEN_URL",
-            format!("{}/token", server.uri()),
-        );
-        std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
-        save_refresh_token("account-draft", "refresh").unwrap();
 
-        let directory = tempfile::tempdir().unwrap();
-        let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-        let connection = storage.connection().unwrap();
-        AccountRepository::upsert(
-            &connection,
-            &Account {
-                id: "account-draft".into(),
-                email: "draft@example.com".into(),
-                display_name: "Draft".into(),
-                avatar_url: None,
-                history_id: None,
-                needs_reauthentication: false,
-                created_at: 0,
-                updated_at: 0,
-            },
-        )
-        .unwrap();
-        LabelRepository::ensure_placeholder(&connection, "account-draft", "DRAFT").unwrap();
-        MessageRepository::write_full_state(
-            &connection,
-            &Message {
-                account_id: "account-draft".into(),
-                id: "message-draft".into(),
-                thread_id: "thread-draft".into(),
-                rfc_message_id: None,
-                sender: "A".into(),
-                recipients: "B".into(),
-                subject: "Draft".into(),
-                sent_at: 0,
-                snippet: String::new(),
-                html_body: None,
-                plain_body: None,
-                has_attachments: false,
-                is_unread: false,
-                is_starred: false,
-                history_id: 1,
-                truncated_body: None,
-                html_presence: HtmlPresence::Absent,
-            },
-        )
-        .unwrap();
-        MessageRepository::set_label_membership(
-            &connection,
-            MessageKey {
-                account_id: "account-draft",
-                message_id: "message-draft",
-            },
-            LabelMembershipChange {
-                label_id: "DRAFT",
-                present: true,
-            },
-        )
-        .unwrap();
-        ThreadRepository::recompute(&connection, "account-draft", "thread-draft").unwrap();
-        drop(connection);
-
-        let registry = WorkRegistry::new();
-        let queue = latentmail_lib::sync::create_queue_engine(1_000, 1_000, Arc::clone(&registry));
-        let engine = SyncEngine::new(SyncEngineDeps {
-            storage: storage.clone(),
-            queue: queue,
-            registry: registry,
-            events: noop_event_sink(),
-        });
-        let app = app();
-        app.manage(storage.clone());
-        app.manage(AuthService::new(storage));
-        app.manage(engine);
+        let (_directory, storage) =
+            seed_draft_storage("account-draft", "message-draft", "thread-draft");
+        {
+            let connection = storage.connection().unwrap();
+            LabelRepository::ensure_placeholder(&connection, "account-draft", "DRAFT").unwrap();
+            MessageRepository::set_label_membership(
+                &connection,
+                MessageKey {
+                    account_id: "account-draft",
+                    message_id: "message-draft",
+                },
+                LabelMembershipChange {
+                    label_id: "DRAFT",
+                    present: true,
+                },
+            )
+            .unwrap();
+            ThreadRepository::recompute(&connection, "account-draft", "thread-draft").unwrap();
+        }
+        let app = build_draft_app(storage);
         mutate_threads(
             AppServices::new(app.handle()),
             CommandPayload(MutateThreadsRequest {
@@ -385,71 +475,18 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
 fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
-            ))
-            .mount(&server)
-            .await;
-
+        let server = start_oauth_mock_server("account-cached-draft").await;
         Mock::given(method("DELETE"))
             .and(path("/users/me/drafts/cached-draft-id"))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
             .mount(&server)
             .await;
-        std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-        std::env::set_var(
-            "LATENTMAIL_GOOGLE_TOKEN_URL",
-            format!("{}/token", server.uri()),
-        );
-        std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
-        save_refresh_token("account-cached-draft", "refresh").unwrap();
 
-        let directory = tempfile::tempdir().unwrap();
-        let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-        let connection = storage.connection().unwrap();
-        AccountRepository::upsert(
-            &connection,
-            &Account {
-                id: "account-cached-draft".into(),
-                email: "draft@example.com".into(),
-                display_name: "Draft".into(),
-                avatar_url: None,
-                history_id: None,
-                needs_reauthentication: false,
-                created_at: 0,
-                updated_at: 0,
-            },
-        )
-        .unwrap();
-        MessageRepository::write_full_state(
-            &connection,
-            &Message {
-                account_id: "account-cached-draft".into(),
-                id: "message-cached".into(),
-                thread_id: "thread-cached".into(),
-                rfc_message_id: None,
-                sender: "A".into(),
-                recipients: "B".into(),
-                subject: "Draft".into(),
-                sent_at: 0,
-                snippet: String::new(),
-                html_body: None,
-                plain_body: None,
-                has_attachments: false,
-                is_unread: false,
-                is_starred: false,
-                history_id: 1,
-                truncated_body: None,
-                html_presence: HtmlPresence::Absent,
-            },
-        )
-        .unwrap();
+        let (_directory, storage) =
+            seed_draft_storage("account-cached-draft", "message-cached", "thread-cached");
         MessageRepository::set_draft_id(
-            &connection,
+            &storage.connection().unwrap(),
             MessageKey {
                 account_id: "account-cached-draft",
                 message_id: "message-cached",
@@ -457,20 +494,7 @@ fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
             "cached-draft-id",
         )
         .unwrap();
-        drop(connection);
-
-        let registry = WorkRegistry::new();
-        let queue = latentmail_lib::sync::create_queue_engine(1_000, 1_000, Arc::clone(&registry));
-        let engine = SyncEngine::new(SyncEngineDeps {
-            storage: storage.clone(),
-            queue: queue,
-            registry: registry,
-            events: noop_event_sink(),
-        });
-        let app = app();
-        app.manage(storage.clone());
-        app.manage(AuthService::new(storage));
-        app.manage(engine);
+        let app = build_draft_app(storage);
         delete_draft(
             AppServices::new(app.handle()),
             CommandPayload(AccountMessageRequest {

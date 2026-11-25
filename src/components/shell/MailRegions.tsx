@@ -61,18 +61,7 @@ export function ComposeLayer({ open }: { open: boolean }) {
   );
 }
 
-export function MailWorkspaceBody({
-  layout,
-  hasReader,
-  assistantDocked,
-  assistantOpen,
-  list,
-  reader,
-  dockedAssistant,
-  onResizeList,
-  onResizeAssistant,
-  onResizeReader,
-}: {
+type MailWorkspaceBodyProps = {
   layout: string;
   hasReader: boolean;
   assistantDocked: boolean;
@@ -83,53 +72,77 @@ export function MailWorkspaceBody({
   onResizeList: (offset: number) => void;
   onResizeAssistant: (offset: number) => void;
   onResizeReader: (offset: number) => void;
-}) {
-  if (layout === 'three-column') {
-    const showDockedAssistant = assistantDocked && assistantOpen;
-    return (
-      <main
-        className="grid min-h-0 flex-1"
-        style={{
-          gridTemplateColumns: showDockedAssistant
-            ? 'var(--list-w) auto 1fr auto var(--assistant-w)'
-            : 'var(--list-w) auto 1fr',
-        }}
-      >
-        {list}
+};
+
+function ThreeColumnWorkspace({
+  assistantDocked,
+  assistantOpen,
+  list,
+  reader,
+  dockedAssistant,
+  onResizeList,
+  onResizeAssistant,
+}: Omit<MailWorkspaceBodyProps, 'layout' | 'hasReader' | 'onResizeReader'>) {
+  const showDockedAssistant = assistantDocked && assistantOpen;
+  return (
+    <main
+      className="grid min-h-0 flex-1"
+      style={{
+        gridTemplateColumns: showDockedAssistant
+          ? 'var(--list-w) auto 1fr auto var(--assistant-w)'
+          : 'var(--list-w) auto 1fr',
+      }}
+    >
+      {list}
+      <ResizeHandle
+        ariaLabel="Resize conversation list"
+        orientation="vertical"
+        onResize={onResizeList}
+      />
+      {reader}
+      {showDockedAssistant && (
         <ResizeHandle
-          ariaLabel="Resize conversation list"
+          ariaLabel="Resize AI assistant"
           orientation="vertical"
-          onResize={onResizeList}
+          onResize={onResizeAssistant}
         />
-        {reader}
-        {showDockedAssistant && (
-          <ResizeHandle
-            ariaLabel="Resize AI assistant"
-            orientation="vertical"
-            onResize={onResizeAssistant}
-          />
-        )}
-        {assistantDocked && dockedAssistant}
-      </main>
+      )}
+      {assistantDocked && dockedAssistant}
+    </main>
+  );
+}
+
+export function MailWorkspaceBody(props: MailWorkspaceBodyProps) {
+  if (props.layout === 'three-column') {
+    return (
+      <ThreeColumnWorkspace
+        assistantDocked={props.assistantDocked}
+        assistantOpen={props.assistantOpen}
+        list={props.list}
+        reader={props.reader}
+        dockedAssistant={props.dockedAssistant}
+        onResizeList={props.onResizeList}
+        onResizeAssistant={props.onResizeAssistant}
+      />
     );
   }
-  if (layout === 'bottom-preview' && hasReader) {
+  if (props.layout === 'bottom-preview' && props.hasReader) {
     return (
       <main
         className="grid min-h-0 flex-1"
         style={{ gridTemplateRows: '1fr auto var(--reader-h)' }}
       >
-        {list}
+        {props.list}
         <ResizeHandle
           ariaLabel="Resize reader"
           orientation="horizontal"
-          onResize={onResizeReader}
+          onResize={props.onResizeReader}
         />
-        {reader}
+        {props.reader}
       </main>
     );
   }
-  return <main className="flex min-h-0 flex-1 flex-col">{list}</main>;
+  return <main className="flex min-h-0 flex-1 flex-col">{props.list}</main>;
 }
 
 export type SidebarLabelHandlers = {
@@ -147,22 +160,7 @@ export type SidebarSearchSummary = {
   onClearAndFocus: () => void;
 };
 
-export function MailSidebarRegion({
-  sidebarCollapsed,
-  accounts,
-  activeAccountId,
-  activeMailboxId,
-  mailboxes,
-  labels,
-  showUnreadCounts,
-  search,
-  labelHandlers,
-  onSelectAccount,
-  onSelectMailbox,
-  onToggleCollapse,
-  onOpenSettings,
-  onCompose,
-}: {
+type MailSidebarRegionProps = {
   sidebarCollapsed: boolean;
   accounts: Account[];
   activeAccountId: string | null;
@@ -177,22 +175,77 @@ export function MailSidebarRegion({
   onToggleCollapse: (collapsed: boolean) => void;
   onOpenSettings: () => void;
   onCompose: () => void;
-}) {
-  if (sidebarCollapsed) {
+};
+
+function ExpandedSidebarScrollBody(props: Omit<MailSidebarRegionProps, 'sidebarCollapsed'>) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+      <button
+        type="button"
+        title="Compose"
+        onClick={props.onCompose}
+        className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
+      >
+        <Pencil aria-hidden="true" size={ICON_SIZE.base} />
+        Compose
+      </button>
+      {props.search.active && (
+        <SearchResultsRow
+          query={props.search.submittedQuery}
+          total={props.search.total}
+          pending={props.search.loading}
+          onClose={props.search.onClearAndFocus}
+        />
+      )}
+      <FolderList
+        activeMailboxId={props.activeMailboxId ?? 'INBOX'}
+        mailboxes={props.mailboxes}
+        showUnreadCounts={props.showUnreadCounts}
+        onSelect={props.onSelectMailbox}
+      />
+      <LabelList
+        activeMailboxId={props.activeMailboxId}
+        labels={props.labels}
+        showUnreadCounts={props.showUnreadCounts}
+        onSelect={props.onSelectMailbox}
+        onCreateLabel={props.labelHandlers.onCreateLabel}
+        onRenameLabel={props.labelHandlers.onRenameLabel}
+        onRecolorLabel={props.labelHandlers.onRecolorLabel}
+        onDeleteLabel={props.labelHandlers.onDeleteLabel}
+      />
+      <button
+        type="button"
+        aria-label="Collapse sidebar"
+        onClick={() => props.onToggleCollapse(true)}
+        className={`mt-auto ${navItem}`}
+      >
+        <PanelLeftClose aria-hidden="true" size={ICON_SIZE.lg} />
+        Collapse
+      </button>
+      <button type="button" onClick={props.onOpenSettings} className={navItem}>
+        <Settings aria-hidden="true" size={ICON_SIZE.lg} />
+        Settings
+      </button>
+    </div>
+  );
+}
+
+export function MailSidebarRegion(props: MailSidebarRegionProps) {
+  if (props.sidebarCollapsed) {
     return (
       <CollapsedRail
-        accounts={accounts}
-        activeAccountId={activeAccountId}
-        activeMailboxId={activeMailboxId ?? 'INBOX'}
-        mailboxes={mailboxes}
-        labels={labels}
-        onSelectAccount={onSelectAccount}
-        onSelectMailbox={onSelectMailbox}
-        onExpand={() => onToggleCollapse(false)}
-        onSettings={onOpenSettings}
-        onCompose={onCompose}
-        searchActive={search.active}
-        searchQuery={search.submittedQuery}
+        accounts={props.accounts}
+        activeAccountId={props.activeAccountId}
+        activeMailboxId={props.activeMailboxId ?? 'INBOX'}
+        mailboxes={props.mailboxes}
+        labels={props.labels}
+        onSelectAccount={props.onSelectAccount}
+        onSelectMailbox={props.onSelectMailbox}
+        onExpand={() => props.onToggleCollapse(false)}
+        onSettings={props.onOpenSettings}
+        onCompose={props.onCompose}
+        searchActive={props.search.active}
+        searchQuery={props.search.submittedQuery}
       />
     );
   }
@@ -205,60 +258,13 @@ export function MailSidebarRegion({
         <img src={brandMark} alt="" aria-hidden="true" className="h-4 w-auto" />
         <span className="text-body-md font-semibold">LatentMail</span>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-        <button
-          type="button"
-          title="Compose"
-          onClick={onCompose}
-          className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
-        >
-          <Pencil aria-hidden="true" size={ICON_SIZE.base} />
-          Compose
-        </button>
-        {search.active && (
-          <SearchResultsRow
-            query={search.submittedQuery}
-            total={search.total}
-            pending={search.loading}
-            onClose={search.onClearAndFocus}
-          />
-        )}
-        <FolderList
-          activeMailboxId={activeMailboxId ?? 'INBOX'}
-          mailboxes={mailboxes}
-          showUnreadCounts={showUnreadCounts}
-          onSelect={onSelectMailbox}
-        />
-        <LabelList
-          activeMailboxId={activeMailboxId}
-          labels={labels}
-          showUnreadCounts={showUnreadCounts}
-          onSelect={onSelectMailbox}
-          onCreateLabel={labelHandlers.onCreateLabel}
-          onRenameLabel={labelHandlers.onRenameLabel}
-          onRecolorLabel={labelHandlers.onRecolorLabel}
-          onDeleteLabel={labelHandlers.onDeleteLabel}
-        />
-        <button
-          type="button"
-          aria-label="Collapse sidebar"
-          onClick={() => onToggleCollapse(true)}
-          className={`mt-auto ${navItem}`}
-        >
-          <PanelLeftClose aria-hidden="true" size={ICON_SIZE.lg} />
-          Collapse
-        </button>
-        <button type="button" onClick={onOpenSettings} className={navItem}>
-          <Settings aria-hidden="true" size={ICON_SIZE.lg} />
-          Settings
-        </button>
-      </div>
+      <ExpandedSidebarScrollBody {...props} />
       <div className="mt-4 border-t border-outline-variant pt-4 dark:border-dark-outline-variant">
         <AccountSwitcher
-          accounts={accounts}
-          activeAccountId={activeAccountId}
+          accounts={props.accounts}
+          activeAccountId={props.activeAccountId}
           collapsed={false}
-          onSelect={onSelectAccount}
+          onSelect={props.onSelectAccount}
         />
       </div>
     </aside>

@@ -218,6 +218,42 @@ function readStatusMetrics(status: AiIndexStatus | undefined) {
   };
 }
 
+function IndexStatusSummary({
+  metrics,
+  confirming,
+  onStartConfirm,
+}: {
+  metrics: ReturnType<typeof readStatusMetrics>;
+  confirming: boolean;
+  onStartConfirm: () => void;
+}) {
+  if (TRACKED.includes(metrics.current)) {
+    return (
+      <IndexProgress
+        state={metrics.current}
+        indexed={metrics.indexedMessages}
+        total={metrics.totalEligibleMessages}
+        percentage={metrics.percentage}
+      />
+    );
+  }
+  const rebuildAction =
+    metrics.current === 'needsRebuild' && !confirming ? (
+      <button type="button" onClick={onStartConfirm} className={`shrink-0 ${settingsQuietButton}`}>
+        Rebuild
+      </button>
+    ) : undefined;
+  return (
+    <AiStatusCard
+      tone={metrics.current === 'complete' ? 'success' : 'neutral'}
+      pip={pips[metrics.current]}
+      title={labels[metrics.current]}
+      detail={statusDetail(metrics)}
+      action={rebuildAction}
+    />
+  );
+}
+
 export function AiIndexSection({
   accountId,
   status,
@@ -231,17 +267,6 @@ export function AiIndexSection({
   const cancel = useCancelAiIndexMutation();
   const rebuild = useRebuildAiIndexMutation();
   const metrics = readStatusMetrics(status);
-
-  const rebuildAction =
-    metrics.current === 'needsRebuild' && !confirming ? (
-      <button
-        type="button"
-        onClick={() => setConfirming(true)}
-        className={`shrink-0 ${settingsQuietButton}`}
-      >
-        Rebuild
-      </button>
-    ) : undefined;
 
   return (
     <SettingsSubsection
@@ -269,22 +294,11 @@ export function AiIndexSection({
         </div>
       )}
       <div aria-live="polite" className="flex flex-col gap-2.5">
-        {TRACKED.includes(metrics.current) ? (
-          <IndexProgress
-            state={metrics.current}
-            indexed={metrics.indexedMessages}
-            total={metrics.totalEligibleMessages}
-            percentage={metrics.percentage}
-          />
-        ) : (
-          <AiStatusCard
-            tone={metrics.current === 'complete' ? 'success' : 'neutral'}
-            pip={pips[metrics.current]}
-            title={labels[metrics.current]}
-            detail={statusDetail(metrics)}
-            action={rebuildAction}
-          />
-        )}
+        <IndexStatusSummary
+          metrics={metrics}
+          confirming={confirming}
+          onStartConfirm={() => setConfirming(true)}
+        />
       </div>
       <RebuildSection
         current={metrics.current}

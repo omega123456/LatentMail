@@ -99,6 +99,44 @@ async fn save_account_rejects_a_target_whose_email_does_not_match() {
     assert!(result.is_err());
 }
 
+fn capture_account_state(
+    handle: &tauri::AppHandle<tauri::test::MockRuntime>,
+) -> Arc<Mutex<Option<String>>> {
+    use tauri::Listener;
+    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let received_for_listener = Arc::clone(&received);
+    handle.listen(latentmail_lib::events::ACCOUNT_STATE, move |event| {
+        *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
+    });
+    received
+}
+
+async fn mount_token_response(server: &MockServer, body: serde_json::Value, expected_hits: u64) {
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(expected_hits)
+        .mount(server)
+        .await;
+}
+
+async fn refresh_twice(
+    service: &AuthService,
+    handle: &tauri::AppHandle<tauri::test::MockRuntime>,
+    account_id: &str,
+) -> (String, String) {
+    save_refresh_token(account_id, "stored-refresh-token").unwrap();
+    let first = service
+        .refresh_access_token(handle, account_id)
+        .await
+        .unwrap();
+    let second = service
+        .refresh_access_token(handle, account_id)
+        .await
+        .unwrap();
+    (first, second)
+}
+
 #[tokio::test]
 async fn mark_needs_reauthentication_emits_account_state_and_rejects_unknown_accounts() {
     let (service, _directory) = service_with_storage();
@@ -114,14 +152,7 @@ async fn mark_needs_reauthentication_emits_account_state_and_rejects_unknown_acc
 
     let application = app();
     let handle = application.handle().clone();
-    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let received_for_listener = Arc::clone(&received);
-    {
-        use tauri::Listener;
-        handle.listen(latentmail_lib::events::ACCOUNT_STATE, move |event| {
-            *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
-        });
-    }
+    let received = capture_account_state(&handle);
 
     service
         .mark_needs_reauthentication(&handle, account_id.clone())
@@ -183,25 +214,17 @@ async fn refresh_access_token_caches_within_expiry_and_skips_tokens_shorter_than
     let application = app();
     let handle = application.handle().clone();
 
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_token_response(
+        &server,
+        serde_json::json!({
             "access_token": "cached-access-token",
             "token_type": "Bearer",
             "expires_in": 3600,
-        })))
-        .expect(2)
-        .mount(&server)
-        .await;
-    save_refresh_token("cached-account", "stored-refresh-token").unwrap();
-    let first = service
-        .refresh_access_token(&handle, "cached-account")
-        .await
-        .unwrap();
-    let second = service
-        .refresh_access_token(&handle, "cached-account")
-        .await
-        .unwrap();
+        }),
+        2,
+    )
+    .await;
+    let (first, second) = refresh_twice(&service, &handle, "cached-account").await;
     assert_eq!(first, "cached-access-token");
     assert_eq!(second, first);
     service.invalidate_access_token("cached-account");
@@ -212,47 +235,31 @@ async fn refresh_access_token_caches_within_expiry_and_skips_tokens_shorter_than
     assert_eq!(third, "cached-access-token");
 
     server.reset().await;
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_token_response(
+        &server,
+        serde_json::json!({
             "access_token": "default-lifetime-token",
             "token_type": "Bearer",
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    save_refresh_token("default-expiry-account", "stored-refresh-token").unwrap();
-    let first = service
-        .refresh_access_token(&handle, "default-expiry-account")
-        .await
-        .unwrap();
-    let second = service
-        .refresh_access_token(&handle, "default-expiry-account")
-        .await
-        .unwrap();
+        }),
+        1,
+    )
+    .await;
+    let (first, second) = refresh_twice(&service, &handle, "default-expiry-account").await;
     assert_eq!(first, "default-lifetime-token");
     assert_eq!(second, first);
 
     server.reset().await;
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_token_response(
+        &server,
+        serde_json::json!({
             "access_token": "short-lived-token",
             "token_type": "Bearer",
             "expires_in": 120,
-        })))
-        .expect(2)
-        .mount(&server)
-        .await;
-    save_refresh_token("short-lived-account", "stored-refresh-token").unwrap();
-    let first = service
-        .refresh_access_token(&handle, "short-lived-account")
-        .await
-        .unwrap();
-    let second = service
-        .refresh_access_token(&handle, "short-lived-account")
-        .await
-        .unwrap();
+        }),
+        2,
+    )
+    .await;
+    let (first, second) = refresh_twice(&service, &handle, "short-lived-account").await;
     assert_eq!(first, "short-lived-token");
     assert_eq!(second, first);
 }

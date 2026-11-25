@@ -229,6 +229,28 @@ struct Harness {
     app: tauri::App<tauri::test::MockRuntime>,
 }
 
+fn seed_export_storage(directory: &std::path::Path) -> Storage {
+    let storage = Storage::open(directory.join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "account".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(&connection, &message()).unwrap();
+    drop(connection);
+    storage
+}
+
 async fn harness(raw_response: ResponseTemplate) -> Harness {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -254,24 +276,7 @@ async fn harness(raw_response: ResponseTemplate) -> Harness {
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
 
     let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let connection = storage.connection().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "me@example.com".into(),
-            display_name: String::new(),
-            avatar_url: None,
-            history_id: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
-    MessageRepository::write_full_state(&connection, &message()).unwrap();
-    drop(connection);
+    let storage = seed_export_storage(directory.path());
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());

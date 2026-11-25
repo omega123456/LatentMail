@@ -28,45 +28,58 @@ impl Drop for PendingDrop {
     }
 }
 
+#[derive(Clone)]
+struct FanOutProbe {
+    started: Arc<AtomicUsize>,
+    dropped: Arc<AtomicUsize>,
+    barrier: Arc<Barrier>,
+}
+
+impl FanOutProbe {
+    async fn run(self, id: usize) -> Result<usize, &'static str> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.barrier.wait().await;
+        if id == 0 {
+            return Err("terminal");
+        }
+        let _pending = PendingDrop(self.dropped);
+        std::future::pending::<Result<usize, &'static str>>().await
+    }
+}
+
+async fn wait_for_drops(dropped: &AtomicUsize, target: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while dropped.load(Ordering::SeqCst) < target {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn bounded_fan_out_caps_work_and_cancels_after_a_terminal_error() {
-    let started = Arc::new(AtomicUsize::new(0));
-    let dropped = Arc::new(AtomicUsize::new(0));
-    let barrier = Arc::new(Barrier::new(MESSAGE_FETCH_CONCURRENCY));
+    let probe = FanOutProbe {
+        started: Arc::new(AtomicUsize::new(0)),
+        dropped: Arc::new(AtomicUsize::new(0)),
+        barrier: Arc::new(Barrier::new(MESSAGE_FETCH_CONCURRENCY)),
+    };
+    let worker_probe = probe.clone();
     let result = tokio::time::timeout(
         Duration::from_secs(1),
-        fan_out((0..16).collect(), MESSAGE_FETCH_CONCURRENCY, {
-            let started = Arc::clone(&started);
-            let dropped = Arc::clone(&dropped);
-            let barrier = Arc::clone(&barrier);
-            move |id| {
-                let started = Arc::clone(&started);
-                let dropped = Arc::clone(&dropped);
-                let barrier = Arc::clone(&barrier);
-                async move {
-                    started.fetch_add(1, Ordering::SeqCst);
-                    barrier.wait().await;
-                    if id == 0 {
-                        return Err("terminal");
-                    }
-                    let _pending = PendingDrop(dropped);
-                    std::future::pending::<Result<usize, &str>>().await
-                }
-            }
+        fan_out((0..16).collect(), MESSAGE_FETCH_CONCURRENCY, move |id| {
+            worker_probe.clone().run(id)
         }),
     )
     .await
     .unwrap();
 
     assert!(matches!(result, Err(FanOutError::Work("terminal"))));
-    assert_eq!(started.load(Ordering::SeqCst), MESSAGE_FETCH_CONCURRENCY);
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while dropped.load(Ordering::SeqCst) < MESSAGE_FETCH_CONCURRENCY - 1 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    assert_eq!(
+        probe.started.load(Ordering::SeqCst),
+        MESSAGE_FETCH_CONCURRENCY
+    );
+    wait_for_drops(&probe.dropped, MESSAGE_FETCH_CONCURRENCY - 1).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -114,21 +127,38 @@ async fn gmail_clients_share_one_connection_pool() {
     server.abort();
 }
 
+async fn accept_connections(listener: TcpListener, count: Arc<AtomicUsize>) {
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        count.fetch_add(1, Ordering::SeqCst);
+        tokio::spawn(reply_to_profiles(stream));
+    }
+}
+
 async fn connection_counter() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let connections = Arc::new(AtomicUsize::new(0));
-    let count = Arc::clone(&connections);
-    let server = tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                return;
-            };
-            count.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(reply_to_profiles(stream));
-        }
-    });
+    let server = tokio::spawn(accept_connections(listener, Arc::clone(&connections)));
     (format!("http://{address}"), connections, server)
+}
+
+async fn handle_one_read(stream: &mut TcpStream, bytes: &mut Vec<u8>, response: &[u8]) -> bool {
+    let mut buffer = [0; 1024];
+    let Ok(read) = stream.read(&mut buffer).await else {
+        return false;
+    };
+    if read == 0 {
+        return false;
+    }
+    bytes.extend_from_slice(&buffer[..read]);
+    if !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+        return true;
+    }
+    bytes.clear();
+    stream.write_all(response).await.is_ok()
 }
 
 async fn reply_to_profiles(mut stream: TcpStream) {
@@ -140,20 +170,9 @@ async fn reply_to_profiles(mut stream: TcpStream) {
         body
     );
     let mut bytes = Vec::new();
-    let mut buffer = [0; 1024];
     for _ in 0..2 {
-        let Ok(read) = stream.read(&mut buffer).await else {
+        if !handle_one_read(&mut stream, &mut bytes, response.as_bytes()).await {
             return;
-        };
-        if read == 0 {
-            return;
-        }
-        bytes.extend_from_slice(&buffer[..read]);
-        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-            if stream.write_all(response.as_bytes()).await.is_err() {
-                return;
-            }
-            bytes.clear();
         }
     }
 }

@@ -4,6 +4,7 @@ import pdfWorkerSrc from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import type { PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { useZoom } from '@/lib/attachments/useZoom';
 import { centringOffset, paddedLength, PREVIEW_PADDING, type Size } from '@/lib/attachments/zoom';
+import { followSelection } from './pdf-selection';
 import { ZoomToolbar } from './ZoomToolbar';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
@@ -14,6 +15,7 @@ export const MAX_CANVAS_PIXELS = 33_554_432;
 const PRELOAD_VIEWPORTS_AHEAD = 2;
 
 type PageLayout = { tops: number[]; content: Size };
+type LoadedPdf = { pages: PDFPageProxy[]; sizes: Size[] };
 
 type DocumentLoad = {
   bytes: ArrayBuffer;
@@ -132,71 +134,6 @@ function PdfCanvas({
   return <canvas ref={canvasRef} className="absolute inset-0 size-full" data-testid="pdf-canvas" />;
 }
 
-function selectionExtendsStart(range: Range, before: Range | null): boolean {
-  if (before === null) return false;
-  return (
-    range.compareBoundaryPoints(Range.END_TO_END, before) === 0 ||
-    range.compareBoundaryPoints(Range.START_TO_END, before) === 0
-  );
-}
-
-function positionSelectionEnd({
-  container,
-  end,
-  range,
-  before,
-}: {
-  container: HTMLElement;
-  end: HTMLDivElement;
-  range: Range;
-  before: Range | null;
-}) {
-  end.toggleAttribute('data-selecting', true);
-  const extendsStart = selectionExtendsStart(range, before);
-  const boundary = extendsStart ? range.startContainer : range.endContainer;
-  const anchor = boundary.nodeType === Node.TEXT_NODE ? boundary.parentElement : boundary;
-  if (anchor?.parentElement !== container) return;
-  container.insertBefore(end, extendsStart ? anchor : anchor.nextSibling);
-}
-
-function followSelection(container: HTMLElement): () => void {
-  const end = document.createElement('div');
-  end.className = 'absolute inset-x-0 top-full bottom-0 -z-1 select-none data-selecting:top-0';
-  container.append(end);
-  const controller = new AbortController();
-  const { signal } = controller;
-  let pointerDown = false;
-  let previous: Range | null = null;
-  const reset = () => {
-    container.append(end);
-    end.toggleAttribute('data-selecting', false);
-  };
-  const release = () => {
-    pointerDown = false;
-    reset();
-  };
-  container.addEventListener('mousedown', () => end.toggleAttribute('data-selecting', true), {
-    signal,
-  });
-  document.addEventListener('pointerdown', () => (pointerDown = true), { signal });
-  document.addEventListener('pointerup', release, { signal });
-  window.addEventListener('blur', release, { signal });
-  document.addEventListener('keyup', () => !pointerDown && reset(), { signal });
-  document.addEventListener(
-    'selectionchange',
-    () => {
-      const selection = document.getSelection();
-      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-      const before = previous;
-      previous = range?.cloneRange() ?? null;
-      if (!range?.intersectsNode(container)) return reset();
-      positionSelectionEnd({ container, end, range, before });
-    },
-    { signal },
-  );
-  return () => controller.abort();
-}
-
 function PdfTextLayer({ page, zoom }: { page: PDFPageProxy; zoom: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -233,8 +170,6 @@ function PdfTextLayer({ page, zoom }: { page: PDFPageProxy; zoom: number }) {
     />
   );
 }
-
-type LoadedPdf = { pages: PDFPageProxy[]; sizes: Size[] };
 
 function computePageVisibility({
   pdf,
@@ -307,13 +242,10 @@ function PdfPageStack({
   );
 }
 
-export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+function usePdfDocument(bytes: ArrayBuffer) {
   const loadingRef = useRef<DocumentLoad | null>(null);
   const [pdf, setPdf] = useState<LoadedPdf | null>(null);
   const [error, setError] = useState(false);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [renderZoom, setRenderZoom] = useState<number | null>(null);
   const showError = useCallback(() => setError(true), []);
 
   useEffect(() => {
@@ -343,6 +275,35 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
     };
   }, [bytes]);
 
+  return { pdf: pdf, error: error, showError: showError };
+}
+
+function useSettledZoom(ready: boolean, zoom: number) {
+  const [renderZoom, setRenderZoom] = useState<number | null>(null);
+  useEffect(() => {
+    if (!ready || renderZoom === zoom) return;
+    const timer = setTimeout(() => setRenderZoom(zoom), renderZoom === null ? 0 : RENDER_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [ready, zoom, renderZoom]);
+  return renderZoom;
+}
+
+function PdfErrorMessage() {
+  return (
+    <div className="grid h-full place-items-center p-4 text-center text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
+      <p>
+        Preview not available for this file type.
+        <br />
+        Use Download to save the file.
+      </p>
+    </div>
+  );
+}
+
+export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const { pdf, error, showError } = usePdfDocument(bytes);
+  const [scrollTop, setScrollTop] = useState(0);
   const layout = useMemo(() => (pdf ? layoutPages(pdf.sizes) : null), [pdf]);
   const { zoom, mode, viewport, ready, zoomIn, zoomOut, selectPreset } = useZoom({
     scrollRef: scrollRef,
@@ -350,23 +311,9 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
     defaultMode: 'fit-width',
     fitCap: PDF_FIT_CAP,
   });
+  const renderZoom = useSettledZoom(ready, zoom);
 
-  useEffect(() => {
-    if (!ready || renderZoom === zoom) return;
-    const timer = setTimeout(() => setRenderZoom(zoom), renderZoom === null ? 0 : RENDER_SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [ready, zoom, renderZoom]);
-
-  if (error)
-    return (
-      <div className="grid h-full place-items-center p-4 text-center text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
-        <p>
-          Preview not available for this file type.
-          <br />
-          Use Download to save the file.
-        </p>
-      </div>
-    );
+  if (error) return <PdfErrorMessage />;
 
   const visibility = computePageVisibility({ pdf, layout, viewport, zoom, scrollTop });
   const currentPage = (visibility?.current ?? 0) + 1;

@@ -371,6 +371,42 @@ fn citations_are_deduplicated_by_first_appearance_renumbered_and_pruned() {
     assert_eq!(pruned, "Out of range.");
 }
 
+fn begin_chat(service: &AiService, question: &str) -> ChatRun {
+    service
+        .chat()
+        .begin(ChatBeginRequest {
+            account_id: "account",
+            session_id: "session",
+            question: question,
+        })
+        .unwrap()
+}
+
+fn read_single_log(logs: &tempfile::TempDir) -> String {
+    let entry = std::fs::read_dir(logs.path())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    std::fs::read_to_string(entry.path()).unwrap()
+}
+
+async fn clear_ai_config_column(service: &AiService, column: &str) {
+    let column_name = column.to_owned();
+    service
+        .storage()
+        .run(move |connection| {
+            connection.execute(
+                &format!(
+                    "UPDATE account_ai_config SET {column_name}=NULL WHERE account_id='account'"
+                ),
+                [],
+            )
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn a_full_exchange_streams_deltas_then_sources_and_logs_the_provider_exchange_at_debug() {
     let server = MockServer::start().await;
@@ -383,14 +419,7 @@ async fn a_full_exchange_streams_deltas_then_sources_and_logs_the_provider_excha
         tracing_subscriber::filter::LevelFilter::DEBUG,
     )
     .unwrap();
-    let request = service
-        .chat()
-        .begin(ChatBeginRequest {
-            account_id: "account",
-            session_id: "session",
-            question: "deadline?",
-        })
-        .unwrap();
+    let request = begin_chat(&service, "deadline?");
     let request_id = request.request_id.clone();
     {
         let _default = tracing::dispatcher::set_default(&log_parts.dispatch);
@@ -419,28 +448,13 @@ async fn a_full_exchange_streams_deltas_then_sources_and_logs_the_provider_excha
     let done = recorder.of_kind("done");
     assert_eq!(done[0]["cancelled"], false);
     assert_eq!(done[0]["error"], serde_json::Value::Null);
-    let following = service
-        .chat()
-        .begin(ChatBeginRequest {
-            account_id: "account",
-            session_id: "session",
-            question: "next",
-        })
-        .unwrap();
+    let following = begin_chat(&service, "next");
     assert_eq!(following.history.len(), 2);
     assert_eq!(following.history[0].content, "deadline?");
     assert_eq!(following.history[1].content, CITED_ANSWER);
     service.chat().retire(&following.request_id).unwrap();
 
-    let log = std::fs::read_to_string(
-        std::fs::read_dir(logs.path())
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path(),
-    )
-    .unwrap();
+    let log = read_single_log(&logs);
     assert!(log.contains("request POST"));
     assert!(log.contains("/v1/chat/completions"));
     assert!(log.contains("deadline?"));
@@ -590,27 +604,8 @@ async fn a_configuration_gap_discovered_after_the_request_started_ends_it_with_t
         ("chat_model", "Select a chat model first"),
         ("base_url", "Save an API root first"),
     ] {
-        let column = clear.to_owned();
-        service
-            .storage()
-            .run(move |connection| {
-                connection.execute(
-                    &format!(
-                        "UPDATE account_ai_config SET {column}=NULL WHERE account_id='account'"
-                    ),
-                    [],
-                )
-            })
-            .await
-            .unwrap();
-        let request = service
-            .chat()
-            .begin(ChatBeginRequest {
-                account_id: "account",
-                session_id: "session",
-                question: "deadline?",
-            })
-            .unwrap();
+        clear_ai_config_column(&service, clear).await;
+        let request = begin_chat(&service, "deadline?");
         latentmail_lib::ai::chat::run(recorder.app.handle(), &service, request).await;
         assert_eq!(
             recorder.of_kind("done").last().unwrap()["error"],

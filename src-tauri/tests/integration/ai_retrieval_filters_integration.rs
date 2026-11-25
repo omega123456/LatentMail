@@ -78,6 +78,27 @@ fn seq(connection: &rusqlite::Connection, id: &str) -> i64 {
         .unwrap()
 }
 
+fn assign_label(connection: &rusqlite::Connection, message_id: &str, label_id: &str) {
+    MessageRepository::set_label_membership(
+        connection,
+        MessageKey {
+            account_id: "account",
+            message_id: message_id,
+        },
+        LabelMembershipChange {
+            label_id: label_id,
+            present: true,
+        },
+    )
+    .unwrap();
+}
+
+fn filter_with(configure: impl FnOnce(&mut RetrievalFilters)) -> RetrievalFilters {
+    let mut filters = RetrievalFilters::default();
+    configure(&mut filters);
+    filters
+}
+
 fn fixture() -> (rusqlite::Connection, i64, i64) {
     let connection = Storage::in_memory().unwrap();
     AccountRepository::upsert(&connection, &account()).unwrap();
@@ -105,30 +126,8 @@ fn fixture() -> (rusqlite::Connection, i64, i64) {
 
     let early_seq = seq(&connection, "early");
     let late_seq = seq(&connection, "late");
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "early",
-        },
-        LabelMembershipChange {
-            label_id: "INBOX",
-            present: true,
-        },
-    )
-    .unwrap();
-    MessageRepository::set_label_membership(
-        &connection,
-        MessageKey {
-            account_id: "account",
-            message_id: "late",
-        },
-        LabelMembershipChange {
-            label_id: "SENT",
-            present: true,
-        },
-    )
-    .unwrap();
+    assign_label(&connection, "early", "INBOX");
+    assign_label(&connection, "late", "SENT");
     EmbeddingRepository::write(
         &connection,
         "account",
@@ -180,126 +179,53 @@ fn an_empty_filter_set_keeps_every_candidate() {
 #[test]
 fn every_structured_filter_narrows_the_candidate_set() {
     let (connection, early, late) = fixture();
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                date_from: Some(day_start("2026-03-03")),
-                ..RetrievalFilters::default()
-            }
+    let cases = [
+        (
+            filter_with(|filters| filters.date_from = Some(day_start("2026-03-03"))),
+            late,
         ),
-        vec![late]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                date_to: Some(day_start("2026-03-03")),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.date_to = Some(day_start("2026-03-03"))),
+            early,
         ),
-        vec![early]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                sender: Some("alice@example.com".into()),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.sender = Some("alice@example.com".into())),
+            early,
         ),
-        vec![early]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                recipient: Some("team@example.com".into()),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.recipient = Some("team@example.com".into())),
+            late,
         ),
-        vec![late]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                folder: Some("Inbox".into()),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.folder = Some("Inbox".into())),
+            early,
         ),
-        vec![early]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                folder: Some("Sent".into()),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.folder = Some("Sent".into())),
+            late,
         ),
-        vec![late]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                has_attachment: Some(true),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.has_attachment = Some(true)),
+            early,
         ),
-        vec![early]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                has_attachment: Some(false),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.has_attachment = Some(false)),
+            late,
         ),
-        vec![late]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                is_read: Some(true),
-                ..RetrievalFilters::default()
-            }
+        (filter_with(|filters| filters.is_read = Some(true)), early),
+        (filter_with(|filters| filters.is_read = Some(false)), late),
+        (
+            filter_with(|filters| filters.is_starred = Some(true)),
+            early,
         ),
-        vec![early]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                is_read: Some(false),
-                ..RetrievalFilters::default()
-            }
+        (
+            filter_with(|filters| filters.is_starred = Some(false)),
+            late,
         ),
-        vec![late]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                is_starred: Some(true),
-                ..RetrievalFilters::default()
-            }
-        ),
-        vec![early]
-    );
-    assert_eq!(
-        matched(
-            &connection,
-            &RetrievalFilters {
-                is_starred: Some(false),
-                ..RetrievalFilters::default()
-            }
-        ),
-        vec![late]
-    );
+    ];
+    for (filters, expected) in cases {
+        assert_eq!(matched(&connection, &filters), vec![expected]);
+    }
 }
 
 #[test]

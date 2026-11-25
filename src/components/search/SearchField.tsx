@@ -132,61 +132,135 @@ function SearchFieldTrailingControls({
   );
 }
 
+function useDismissOnEscape(open: boolean, onDismiss: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onDismiss();
+      }
+    };
+    window.addEventListener('keydown', handler, { capture: true });
+    return () => window.removeEventListener('keydown', handler, { capture: true });
+  }, [open, onDismiss]);
+}
+
+function useSearchFieldState(labels: MailLabel[]) {
+  const search = useSearchStore();
+  const showError = useToastStore((toaster) => toaster.showError);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [dismissed, setDismissed] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const isMac = isMacPlatform();
+  const searchBinding = primaryBinding(useCommandBindings().focusSearch, isMac);
+  const hasDraft = search.draft.length > 0;
+  const shortcutLabel =
+    !hasDraft && searchBinding !== null ? formatBindingLabel(searchBinding, isMac) : null;
+  const suggestions = useMemo(() => suggestionsFor(search.draft, labels), [search.draft, labels]);
+  const open = focused && !dismissed && !search.panelOpen && suggestions.length > 0;
+  useDismissOnEscape(open, () => setDismissed(true));
+
+  const handleSubmit = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return;
+    if (trimmed.length > MAX_SEARCH_QUERY_LENGTH) {
+      showError(`Search is limited to ${MAX_SEARCH_QUERY_LENGTH} characters.`);
+      return;
+    }
+    search.submit(trimmed);
+  };
+
+  const applyAndKeepFocus = (item: SearchSuggestion) => {
+    search.setDraft(applySuggestion(search.draft, item.insert));
+    setActiveIndex(-1);
+  };
+
+  return {
+    search: search,
+    activeIndex: activeIndex,
+    setActiveIndex: setActiveIndex,
+    setDismissed: setDismissed,
+    setFocused: setFocused,
+    hasDraft: hasDraft,
+    shortcutLabel: shortcutLabel,
+    suggestions: suggestions,
+    open: open,
+    handleSubmit: handleSubmit,
+    applyAndKeepFocus: applyAndKeepFocus,
+  };
+}
+
+type SearchComboboxProps = {
+  inputRef: React.ForwardedRef<HTMLInputElement>;
+  listboxId: string;
+  state: ReturnType<typeof useSearchFieldState>;
+};
+
+function SearchCombobox({ inputRef, listboxId, state }: SearchComboboxProps) {
+  const activeOptionId =
+    state.open && state.activeIndex >= 0 ? `${listboxId}-option-${state.activeIndex}` : undefined;
+  return (
+    <Popover.Root open={state.open}>
+      <Popover.Anchor asChild>
+        <TextInput
+          ref={inputRef}
+          value={state.search.draft}
+          placeholder="Search mail…"
+          aria-label="Search mail"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={state.open}
+          aria-controls={listboxId}
+          aria-activedescendant={activeOptionId}
+          onFocus={() => state.setFocused(true)}
+          onBlur={() => state.setFocused(false)}
+          onChange={(event) => {
+            state.search.setDraft(event.target.value);
+            state.setActiveIndex(-1);
+            state.setDismissed(false);
+          }}
+          onKeyDown={(event) =>
+            handleSearchInputKeyDown(event, {
+              open: state.open,
+              suggestions: state.suggestions,
+              activeIndex: state.activeIndex,
+              draft: state.search.draft,
+              setActiveIndex: state.setActiveIndex,
+              applyAndKeepFocus: state.applyAndKeepFocus,
+              handleSubmit: state.handleSubmit,
+              clear: state.search.clear,
+            })
+          }
+          variant="bare"
+          className="min-w-0 flex-1 text-body-sm text-on-surface placeholder:text-on-surface-variant dark:text-dark-on-surface dark:placeholder:text-dark-on-surface-variant"
+        />
+      </Popover.Anchor>
+      <Popover.Portal>
+        <Popover.Content
+          align="start"
+          sideOffset={POPOVER_SIDE_OFFSET_PX}
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          style={{ width: 'var(--radix-popover-trigger-width)' }}
+          className="z-50 max-h-64 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest p-1 shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
+        >
+          <KeywordSuggestions
+            id={listboxId}
+            items={state.suggestions}
+            activeIndex={state.activeIndex}
+            onSelect={state.applyAndKeepFocus}
+          />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>(
   function SearchField({ labels }, ref) {
-    const draft = useSearchStore((search) => search.draft);
-    const setDraft = useSearchStore((search) => search.setDraft);
-    const scope = useSearchStore((search) => search.scope);
-    const setScope = useSearchStore((search) => search.setScope);
-    const panelOpen = useSearchStore((search) => search.panelOpen);
-    const openPanel = useSearchStore((search) => search.openPanel);
-    const closePanel = useSearchStore((search) => search.closePanel);
-    const submit = useSearchStore((search) => search.submit);
-    const clear = useSearchStore((search) => search.clear);
-    const showError = useToastStore((toaster) => toaster.showError);
-
-    const [activeIndex, setActiveIndex] = useState(-1);
-    const [dismissed, setDismissed] = useState(false);
-    const [focused, setFocused] = useState(false);
     const listboxId = useId();
-    const isMac = isMacPlatform();
-    const searchBinding = primaryBinding(useCommandBindings().focusSearch, isMac);
-    const hasDraft = draft.length > 0;
-    const shortcutLabel =
-      !hasDraft && searchBinding !== null ? formatBindingLabel(searchBinding, isMac) : null;
-
-    const suggestions = useMemo(() => suggestionsFor(draft, labels), [draft, labels]);
-    const open = focused && !dismissed && !panelOpen && suggestions.length > 0;
-
-    useEffect(() => {
-      if (!open) return;
-      const handler = (event: globalThis.KeyboardEvent) => {
-        if (event.key === 'Escape') {
-          event.stopPropagation();
-          setDismissed(true);
-        }
-      };
-      window.addEventListener('keydown', handler, { capture: true });
-      return () => window.removeEventListener('keydown', handler, { capture: true });
-    }, [open]);
-
-    const handleSubmit = (text: string) => {
-      const trimmed = text.trim();
-      if (trimmed.length === 0) return;
-      if (trimmed.length > MAX_SEARCH_QUERY_LENGTH) {
-        showError(`Search is limited to ${MAX_SEARCH_QUERY_LENGTH} characters.`);
-        return;
-      }
-      submit(trimmed);
-    };
-
-    const applyAndKeepFocus = (item: SearchSuggestion) => {
-      setDraft(applySuggestion(draft, item.insert));
-      setActiveIndex(-1);
-    };
-
-    const activeOptionId =
-      open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
+    const state = useSearchFieldState(labels);
+    const { search } = state;
 
     return (
       <div role="search" aria-label="Mail search" className="relative w-full max-w-2xl">
@@ -196,77 +270,26 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
             size={ICON_SIZE.lg}
             className="shrink-0 text-on-surface-variant dark:text-dark-on-surface-variant"
           />
-          <Popover.Root open={open}>
-            <Popover.Anchor asChild>
-              <TextInput
-                ref={ref}
-                value={draft}
-                placeholder="Search mail…"
-                aria-label="Search mail"
-                role="combobox"
-                aria-autocomplete="list"
-                aria-expanded={open}
-                aria-controls={listboxId}
-                aria-activedescendant={activeOptionId}
-                onFocus={() => setFocused(true)}
-                onBlur={() => setFocused(false)}
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  setActiveIndex(-1);
-                  setDismissed(false);
-                }}
-                onKeyDown={(event) =>
-                  handleSearchInputKeyDown(event, {
-                    open: open,
-                    suggestions: suggestions,
-                    activeIndex: activeIndex,
-                    draft: draft,
-                    setActiveIndex: setActiveIndex,
-                    applyAndKeepFocus: applyAndKeepFocus,
-                    handleSubmit: handleSubmit,
-                    clear: clear,
-                  })
-                }
-                variant="bare"
-                className="min-w-0 flex-1 text-body-sm text-on-surface placeholder:text-on-surface-variant dark:text-dark-on-surface dark:placeholder:text-dark-on-surface-variant"
-              />
-            </Popover.Anchor>
-            <Popover.Portal>
-              <Popover.Content
-                align="start"
-                sideOffset={POPOVER_SIDE_OFFSET_PX}
-                onOpenAutoFocus={(event) => event.preventDefault()}
-                style={{ width: 'var(--radix-popover-trigger-width)' }}
-                className="z-50 max-h-64 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest p-1 shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
-              >
-                <KeywordSuggestions
-                  id={listboxId}
-                  items={suggestions}
-                  activeIndex={activeIndex}
-                  onSelect={applyAndKeepFocus}
-                />
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
+          <SearchCombobox inputRef={ref} listboxId={listboxId} state={state} />
           <SearchFieldTrailingControls
-            hasDraft={hasDraft}
-            shortcutLabel={shortcutLabel}
-            panelOpen={panelOpen}
-            onClear={() => clear()}
-            onTogglePanel={() => (panelOpen ? closePanel() : openPanel())}
+            hasDraft={state.hasDraft}
+            shortcutLabel={state.shortcutLabel}
+            panelOpen={search.panelOpen}
+            onClear={() => search.clear()}
+            onTogglePanel={() => (search.panelOpen ? search.closePanel() : search.openPanel())}
           />
         </div>
-        {panelOpen && (
+        {search.panelOpen && (
           <AdvancedSearchPanel
-            initialQuery={draft}
+            initialQuery={search.draft}
             labels={labels}
-            scope={scope}
-            onScopeChange={setScope}
+            scope={search.scope}
+            onScopeChange={search.setScope}
             onSubmit={(query) => {
-              setDraft(query);
-              handleSubmit(query);
+              search.setDraft(query);
+              state.handleSubmit(query);
             }}
-            onClose={closePanel}
+            onClose={search.closePanel}
           />
         )}
       </div>

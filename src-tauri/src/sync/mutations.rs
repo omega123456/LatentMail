@@ -238,88 +238,127 @@ impl SyncEngine {
     }
 
     async fn submit(&self, submission: MutationSubmission) -> Result<MutationOutcome, SyncError> {
-        let kind = super::derive_operation_kind(&submission.labels);
+        let kind = super::queue_bridge::derive_operation_kind(&submission.labels);
         let (reply_sender, reply_receiver) = oneshot::channel();
-        let is_leader = {
-            let mut pending = self.pending.lock().await;
-            let account_map = pending.entry(submission.account_id.clone()).or_default();
-            let is_leader = account_map.is_empty();
-            let key = match &submission.target {
-                MutationTarget::Thread(id) => format!("thread:{id}"),
-                MutationTarget::Message(id) => format!("message:{id}"),
-            };
-            let entry = account_map.entry(key).or_default();
-            entry.target = Some(submission.target);
-            entry.delta.merge(&submission.labels);
-            entry.requests.push(PendingRequest {
-                labels: submission.labels,
-                reply: reply_sender,
-            });
-            is_leader
-        };
+        let account_id = submission.account_id;
+        let client = submission.client;
+        let is_leader = self
+            .record_pending_submission(
+                &account_id,
+                PendingSubmission {
+                    target: submission.target,
+                    labels: submission.labels,
+                    reply: reply_sender,
+                },
+            )
+            .await;
         if !is_leader {
             return reply_receiver.await.map_err(|_| SyncError::QueueStopped)?;
         }
 
         tokio::time::sleep(COALESCE_WINDOW).await;
-        let drained: HashMap<String, EntityAccumulator> = {
-            let mut pending = self.pending.lock().await;
-            pending.remove(&submission.account_id).unwrap_or_default()
-        };
-
-        let mut surviving: HashMap<String, EntityAccumulator> = HashMap::new();
-        for (entity_thread_id, mut accumulator) in drained {
-            let delta = accumulator.delta.clone();
-            let mut requests = Vec::with_capacity(accumulator.requests.len());
-            for request in accumulator.requests.drain(..) {
-                if request.survives(&delta) {
-                    requests.push(request);
-                    continue;
-                }
-                let _ = request.reply.send(Ok(MutationOutcome::Superseded));
-            }
-            if !requests.is_empty() {
-                accumulator.requests = requests;
-                surviving.insert(entity_thread_id, accumulator);
-            }
-        }
+        let drained = self.drain_pending_account(&account_id).await;
+        let surviving = retain_surviving_mutations(drained);
         if surviving.is_empty() {
             return reply_receiver.await.map_err(|_| SyncError::QueueStopped)?;
         }
 
-        let storage = self.storage.clone();
-        let account_owned = submission.account_id.clone();
+        self.enqueue_flush_batch(
+            FlushBatch {
+                storage: self.storage.clone(),
+                client: client,
+                account_id: account_id,
+                surviving: surviving,
+            },
+            kind,
+        )
+        .await?;
+        reply_receiver.await.map_err(|_| SyncError::QueueStopped)?
+    }
+
+    async fn record_pending_submission(&self, account_id: &str, entry: PendingSubmission) -> bool {
+        let mut pending = self.pending.lock().await;
+        let account_map = pending.entry(account_id.to_owned()).or_default();
+        let is_leader = account_map.is_empty();
+        let key = match &entry.target {
+            MutationTarget::Thread(id) => format!("thread:{id}"),
+            MutationTarget::Message(id) => format!("message:{id}"),
+        };
+        let accumulator = account_map.entry(key).or_default();
+        accumulator.target = Some(entry.target);
+        accumulator.delta.merge(&entry.labels);
+        accumulator.requests.push(PendingRequest {
+            labels: entry.labels,
+            reply: entry.reply,
+        });
+        is_leader
+    }
+
+    async fn drain_pending_account(&self, account_id: &str) -> HashMap<String, EntityAccumulator> {
+        let mut pending = self.pending.lock().await;
+        pending.remove(account_id).unwrap_or_default()
+    }
+
+    async fn enqueue_flush_batch(
+        &self,
+        batch: FlushBatch,
+        kind: OperationKind,
+    ) -> Result<(), SyncError> {
+        let account_id = batch.account_id.clone();
         let operation_id = format!(
-            "mutation:{}:{}",
-            submission.account_id,
+            "mutation:{account_id}:{}",
             self.operation_counter.fetch_add(1, Ordering::Relaxed)
         );
         self.registry.register(
             operation_id.clone(),
-            Box::new(move || {
-                Box::pin(execute_flush(FlushBatch {
-                    storage: storage,
-                    client: submission.client,
-                    account_id: account_owned,
-                    surviving: surviving,
-                }))
-            }),
+            Box::new(move || Box::pin(execute_flush(batch))),
         );
         self.queue
             .enqueue(QueueOperation::new(
                 operation_id,
-                submission.account_id.clone(),
+                account_id.clone(),
                 QueueRoute {
                     lane: Lane::Interactive,
                     kind: kind,
-                    entity_key: format!("mutation-batch:{}", submission.account_id),
+                    entity_key: format!("mutation-batch:{account_id}"),
                     description: mutation_description(kind),
                 },
             ))
             .await
-            .map_err(|_| SyncError::QueueStopped)?;
-        reply_receiver.await.map_err(|_| SyncError::QueueStopped)?
+            .map_err(|_| SyncError::QueueStopped)
     }
+}
+
+struct PendingSubmission {
+    target: MutationTarget,
+    labels: LabelDelta,
+    reply: oneshot::Sender<Result<MutationOutcome, SyncError>>,
+}
+
+fn retain_surviving_mutations(
+    drained: HashMap<String, EntityAccumulator>,
+) -> HashMap<String, EntityAccumulator> {
+    let mut surviving = HashMap::new();
+    for (entity_key, mut accumulator) in drained {
+        if filter_surviving_requests(&mut accumulator) {
+            surviving.insert(entity_key, accumulator);
+        }
+    }
+    surviving
+}
+
+fn filter_surviving_requests(accumulator: &mut EntityAccumulator) -> bool {
+    let delta = accumulator.delta.clone();
+    let mut requests = Vec::with_capacity(accumulator.requests.len());
+    for request in accumulator.requests.drain(..) {
+        if request.survives(&delta) {
+            requests.push(request);
+            continue;
+        }
+        let _ = request.reply.send(Ok(MutationOutcome::Superseded));
+    }
+    accumulator.requests = requests;
+    !accumulator.requests.is_empty()
 }
 
 struct FlushBatch {
@@ -327,6 +366,22 @@ struct FlushBatch {
     client: GmailClient,
     account_id: String,
     surviving: HashMap<String, EntityAccumulator>,
+}
+
+struct FlushGroupContext<'a> {
+    storage: &'a Storage,
+    client: &'a GmailClient,
+    account_id: &'a str,
+}
+
+struct LoadedTargets {
+    threads: HashMap<String, Vec<Message>>,
+    messages: HashMap<String, Message>,
+}
+
+struct ResolvedBatch {
+    entities: Vec<ResolvedEntity>,
+    any_failed: bool,
 }
 
 struct ResolvedEntity {
@@ -341,6 +396,179 @@ struct EntityWriteTarget<'a> {
     messages: &'a [Message],
 }
 
+fn fail_requests(requests: Vec<PendingRequest>, message: &str) {
+    for request in requests {
+        let _ = request
+            .reply
+            .send(Err(SyncError::Failed(message.to_owned())));
+    }
+}
+
+fn resolve_loaded_entities(
+    entities: Vec<(MutationTarget, EntityAccumulator)>,
+    mut loaded: LoadedTargets,
+) -> ResolvedBatch {
+    let mut resolved = Vec::new();
+    let mut any_failed = false;
+    for (target, entity) in entities {
+        let resolved_data = match target {
+            MutationTarget::Thread(thread_id) => loaded
+                .threads
+                .remove(&thread_id)
+                .map(|messages| (thread_id, messages)),
+            MutationTarget::Message(message_id) => loaded
+                .messages
+                .remove(&message_id)
+                .map(|message| (message.thread_id.clone(), vec![message])),
+        };
+        if let Some((thread_id, messages)) = resolved_data {
+            resolved.push(ResolvedEntity {
+                thread_id: thread_id,
+                messages: messages,
+                entity: entity,
+            });
+            continue;
+        }
+        any_failed = true;
+        fail_requests(entity.requests, "mutation target is no longer available");
+    }
+    ResolvedBatch {
+        entities: resolved,
+        any_failed: any_failed,
+    }
+}
+
+async fn load_and_resolve_entities(
+    storage: &Storage,
+    account_id: &str,
+    entities: Vec<(MutationTarget, EntityAccumulator)>,
+) -> ResolvedBatch {
+    let thread_ids: Vec<String> = entities
+        .iter()
+        .filter_map(|(target, _)| match target {
+            MutationTarget::Thread(id) => Some(id.clone()),
+            MutationTarget::Message(_) => None,
+        })
+        .collect();
+    let message_ids: Vec<String> = entities
+        .iter()
+        .filter_map(|(target, _)| match target {
+            MutationTarget::Message(id) => Some(id.clone()),
+            MutationTarget::Thread(_) => None,
+        })
+        .collect();
+    let account = account_id.to_owned();
+    let loaded = storage
+        .run(move |connection| {
+            Ok(LoadedTargets {
+                threads: MessageRepository::list_by_threads(connection, &account, &thread_ids)?,
+                messages: MessageRepository::get_many(connection, &account, &message_ids)?,
+            })
+        })
+        .await;
+    match loaded {
+        Ok(targets) => resolve_loaded_entities(entities, targets),
+        Err(error) => {
+            let message = SyncError::from(error).to_string();
+            for (_, entity) in entities {
+                fail_requests(entity.requests, &message);
+            }
+            ResolvedBatch {
+                entities: Vec::new(),
+                any_failed: true,
+            }
+        }
+    }
+}
+
+fn group_entities_by_signature(resolved: Vec<ResolvedEntity>) -> Vec<Vec<ResolvedEntity>> {
+    let mut groups: HashMap<MutationSignature, Vec<ResolvedEntity>> = HashMap::new();
+    for item in resolved {
+        let signature = item.entity.delta.signature();
+        groups.entry(signature).or_default().push(item);
+    }
+    groups.into_values().collect()
+}
+
+async fn batch_modify_all(
+    client: &GmailClient,
+    ids: &[String],
+    modification: LabelModification<'_>,
+) -> Result<(), SyncError> {
+    for chunk in ids.chunks(BATCH_MODIFY_CHUNK_SIZE) {
+        client
+            .batch_modify(
+                chunk,
+                LabelModification {
+                    add_label_ids: modification.add_label_ids,
+                    remove_label_ids: modification.remove_label_ids,
+                },
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn reply_to_entity_requests(requests: Vec<PendingRequest>, result: &Result<(), SyncError>) {
+    for request in requests {
+        let outcome = match result {
+            Ok(()) => Ok(MutationOutcome::Applied),
+            Err(error) => Err(SyncError::Failed(error.to_string())),
+        };
+        let _ = request.reply.send(outcome);
+    }
+}
+
+async fn flush_signature_group(
+    context: &FlushGroupContext<'_>,
+    entities: Vec<ResolvedEntity>,
+) -> bool {
+    let add: Vec<String> = entities[0].entity.delta.additions.iter().cloned().collect();
+    let remove: Vec<String> = entities[0].entity.delta.removals.iter().cloned().collect();
+    let ids: Vec<String> = entities
+        .iter()
+        .flat_map(|item| item.messages.iter().map(|message| message.id.clone()))
+        .collect();
+    let modification = LabelModification {
+        add_label_ids: &add,
+        remove_label_ids: &remove,
+    };
+    if let Err(error) = batch_modify_all(context.client, &ids, modification).await {
+        let message = error.to_string();
+        for item in entities {
+            fail_requests(item.entity.requests, &message);
+        }
+        return true;
+    }
+
+    let mut write_tasks = tokio::task::JoinSet::new();
+    for item in entities {
+        let storage = context.storage.clone();
+        let client = context.client.clone();
+        let account = context.account_id.to_owned();
+        write_tasks.spawn(async move {
+            let result = write_entity(
+                &storage,
+                &client,
+                EntityWriteTarget {
+                    account_id: &account,
+                    thread_id: &item.thread_id,
+                    messages: &item.messages,
+                },
+            )
+            .await;
+            (result, item.entity)
+        });
+    }
+    let mut any_failed = false;
+    while let Some(outcome) = write_tasks.join_next().await {
+        let (result, entity) = outcome.expect("write task panicked");
+        any_failed |= result.is_err();
+        reply_to_entity_requests(entity.requests, &result);
+    }
+    any_failed
+}
+
 async fn execute_flush(batch: FlushBatch) -> Result<(), QueueError> {
     let FlushBatch {
         storage,
@@ -348,7 +576,6 @@ async fn execute_flush(batch: FlushBatch) -> Result<(), QueueError> {
         account_id,
         surviving,
     } = batch;
-    let mut any_failed = false;
     let entities: Vec<(MutationTarget, EntityAccumulator)> = surviving
         .into_values()
         .map(|entity| {
@@ -361,140 +588,16 @@ async fn execute_flush(batch: FlushBatch) -> Result<(), QueueError> {
             )
         })
         .collect();
-    let thread_ids = entities
-        .iter()
-        .filter_map(|(target, _)| match target {
-            MutationTarget::Thread(id) => Some(id.clone()),
-            MutationTarget::Message(_) => None,
-        })
-        .collect::<Vec<_>>();
-    let message_ids = entities
-        .iter()
-        .filter_map(|(target, _)| match target {
-            MutationTarget::Message(id) => Some(id.clone()),
-            MutationTarget::Thread(_) => None,
-        })
-        .collect::<Vec<_>>();
-    let account = account_id.clone();
-    let loaded = storage
-        .run(move |connection| {
-            Ok((
-                MessageRepository::list_by_threads(connection, &account, &thread_ids)?,
-                MessageRepository::get_many(connection, &account, &message_ids)?,
-            ))
-        })
-        .await;
-    let mut resolved: Vec<ResolvedEntity> = Vec::new();
-    match loaded {
-        Ok((mut threads, mut messages)) => {
-            for (target, entity) in entities {
-                let resolved_data = match target {
-                    MutationTarget::Thread(thread_id) => threads
-                        .remove(&thread_id)
-                        .map(|messages| (thread_id, messages)),
-                    MutationTarget::Message(message_id) => messages
-                        .remove(&message_id)
-                        .map(|message| (message.thread_id.clone(), vec![message])),
-                };
-                if let Some((thread_id, messages)) = resolved_data {
-                    resolved.push(ResolvedEntity {
-                        thread_id: thread_id,
-                        messages: messages,
-                        entity: entity,
-                    });
-                    continue;
-                }
-                any_failed = true;
-                for request in entity.requests {
-                    let _ = request.reply.send(Err(SyncError::Failed(
-                        "mutation target is no longer available".into(),
-                    )));
-                }
-            }
-        }
-        Err(error) => {
-            any_failed = true;
-            let message = SyncError::from(error).to_string();
-            for (_, entity) in entities {
-                for request in entity.requests {
-                    let _ = request.reply.send(Err(SyncError::Failed(message.clone())));
-                }
-            }
-        }
+    let resolved = load_and_resolve_entities(&storage, &account_id, entities).await;
+    let mut any_failed = resolved.any_failed;
+    let group_context = FlushGroupContext {
+        storage: &storage,
+        client: &client,
+        account_id: &account_id,
+    };
+    for group in group_entities_by_signature(resolved.entities) {
+        any_failed |= flush_signature_group(&group_context, group).await;
     }
-
-    let mut groups: HashMap<MutationSignature, Vec<ResolvedEntity>> = HashMap::new();
-    for item in resolved {
-        let signature = item.entity.delta.signature();
-        groups.entry(signature).or_default().push(item);
-    }
-
-    for entities in groups.into_values() {
-        let add: Vec<String> = entities[0].entity.delta.additions.iter().cloned().collect();
-        let remove: Vec<String> = entities[0].entity.delta.removals.iter().cloned().collect();
-        let ids: Vec<String> = entities
-            .iter()
-            .flat_map(|item| item.messages.iter().map(|message| message.id.clone()))
-            .collect();
-
-        let mut failure = None;
-        for chunk in ids.chunks(BATCH_MODIFY_CHUNK_SIZE) {
-            if let Err(error) = client
-                .batch_modify(
-                    chunk,
-                    LabelModification {
-                        add_label_ids: &add,
-                        remove_label_ids: &remove,
-                    },
-                )
-                .await
-            {
-                failure = Some(SyncError::from(error).to_string());
-                break;
-            }
-        }
-        if let Some(message) = failure {
-            any_failed = true;
-            for item in entities {
-                for request in item.entity.requests {
-                    let _ = request.reply.send(Err(SyncError::Failed(message.clone())));
-                }
-            }
-            continue;
-        }
-
-        let mut write_tasks = tokio::task::JoinSet::new();
-        for item in entities {
-            let storage = storage.clone();
-            let client = client.clone();
-            let account = account_id.clone();
-            write_tasks.spawn(async move {
-                let result = write_entity(
-                    &storage,
-                    &client,
-                    EntityWriteTarget {
-                        account_id: &account,
-                        thread_id: &item.thread_id,
-                        messages: &item.messages,
-                    },
-                )
-                .await;
-                (result, item.entity)
-            });
-        }
-        while let Some(outcome) = write_tasks.join_next().await {
-            let (result, entity) = outcome.expect("write task panicked");
-            any_failed |= result.is_err();
-            for request in entity.requests {
-                let outcome = match &result {
-                    Ok(()) => Ok(MutationOutcome::Applied),
-                    Err(error) => Err(SyncError::Failed(error.to_string())),
-                };
-                let _ = request.reply.send(outcome);
-            }
-        }
-    }
-
     if any_failed {
         return Err(QueueError::Permanent);
     }

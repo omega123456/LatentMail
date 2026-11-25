@@ -15,6 +15,31 @@ async fn default_scheduler_behaves_like_new() {
     let _guard = scheduler.key_guard("default-check").await;
 }
 
+async fn track_permit_peak(
+    scheduler: std::sync::Arc<Scheduler>,
+    current: std::sync::Arc<AtomicUsize>,
+    peak: std::sync::Arc<AtomicUsize>,
+) {
+    let _permit = scheduler.acquire_permit().await;
+    let now = current.fetch_add(1, Ordering::SeqCst) + 1;
+    peak.fetch_max(now, Ordering::SeqCst);
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    current.fetch_sub(1, Ordering::SeqCst);
+}
+
+async fn resolve_shared_key_once(
+    scheduler: std::sync::Arc<Scheduler>,
+    resolutions: std::sync::Arc<AtomicUsize>,
+    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let _guard = scheduler.key_guard("shared.example").await;
+    if done.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    resolutions.fetch_add(1, Ordering::SeqCst);
+}
+
 #[tokio::test]
 async fn simultaneous_resolutions_never_exceed_the_configured_ceiling() {
     let scheduler = std::sync::Arc::new(Scheduler::new());
@@ -23,17 +48,11 @@ async fn simultaneous_resolutions_never_exceed_the_configured_ceiling() {
 
     let mut handles = Vec::new();
     for _ in 0..(MAX_SIMULTANEOUS_RESOLUTIONS * 2) {
-        let scheduler = std::sync::Arc::clone(&scheduler);
-        let current = std::sync::Arc::clone(&current);
-        let peak = std::sync::Arc::clone(&peak);
-        handles.push(tokio::spawn(async move {
-            let _permit = scheduler.acquire_permit().await;
-            let now = current.fetch_add(1, Ordering::SeqCst) + 1;
-            peak.fetch_max(now, Ordering::SeqCst);
-
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            current.fetch_sub(1, Ordering::SeqCst);
-        }));
+        handles.push(tokio::spawn(track_permit_peak(
+            std::sync::Arc::clone(&scheduler),
+            std::sync::Arc::clone(&current),
+            std::sync::Arc::clone(&peak),
+        )));
     }
     for handle in handles {
         handle.await.unwrap();
@@ -51,17 +70,11 @@ async fn concurrent_requests_for_the_same_key_collapse_onto_one_resolution() {
 
     let mut handles = Vec::new();
     for _ in 0..5 {
-        let scheduler = std::sync::Arc::clone(&scheduler);
-        let resolutions = std::sync::Arc::clone(&resolutions);
-        let done = std::sync::Arc::clone(&done);
-        handles.push(tokio::spawn(async move {
-            let _guard = scheduler.key_guard("shared.example").await;
-
-            if done.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            resolutions.fetch_add(1, Ordering::SeqCst);
-        }));
+        handles.push(tokio::spawn(resolve_shared_key_once(
+            std::sync::Arc::clone(&scheduler),
+            std::sync::Arc::clone(&resolutions),
+            std::sync::Arc::clone(&done),
+        )));
     }
     for handle in handles {
         handle.await.unwrap();

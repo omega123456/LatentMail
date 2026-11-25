@@ -59,6 +59,15 @@ function ExpandedAccountBody({
   );
 }
 
+type AiAccountCardProps = {
+  config: AiConfig;
+  status?: AiIndexStatus;
+  avatarUrl?: string | null;
+  expanded: boolean;
+  onToggle: () => void;
+  onChanged: () => void;
+};
+
 export function AiAccountCard({
   config,
   status,
@@ -66,14 +75,7 @@ export function AiAccountCard({
   expanded,
   onToggle,
   onChanged,
-}: {
-  config: AiConfig;
-  status?: AiIndexStatus;
-  avatarUrl?: string | null;
-  expanded: boolean;
-  onToggle: () => void;
-  onChanged: () => void;
-}) {
+}: AiAccountCardProps) {
   const badge = ACCOUNT_AI_BADGE[accountAiState(config)];
   return (
     <article className="rounded-card border border-settings-card-line bg-settings-card px-4.5 py-4 dark:border-dark-settings-card-line dark:bg-dark-settings-card">

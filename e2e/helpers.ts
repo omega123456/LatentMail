@@ -25,6 +25,16 @@ export type PlaywrightIpcOptions = {
   platform?: 'windows' | 'macos';
 };
 
+type BrowserIpcConfig = {
+  fixtures: Record<string, unknown>;
+  overrides: Record<string, unknown>;
+  rejectedCommands: string[];
+  pendingCommands: string[];
+  platform: 'windows' | 'macos';
+  fileSources: typeof playwrightFileSources;
+  mailChangingCommands: readonly string[];
+};
+
 function syncStatusOverride(syncStatus: PlaywrightSyncStatus | undefined) {
   if (!syncStatus) return {};
   return {
@@ -37,73 +47,68 @@ function syncStatusOverride(syncStatus: PlaywrightSyncStatus | undefined) {
   };
 }
 
+function buildBrowserIpcConfig(options: PlaywrightIpcOptions): BrowserIpcConfig {
+  return {
+    fixtures: playwrightIpcFixtures,
+    overrides: { ...options.overrides, ...syncStatusOverride(options.syncStatus) },
+    rejectedCommands: options.rejectedCommands ?? [],
+    pendingCommands: options.pendingCommands ?? [],
+    platform: options.platform ?? 'macos',
+    fileSources: playwrightFileSources,
+    mailChangingCommands: playwrightMailChangingCommands,
+  };
+}
+
+function installBrowserIpc(config: BrowserIpcConfig) {
+  const responses = { ...config.fixtures, ...config.overrides } as Record<string, unknown>;
+  const calls: { command: string; request: unknown }[] = [];
+  const listeners = new Map<string, ((payload: unknown) => void)[]>();
+  const emit = (event: string, payload: unknown) => {
+    for (const listener of listeners.get(event) ?? []) listener(payload);
+  };
+  const announceMailChange = (command: string, request: unknown) => {
+    if (!config.mailChangingCommands.includes(command)) return;
+    const { accountId } = request as { accountId: string };
+    emit('mail://changed', { accountId });
+  };
+  window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ = calls;
+  window.__LATENTMAIL_PLAYWRIGHT_EMIT__ = emit;
+  window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
+    invoke: async (command, request) => {
+      calls.push({ command, request });
+      if (config.pendingCommands.includes(command)) return new Promise(() => undefined);
+      announceMailChange(command, request);
+      if (config.rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
+      if (command in responses) return responses[command];
+      throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
+    },
+    listen: async (event, listener) => {
+      const subscription = (payload: unknown) => listener(payload);
+      listeners.set(event, [...(listeners.get(event) ?? []), subscription]);
+      return () => {
+        listeners.set(
+          event,
+          (listeners.get(event) ?? []).filter((entry) => entry !== subscription),
+        );
+      };
+    },
+    convertFileSrc: (path) =>
+      config.fileSources.byPathMarker.find((source) => path.includes(source.marker))?.src ??
+      config.fileSources.placeholder,
+  };
+  window.__TAURI_OS_PLUGIN_INTERNALS__ = {
+    eol: '\n',
+    os_type: config.platform,
+    platform: config.platform,
+    family: config.platform === 'windows' ? 'windows' : 'unix',
+    version: '',
+    arch: 'x86_64',
+    exe_extension: config.platform === 'windows' ? 'exe' : '',
+  };
+}
+
 export async function installPlaywrightIpc(page: Page, options: PlaywrightIpcOptions = {}) {
-  await page.addInitScript(
-    ({
-      fixtures,
-      overrides,
-      rejectedCommands,
-      pendingCommands,
-      platform,
-      fileSources,
-      mailChangingCommands,
-    }) => {
-      const responses = { ...fixtures, ...overrides } as Record<string, unknown>;
-      const calls: { command: string; request: unknown }[] = [];
-      const listeners = new Map<string, ((payload: unknown) => void)[]>();
-      const emit = (event: string, payload: unknown) => {
-        for (const listener of listeners.get(event) ?? []) listener(payload);
-      };
-      const announceMailChange = (command: string, request: unknown) => {
-        if (!mailChangingCommands.includes(command)) return;
-        const { accountId } = request as { accountId: string };
-        emit('mail://changed', { accountId });
-      };
-      window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ = calls;
-      window.__LATENTMAIL_PLAYWRIGHT_EMIT__ = emit;
-      window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
-        invoke: async (command, request) => {
-          calls.push({ command, request });
-          if (pendingCommands.includes(command)) return new Promise(() => undefined);
-          announceMailChange(command, request);
-          if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
-          if (command in responses) return responses[command];
-          throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
-        },
-        listen: async (event, listener) => {
-          const subscription = (payload: unknown) => listener(payload);
-          listeners.set(event, [...(listeners.get(event) ?? []), subscription]);
-          return () => {
-            listeners.set(
-              event,
-              (listeners.get(event) ?? []).filter((entry) => entry !== subscription),
-            );
-          };
-        },
-        convertFileSrc: (path) =>
-          fileSources.byPathMarker.find((source) => path.includes(source.marker))?.src ??
-          fileSources.placeholder,
-      };
-      window.__TAURI_OS_PLUGIN_INTERNALS__ = {
-        eol: '\n',
-        os_type: platform,
-        platform: platform,
-        family: platform === 'windows' ? 'windows' : 'unix',
-        version: '',
-        arch: 'x86_64',
-        exe_extension: platform === 'windows' ? 'exe' : '',
-      };
-    },
-    {
-      fixtures: playwrightIpcFixtures,
-      overrides: { ...options.overrides, ...syncStatusOverride(options.syncStatus) },
-      rejectedCommands: options.rejectedCommands ?? [],
-      pendingCommands: options.pendingCommands ?? [],
-      platform: options.platform ?? 'macos',
-      fileSources: playwrightFileSources,
-      mailChangingCommands: playwrightMailChangingCommands,
-    },
-  );
+  await page.addInitScript(installBrowserIpc, buildBrowserIpcConfig(options));
 }
 
 export async function openComposeSession(page: Page, session: OpenComposeArgs) {

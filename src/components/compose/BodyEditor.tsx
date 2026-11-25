@@ -17,27 +17,29 @@ type Props = {
 
 const placeholderText = 'Write your message here…';
 
+const BODY_EDITOR_EXTENSIONS = [
+  StarterKit.configure({
+    link: false,
+    underline: false,
+    bulletList: { HTMLAttributes: { class: 'list-disc ps-6' } },
+    orderedList: { HTMLAttributes: { class: 'list-decimal ps-6' } },
+    codeBlock: {
+      HTMLAttributes: {
+        class:
+          'my-2.5 overflow-x-auto whitespace-pre rounded-md border border-code-block-line bg-code-block px-4 py-3.5 font-mono text-body-sm text-on-code-block',
+      },
+    },
+  }),
+  Underline,
+  Link.configure({ openOnClick: false, autolink: true }),
+  Image,
+];
+
 export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
   ({ value, onChange, onSelectionChange }, ref) => {
     const [isEmpty, setIsEmpty] = useState(true);
     const editor = useEditor({
-      extensions: [
-        StarterKit.configure({
-          link: false,
-          underline: false,
-          bulletList: { HTMLAttributes: { class: 'list-disc ps-6' } },
-          orderedList: { HTMLAttributes: { class: 'list-decimal ps-6' } },
-          codeBlock: {
-            HTMLAttributes: {
-              class:
-                'my-2.5 overflow-x-auto whitespace-pre rounded-md border border-code-block-line bg-code-block px-4 py-3.5 font-mono text-body-sm text-on-code-block',
-            },
-          },
-        }),
-        Underline,
-        Link.configure({ openOnClick: false, autolink: true }),
-        Image,
-      ],
+      extensions: BODY_EDITOR_EXTENSIONS,
       content: value,
       editorProps: { attributes: { class: 'flex-1 py-3.5 outline-none' } },
       onCreate: ({ editor }) => {

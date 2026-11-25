@@ -288,37 +288,47 @@ impl<'a> CitationRewriter<'a> {
             .collect()
     }
 
-    pub fn rewrite(mut self, answer: &str) -> RewrittenCitations {
-        let mut rewritten = String::with_capacity(answer.len());
-        let bytes = answer.as_bytes();
-        let mut index = 0;
-        let mut copied = 0;
-        while index < bytes.len() {
-            if bytes[index] == b'[' {
-                let start = index + 1;
-                if let Some(end) = Self::marker_end(bytes, start) {
-                    rewritten.push_str(&answer[copied..index]);
-                    match self.cite(&answer[start..end]) {
-                        Some(number) => rewritten.push_str(&format!("[{number}]")),
-                        None => {
-                            if rewritten.ends_with(' ') {
-                                rewritten.pop();
-                            }
-                        }
-                    }
-                    index = end + 1;
-                    copied = index;
-                    continue;
-                }
-            }
-            index += 1;
+    fn append_citation(&mut self, rewritten: &mut String, marker: &str) {
+        if let Some(number) = self.cite(marker) {
+            rewritten.push_str(&format!("[{number}]"));
+            return;
         }
-        rewritten.push_str(&answer[copied..]);
+        if rewritten.ends_with(' ') {
+            rewritten.pop();
+        }
+    }
+
+    pub fn rewrite(mut self, answer: &str) -> RewrittenCitations {
+        let rewritten = rewrite_answer(&mut self, answer);
         RewrittenCitations {
             answer: rewritten,
             sources: self.into_sources(),
         }
     }
+}
+
+fn rewrite_answer(rewriter: &mut CitationRewriter<'_>, answer: &str) -> String {
+    let mut rewritten = String::with_capacity(answer.len());
+    let bytes = answer.as_bytes();
+    let mut index = 0;
+    let mut copied = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'[' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let Some(end) = CitationRewriter::marker_end(bytes, start) else {
+            index += 1;
+            continue;
+        };
+        rewritten.push_str(&answer[copied..index]);
+        rewriter.append_citation(&mut rewritten, &answer[start..end]);
+        index = end + 1;
+        copied = index;
+    }
+    rewritten.push_str(&answer[copied..]);
+    rewritten
 }
 
 pub fn citations(
@@ -369,12 +379,15 @@ async fn account_email(service: &AiService, account_id: &str) -> Result<String, 
         .ok_or_else(|| "Account does not exist".to_owned())
 }
 
-async fn produce<R: Runtime>(
-    app: &AppHandle<R>,
-    service: &AiService,
-    request: &ChatRun,
-) -> Result<Answer, String> {
-    let config = service.config_for(&request.account_id).await?;
+struct ChatSettings {
+    base_url: String,
+    chat_model: String,
+    embedding_model: String,
+    email: String,
+}
+
+async fn load_chat_settings(service: &AiService, account_id: &str) -> Result<ChatSettings, String> {
+    let config = service.config_for(account_id).await?;
     let base_url = config
         .base_url
         .ok_or_else(|| "Save an API root first".to_owned())?;
@@ -384,8 +397,73 @@ async fn produce<R: Runtime>(
     let embedding_model = config
         .embedding_model
         .ok_or_else(|| "Select an embedding model first".to_owned())?;
-    let email = account_email(service, &request.account_id).await?;
-    let provider = Provider::new(&base_url, credentials::load(&request.account_id)?)?;
+    let email = account_email(service, account_id).await?;
+    Ok(ChatSettings {
+        base_url: base_url,
+        chat_model: chat_model,
+        embedding_model: embedding_model,
+        email: email,
+    })
+}
+
+fn build_prompt_messages(email: &str, request: &ChatRun, context: &str) -> Vec<serde_json::Value> {
+    let mut messages = vec![serde_json::json!({
+        "role": "system",
+        "content": prompts::system(Local::now(), email),
+    })];
+    messages.extend(history_json(&request.history));
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": format!(
+            "## Email Context\n\n{}\n\n## Question\n\n{}",
+            context, request.question
+        ),
+    }));
+    messages
+}
+
+struct StreamAnswerInput<'a> {
+    request: &'a ChatRun,
+    model: &'a str,
+    messages: Vec<serde_json::Value>,
+}
+
+async fn stream_answer<R: Runtime>(
+    app: &AppHandle<R>,
+    provider: &Provider,
+    input: StreamAnswerInput<'_>,
+) -> Result<String, String> {
+    let mut text = String::new();
+    provider
+        .chat_completion_stream(
+            ChatStreamRequest {
+                model: input.model,
+                messages: serde_json::Value::Array(input.messages),
+                cancel: &input.request.cancel,
+            },
+            &mut |delta| {
+                text.push_str(delta);
+                emit(
+                    app,
+                    input.request,
+                    ChatEventKind::Delta {
+                        text: delta.to_owned(),
+                    },
+                );
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(text)
+}
+
+async fn produce<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &AiService,
+    request: &ChatRun,
+) -> Result<Answer, String> {
+    let settings = load_chat_settings(service, &request.account_id).await?;
+    let provider = Provider::new(&settings.base_url, credentials::load(&request.account_id)?)?;
     let storage = service.storage();
     let retrieved = retrieve(
         RetrieveContext {
@@ -394,10 +472,10 @@ async fn produce<R: Runtime>(
             cancel: &request.cancel,
         },
         &RetrievalRequest {
-            chat_model: &chat_model,
-            embedding_model: &embedding_model,
+            chat_model: &settings.chat_model,
+            embedding_model: &settings.embedding_model,
             account_id: &request.account_id,
-            account_email: &email,
+            account_email: &settings.email,
             question: &request.question,
             history: &request.history,
         },
@@ -420,39 +498,17 @@ async fn produce<R: Runtime>(
         }
         Retrieval::Found(found) => found,
     };
-    let mut messages = vec![serde_json::json!({
-        "role": "system",
-        "content": prompts::system(Local::now(), &email),
-    })];
-    messages.extend(history_json(&request.history));
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": format!(
-            "## Email Context\n\n{}\n\n## Question\n\n{}",
-            found.context, request.question
-        ),
-    }));
-    let mut text = String::new();
-    provider
-        .chat_completion_stream(
-            ChatStreamRequest {
-                model: &chat_model,
-                messages: serde_json::Value::Array(messages),
-                cancel: &request.cancel,
-            },
-            &mut |delta| {
-                text.push_str(delta);
-                emit(
-                    app,
-                    request,
-                    ChatEventKind::Delta {
-                        text: delta.to_owned(),
-                    },
-                );
-            },
-        )
-        .await
-        .map_err(|error| error.to_string())?;
+    let messages = build_prompt_messages(&settings.email, request, &found.context);
+    let text = stream_answer(
+        app,
+        &provider,
+        StreamAnswerInput {
+            request: request,
+            model: &settings.chat_model,
+            messages: messages,
+        },
+    )
+    .await?;
     if request.cancel.load(Ordering::SeqCst) {
         return Ok(Answer::Cancelled);
     }

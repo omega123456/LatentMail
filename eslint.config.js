@@ -55,6 +55,9 @@ export default tseslint.config(
       'object-shorthand': ['error', 'consistent'],
       '@typescript-eslint/no-non-null-assertion': 'error',
       'no-nested-ternary': 'error',
+      'max-depth': ['error', 2],
+      'max-lines': ['error', 400],
+      'max-lines-per-function': ['error', 60],
       'max-params': ['error', 3],
       complexity: ['error', 10],
       'no-restricted-syntax': [
@@ -80,6 +83,18 @@ export default tseslint.config(
           ignoreTypeIndexes: true,
         },
       ],
+    },
+  },
+  {
+    files: ['src/tests/**/*.{ts,tsx}'],
+    rules: { 'max-lines-per-function': 'off' },
+  },
+  {
+    files: ['e2e/**/*.ts'],
+    rules: {
+      'max-depth': ['error', 2],
+      'max-lines': ['error', 400],
+      'max-lines-per-function': ['error', 60],
     },
   },
   {

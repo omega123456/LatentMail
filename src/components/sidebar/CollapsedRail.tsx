@@ -9,20 +9,43 @@ import { FolderList } from './FolderList';
 import { CollapsedSearchIndicator } from './SearchResultsRow';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
-export function CollapsedRail({
-  accounts,
-  activeAccountId,
-  activeMailboxId,
-  mailboxes,
+function CollapsedLabelNav({
   labels,
-  onSelectAccount,
+  activeMailboxId,
   onSelectMailbox,
-  onExpand,
-  onSettings,
-  onCompose,
-  searchActive = false,
-  searchQuery = '',
 }: {
+  labels: Label[];
+  activeMailboxId: string | null;
+  onSelectMailbox: (id: string) => void;
+}) {
+  if (labels.length === 0) return null;
+  return (
+    <nav
+      aria-label="Labels"
+      className="mt-stack-gap-md grid gap-1 border-t border-outline-variant pt-stack-gap-md dark:border-dark-outline-variant"
+    >
+      {labels.map((label) => (
+        <button
+          key={label.id}
+          type="button"
+          aria-label={label.name}
+          aria-current={activeMailboxId === label.id ? 'page' : undefined}
+          title={label.name}
+          onClick={() => onSelectMailbox(label.id)}
+          className={`${navRow(activeMailboxId === label.id)} justify-center px-0`}
+        >
+          <span aria-hidden="true" className="grid size-4.5 place-items-center">
+            <span
+              className={`size-chip-dot rounded-full ${LABEL_COLOR_BY_ID[label.color].dotClass}`}
+            />
+          </span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+type CollapsedRailProps = {
   accounts: Account[];
   activeAccountId: string | null;
   activeMailboxId: string | null;
@@ -35,7 +58,10 @@ export function CollapsedRail({
   onCompose?: () => void;
   searchActive?: boolean;
   searchQuery?: string;
-}) {
+};
+
+export function CollapsedRail(props: CollapsedRailProps) {
+  const { searchActive = false, searchQuery = '' } = props;
   return (
     <aside
       data-testid="collapsed-rail"
@@ -45,7 +71,7 @@ export function CollapsedRail({
         type="button"
         aria-label="Compose"
         title="Compose"
-        onClick={onCompose}
+        onClick={props.onCompose}
         className="grid size-9 cursor-pointer place-items-center rounded-full bg-primary text-on-primary focus-visible:outline-2 focus-visible:outline-primary"
       >
         <Plus aria-hidden="true" size={ICON_SIZE.lg} />
@@ -53,41 +79,22 @@ export function CollapsedRail({
       {searchActive && <CollapsedSearchIndicator query={searchQuery} />}
       <div className="min-h-0 w-full flex-1 overflow-y-auto">
         <FolderList
-          activeMailboxId={activeMailboxId}
-          mailboxes={mailboxes}
+          activeMailboxId={props.activeMailboxId}
+          mailboxes={props.mailboxes}
           showUnreadCounts={false}
           collapsed
-          onSelect={onSelectMailbox}
+          onSelect={props.onSelectMailbox}
         />
-        {labels.length > 0 && (
-          <nav
-            aria-label="Labels"
-            className="mt-stack-gap-md grid gap-1 border-t border-outline-variant pt-stack-gap-md dark:border-dark-outline-variant"
-          >
-            {labels.map((label) => (
-              <button
-                key={label.id}
-                type="button"
-                aria-label={label.name}
-                aria-current={activeMailboxId === label.id ? 'page' : undefined}
-                title={label.name}
-                onClick={() => onSelectMailbox(label.id)}
-                className={`${navRow(activeMailboxId === label.id)} justify-center px-0`}
-              >
-                <span aria-hidden="true" className="grid size-4.5 place-items-center">
-                  <span
-                    className={`size-chip-dot rounded-full ${LABEL_COLOR_BY_ID[label.color].dotClass}`}
-                  />
-                </span>
-              </button>
-            ))}
-          </nav>
-        )}
+        <CollapsedLabelNav
+          labels={props.labels}
+          activeMailboxId={props.activeMailboxId}
+          onSelectMailbox={props.onSelectMailbox}
+        />
       </div>
       <button
         type="button"
         aria-label="Expand sidebar"
-        onClick={onExpand}
+        onClick={props.onExpand}
         className="grid size-9 cursor-pointer place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
       >
         <PanelLeftOpen aria-hidden="true" size={ICON_SIZE.lg} />
@@ -95,17 +102,17 @@ export function CollapsedRail({
       <button
         type="button"
         aria-label="Settings"
-        onClick={onSettings}
+        onClick={props.onSettings}
         className="grid size-9 cursor-pointer place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
       >
         <Settings aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
       <div className="mt-1 flex w-full justify-center border-t border-outline-variant pt-3 dark:border-dark-outline-variant">
         <AccountSwitcher
-          accounts={accounts}
-          activeAccountId={activeAccountId}
+          accounts={props.accounts}
+          activeAccountId={props.activeAccountId}
           collapsed
-          onSelect={onSelectAccount}
+          onSelect={props.onSelectAccount}
         />
       </div>
     </aside>

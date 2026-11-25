@@ -174,43 +174,66 @@ impl AvatarService {
         Resolve: FnOnce(AvatarCache, String) -> Output + Send + 'static,
         Output: std::future::Future<Output = Option<Vec<u8>>> + Send + 'static,
     {
-        let ScheduledResolution {
-            app,
-            target,
-            cache_key,
-        } = request;
-        let cache = self.cache.clone();
-        let scheduler = Arc::clone(&self.scheduler);
-        tokio::spawn(async move {
-            let _key_guard = scheduler.key_guard(&cache_key).await;
-            if matches!(
-                cache.answer(&cache_key, target.domain).await,
-                CacheAnswer::Fresh(_)
-            ) {
-                return;
-            }
-            let _permit = scheduler.acquire_permit().await;
-            let resolved = match resolve(cache.clone(), target.key.clone()).await {
-                Some(png) => cache
-                    .store_hit(CachedAvatar {
-                        cache_key: &cache_key,
-                        domain: target.domain,
-                        png_bytes: &png,
-                    })
-                    .await
-                    .is_ok(),
-                None => {
-                    let _ = cache.store_miss(&cache_key).await;
-                    false
-                }
-            };
-            app.emit_resolved(AvatarResolvedEvent {
-                pipeline: target.pipeline,
-                key: target.key,
-                resolved: resolved,
-            });
-        });
+        let context = ScheduledResolutionContext {
+            cache: self.cache.clone(),
+            scheduler: Arc::clone(&self.scheduler),
+            request: request,
+        };
+        tokio::spawn(run_scheduled_resolution(context, resolve));
     }
+}
+
+struct ScheduledResolutionContext {
+    cache: AvatarCache,
+    scheduler: Arc<Scheduler>,
+    request: ScheduledResolution,
+}
+
+async fn run_scheduled_resolution<Resolve, Output>(
+    context: ScheduledResolutionContext,
+    resolve: Resolve,
+) where
+    Resolve: FnOnce(AvatarCache, String) -> Output + Send + 'static,
+    Output: std::future::Future<Output = Option<Vec<u8>>> + Send + 'static,
+{
+    let ScheduledResolutionContext {
+        cache,
+        scheduler,
+        request:
+            ScheduledResolution {
+                app,
+                target,
+                cache_key,
+            },
+    } = context;
+    let _key_guard = scheduler.key_guard(&cache_key).await;
+    let is_fresh = matches!(
+        cache.answer(&cache_key, target.domain).await,
+        CacheAnswer::Fresh(_)
+    );
+    if is_fresh {
+        return;
+    }
+    let _permit = scheduler.acquire_permit().await;
+    let resolved = match resolve(cache.clone(), target.key.clone()).await {
+        Some(png) => cache
+            .store_hit(CachedAvatar {
+                cache_key: &cache_key,
+                domain: target.domain,
+                png_bytes: &png,
+            })
+            .await
+            .is_ok(),
+        None => {
+            let _ = cache.store_miss(&cache_key).await;
+            false
+        }
+    };
+    app.emit_resolved(AvatarResolvedEvent {
+        pipeline: target.pipeline,
+        key: target.key,
+        resolved: resolved,
+    });
 }
 
 async fn resolve_account_photo(storage: &Storage, account_id: String) -> Option<Vec<u8>> {

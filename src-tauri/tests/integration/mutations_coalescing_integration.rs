@@ -147,6 +147,54 @@ fn batch_modify_chunk_size_matches_gmails_documented_identifier_limit() {
     assert_eq!(latentmail_lib::sync::BATCH_MODIFY_CHUNK_SIZE, 1_000);
 }
 
+fn make_engine(storage: Storage, rate_per_second: u32) -> Arc<SyncEngine> {
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine_with_events(
+        QueueRateConfig {
+            rate_per_second: rate_per_second,
+            burst: rate_per_second,
+        },
+        Arc::clone(&registry),
+        Arc::new(|_event, _payload| {}),
+    );
+    SyncEngine::new(SyncEngineDeps {
+        storage: storage,
+        queue: queue,
+        registry: registry,
+        events: noop_event_sink(),
+    })
+}
+
+async fn apply_star(
+    engine: Arc<SyncEngine>,
+    base_url: String,
+    thread_id: String,
+) -> MutationOutcome {
+    engine
+        .mutate(ThreadMutation {
+            account_id: "account".to_owned(),
+            client: GmailClient::with_base_url("token", base_url),
+            thread_id: thread_id,
+            labels: LabelDelta {
+                additions: HashSet::from(["STARRED".to_owned()]),
+                removals: HashSet::new(),
+            },
+        })
+        .await
+        .unwrap()
+}
+
+async fn batch_modify_bodies(server: &MockServer) -> Vec<serde_json::Value> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/users/me/messages/batchModify")
+        .map(|request| request.body_json::<serde_json::Value>().unwrap())
+        .collect()
+}
+
 #[tokio::test(start_paused = true)]
 async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
     const COUNT: usize = 30;
@@ -176,60 +224,28 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
         .mount(&server)
         .await;
     let (storage, _directory) = seed_many_threads(COUNT);
-    let registry = WorkRegistry::new();
-    let queue = create_queue_engine_with_events(
-        QueueRateConfig {
-            rate_per_second: 1_000_000,
-            burst: 1_000_000,
-        },
-        Arc::clone(&registry),
-        Arc::new(|_event, _payload| {}),
-    );
-    let engine = SyncEngine::new(SyncEngineDeps {
-        storage: storage,
-        queue: Arc::clone(&queue),
-        registry: registry,
-        events: noop_event_sink(),
-    });
+    let engine = make_engine(storage, 1_000_000);
 
     let tasks = (0..COUNT)
         .map(|index| {
-            let engine = Arc::clone(&engine);
-            let base_url = server.uri();
-            tokio::spawn(async move {
-                engine
-                    .mutate(ThreadMutation {
-                        account_id: "account".to_owned(),
-                        client: GmailClient::with_base_url("token", base_url),
-                        thread_id: format!("thread-{index}"),
-                        labels: LabelDelta {
-                            additions: HashSet::from(["STARRED".to_owned()]),
-                            removals: HashSet::new(),
-                        },
-                    })
-                    .await
-            })
+            tokio::spawn(apply_star(
+                Arc::clone(&engine),
+                server.uri(),
+                format!("thread-{index}"),
+            ))
         })
         .collect::<Vec<_>>();
     for task in tasks {
-        assert_eq!(task.await.unwrap().unwrap(), MutationOutcome::Applied);
+        assert_eq!(task.await.unwrap(), MutationOutcome::Applied);
     }
 
-    let requests = server.received_requests().await.unwrap();
-    let batches = requests
-        .iter()
-        .filter(|request| request.url.path() == "/users/me/messages/batchModify")
-        .collect::<Vec<_>>();
+    let batches = batch_modify_bodies(&server).await;
     assert_eq!(
         batches.len(),
         1,
         "every thread shares the same delta, so a bulk star must be one call, not one per thread"
     );
-    let ids = batches[0].body_json::<serde_json::Value>().unwrap()["ids"]
-        .as_array()
-        .unwrap()
-        .len();
-    assert_eq!(ids, COUNT);
+    assert_eq!(batches[0]["ids"].as_array().unwrap().len(), COUNT);
 }
 
 #[tokio::test(start_paused = true)]
@@ -314,21 +330,7 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
         .mount(&server)
         .await;
     let (storage, _directory) = seed_many_threads(1);
-    let registry = WorkRegistry::new();
-    let queue = create_queue_engine_with_events(
-        QueueRateConfig {
-            rate_per_second: 1_000,
-            burst: 1_000,
-        },
-        Arc::clone(&registry),
-        Arc::new(|_event, _payload| {}),
-    );
-    let engine = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: Arc::clone(&queue),
-        registry: registry,
-        events: noop_event_sink(),
-    });
+    let engine = make_engine(storage, 1_000);
 
     let read = engine
         .mutate(ThreadMutation {
@@ -358,20 +360,10 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
         .unwrap();
     assert_eq!(unread, MutationOutcome::Applied);
 
-    let requests = server.received_requests().await.unwrap();
-    let batches: Vec<_> = requests
-        .iter()
-        .filter(|request| request.url.path() == "/users/me/messages/batchModify")
-        .collect();
+    let batches = batch_modify_bodies(&server).await;
     assert_eq!(batches.len(), 2);
-    assert_eq!(
-        batches[0].body_json::<serde_json::Value>().unwrap()["removeLabelIds"],
-        serde_json::json!(["UNREAD"])
-    );
-    assert_eq!(
-        batches[1].body_json::<serde_json::Value>().unwrap()["addLabelIds"],
-        serde_json::json!(["UNREAD"])
-    );
+    assert_eq!(batches[0]["removeLabelIds"], serde_json::json!(["UNREAD"]));
+    assert_eq!(batches[1]["addLabelIds"], serde_json::json!(["UNREAD"]));
 }
 
 #[tokio::test(start_paused = true)]

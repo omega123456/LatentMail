@@ -83,47 +83,186 @@ async fn mount_profile(server: &MockServer, messages_total: i64) {
         .await;
 }
 
-#[tokio::test]
-async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cursor() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "emailAddress": "me@example.com", "messagesTotal": 0, "threadsTotal": 0, "historyId": "1"
-        })))
-        .mount(&server)
-        .await;
+async fn load_cursor(storage: &Storage, kind: TraversalKind) -> Option<TraversalCursor> {
+    storage
+        .run(move |connection| TraversalCursorRepository::get(connection, "account", kind))
+        .await
+        .unwrap()
+}
+
+async fn save_cursor(storage: &Storage, cursor: TraversalCursor) {
+    storage
+        .run(move |connection| TraversalCursorRepository::upsert(connection, &cursor))
+        .await
+        .unwrap();
+}
+
+fn pause_on_traversal_sink(queue: Arc<latentmail_lib::queue::QueueEngine>) -> EventSink {
+    Arc::new(move |name, _payload| {
+        if name == latentmail_lib::events::SYNC_TRAVERSAL {
+            queue.pause();
+        }
+    })
+}
+
+fn counting_pause_sink(
+    queue: Arc<latentmail_lib::queue::QueueEngine>,
+    pauses: Arc<std::sync::atomic::AtomicUsize>,
+) -> EventSink {
+    Arc::new(move |name, _payload| {
+        if name == latentmail_lib::events::SYNC_TRAVERSAL {
+            queue.pause();
+            pauses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    })
+}
+
+fn queue_item_collector(queue_events: Arc<Mutex<Vec<serde_json::Value>>>) -> EventSink {
+    Arc::new(move |name, payload| {
+        if name == latentmail_lib::events::QUEUE_ITEM {
+            queue_events.lock().unwrap().push(payload);
+        }
+    })
+}
+
+fn completed_traversal_op_ids(
+    queue_events: &Arc<Mutex<Vec<serde_json::Value>>>,
+) -> std::collections::HashSet<String> {
+    queue_events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event["status"] == "done")
+        .filter_map(|event| event["id"].as_str())
+        .filter(|id| id.starts_with("traversal:account:"))
+        .map(str::to_owned)
+        .collect()
+}
+
+async fn wait_for_cursor_position(storage: &Storage, expected: &str) -> Option<TraversalCursor> {
+    for _ in 0..1_000 {
+        let cursor = load_cursor(storage, TraversalKind::Backfill).await;
+        if cursor.as_ref().and_then(|value| value.position.as_deref()) == Some(expected) {
+            return cursor;
+        }
+        tokio::task::yield_now().await;
+    }
+    None
+}
+
+async fn wait_for_cursor_completed(storage: &Storage, max_polls: usize) -> Option<TraversalCursor> {
+    for _ in 0..max_polls {
+        let cursor = load_cursor(storage, TraversalKind::Backfill).await;
+        if cursor.as_ref().is_some_and(|value| value.completed) {
+            return cursor;
+        }
+        tokio::task::yield_now().await;
+    }
+    None
+}
+
+async fn wait_for_resumed_page(
+    storage: &Storage,
+    pauses: &std::sync::atomic::AtomicUsize,
+    expected: &str,
+) -> Option<TraversalCursor> {
+    for _ in 0..1_000 {
+        let cursor = load_cursor(storage, TraversalKind::Backfill).await;
+        let paused = pauses.load(std::sync::atomic::Ordering::SeqCst) >= 1;
+        let at_page = cursor.as_ref().and_then(|value| value.position.as_deref()) == Some(expected);
+        if at_page && paused {
+            return cursor;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    None
+}
+
+async fn wait_for_completed_with_sleep(storage: &Storage) -> Option<TraversalCursor> {
+    for _ in 0..1_000 {
+        let candidate = load_cursor(storage, TraversalKind::Backfill).await.unwrap();
+        if candidate.completed {
+            return Some(candidate);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    None
+}
+
+async fn wait_for_page_and_single_op(
+    storage: &Storage,
+    queue_events: &Arc<Mutex<Vec<serde_json::Value>>>,
+    expected: &str,
+) -> Option<TraversalCursor> {
+    for _ in 0..1_000 {
+        let cursor = load_cursor(storage, TraversalKind::Backfill).await;
+        let at_page = cursor.as_ref().and_then(|value| value.position.as_deref()) == Some(expected);
+        if at_page && completed_traversal_op_ids(queue_events).len() == 1 {
+            return cursor;
+        }
+        tokio::task::yield_now().await;
+    }
+    None
+}
+
+async fn wait_for_completed_and_ops(
+    storage: &Storage,
+    queue_events: &Arc<Mutex<Vec<serde_json::Value>>>,
+    expected_ops: usize,
+) -> Option<TraversalCursor> {
+    for _ in 0..10_000 {
+        let cursor = load_cursor(storage, TraversalKind::Backfill).await;
+        let done = cursor.as_ref().is_some_and(|value| value.completed);
+        if done && completed_traversal_op_ids(queue_events).len() == expected_ops {
+            return cursor;
+        }
+        tokio::task::yield_now().await;
+    }
+    None
+}
+
+async fn mount_empty_initial_sync_scaffold(server: &MockServer) {
+    mount_profile(server, 0).await;
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
+        .mount(server)
         .await;
-
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param("q", "newer_than:30d"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
-        .mount(&server)
+        .mount(server)
         .await;
-    Mock::given(method("GET"))
+}
+
+async fn mount_backfill_page(server: &MockServer, page: Mock, expect_once: bool) {
+    if expect_once {
+        page.expect(1).mount(server).await;
+        return;
+    }
+    page.mount(server).await;
+}
+
+async fn mount_two_page_backfill_mocks(server: &MockServer, expect_once: bool) {
+    mount_empty_initial_sync_scaffold(server).await;
+    let first_page = Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("q"))
         .and(query_param_is_missing("pageToken"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::json!({"messages":[{"id":"m1","threadId":"t1"}],"nextPageToken":"page2"}),
-        ))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
+        ));
+    mount_backfill_page(server, first_page, expect_once).await;
+    let second_page = Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("q"))
         .and(query_param("pageToken", "page2"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"messages":[{"id":"m2","threadId":"t2"}]})),
-        )
-        .mount(&server)
-        .await;
+        );
+    mount_backfill_page(server, second_page, expect_once).await;
     for (id, thread) in [("m1", "t1"), ("m2", "t2")] {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
@@ -135,60 +274,57 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
                     subject: id,
                 })),
             )
-            .mount(&server)
+            .mount(server)
             .await;
     }
+}
+
+async fn step_backfill(
+    storage: &Storage,
+    client: &GmailClient,
+    resumed: bool,
+) -> Result<bool, latentmail_lib::sync::SyncError> {
+    run_backfill_step(BackfillStepContext {
+        storage: storage,
+        client: client,
+        account_id: "account",
+        events: &latentmail_lib::sync::noop_event_sink(),
+        resumed: resumed,
+        cache: None,
+    })
+    .await
+}
+
+#[tokio::test]
+async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cursor() {
+    let server = MockServer::start().await;
+    mount_two_page_backfill_mocks(&server, false).await;
 
     let (storage, _directory) = temp_storage();
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let pause_queue = queue.clone();
-
-    let sink: EventSink = Arc::new(move |name, _payload| {
-        if name == latentmail_lib::events::SYNC_TRAVERSAL {
-            pause_queue.pause();
-        }
-    });
     let engine = SyncEngine::new(SyncEngineDeps {
         storage: storage.clone(),
         queue: queue.clone(),
         registry: registry,
-        events: sink,
+        events: pause_on_traversal_sink(queue.clone()),
     });
     let client = GmailClient::with_base_url("token", server.uri());
     engine.initial_sync("account", client).await.unwrap();
 
-    let mut cursor = None;
-    for _ in 0..1_000 {
-        cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap();
-        if matches!(cursor, Some(ref cursor) if cursor.position.as_deref() == Some("page2")) {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    let cursor = cursor.expect("backfill must have committed page 1");
+    let cursor = wait_for_cursor_position(&storage, "page2")
+        .await
+        .expect("backfill must have committed page 1");
     assert_eq!(cursor.position.as_deref(), Some("page2"));
     assert!(!cursor.completed);
-
     assert!(
         !cursor.resumed,
         "page 2 of a fresh, uninterrupted run must not read as resumed"
     );
 
-    for _ in 0..200 {
-        tokio::task::yield_now().await;
-    }
-    let still_paused_cursor = storage
-        .run(|connection| {
-            TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-        })
+    let_spawned_tasks_settle().await;
+    let still_paused_cursor = load_cursor(&storage, TraversalKind::Backfill)
         .await
-        .unwrap()
         .unwrap();
     assert!(
         !still_paused_cursor.completed,
@@ -198,57 +334,17 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
 
     queue.resume();
 
-    let mut completed = false;
-    for _ in 0..1_000 {
-        let cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap()
-            .unwrap();
-        if cursor.completed {
-            completed = true;
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    assert!(completed, "backfill must complete once resumed");
-    let final_cursor = storage
-        .run(|connection| {
-            TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-        })
+    let final_cursor = wait_for_cursor_completed(&storage, 1_000)
         .await
-        .unwrap()
-        .unwrap();
+        .expect("backfill must complete once resumed");
     assert!(
         !final_cursor.resumed,
         "a fresh run's final page must still read as not-resumed"
     );
 }
 
-#[tokio::test]
-async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "emailAddress": "me@example.com", "messagesTotal": 0, "threadsTotal": 0, "historyId": "1"
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .and(query_param("q", "newer_than:30d"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
-        .mount(&server)
-        .await;
-
+async fn mount_resumed_two_page_mocks(server: &MockServer) {
+    mount_empty_initial_sync_scaffold(server).await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("q"))
@@ -256,7 +352,7 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::json!({"messages":[{"id":"m2","threadId":"t2"}],"nextPageToken":"page3"}),
         ))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
@@ -266,7 +362,7 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"messages":[{"id":"m3","threadId":"t3"}]})),
         )
-        .mount(&server)
+        .mount(server)
         .await;
     for (id, thread) in [("m2", "t2"), ("m3", "t3")] {
         Mock::given(method("GET"))
@@ -279,68 +375,47 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
                     subject: id,
                 })),
             )
-            .mount(&server)
+            .mount(server)
             .await;
     }
+}
+
+#[tokio::test]
+async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
+    let server = MockServer::start().await;
+    mount_resumed_two_page_mocks(&server).await;
 
     let (storage, _directory) = temp_storage();
-
-    storage
-        .run(|connection| {
-            TraversalCursorRepository::upsert(
-                connection,
-                &TraversalCursor {
-                    account_id: "account".into(),
-                    kind: TraversalKind::Backfill,
-                    position: Some("page2".into()),
-                    discovered_count: 1,
-                    persisted_count: 1,
-                    completed: false,
-                    last_advanced_at: 1,
-                    resumed: false,
-                },
-            )
-        })
-        .await
-        .unwrap();
+    save_cursor(
+        &storage,
+        TraversalCursor {
+            account_id: "account".into(),
+            kind: TraversalKind::Backfill,
+            position: Some("page2".into()),
+            discovered_count: 1,
+            persisted_count: 1,
+            completed: false,
+            last_advanced_at: 1,
+            resumed: false,
+        },
+    )
+    .await;
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let pause_queue = queue.clone();
     let pauses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let sink_pauses = Arc::clone(&pauses);
-    let sink: EventSink = Arc::new(move |name, _payload| {
-        if name == latentmail_lib::events::SYNC_TRAVERSAL {
-            pause_queue.pause();
-            sink_pauses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-    });
     let engine = SyncEngine::new(SyncEngineDeps {
         storage: storage.clone(),
         queue: queue.clone(),
         registry: registry,
-        events: sink,
+        events: counting_pause_sink(queue.clone(), Arc::clone(&pauses)),
     });
     let client = GmailClient::with_base_url("token", server.uri());
     engine.initial_sync("account", client).await.unwrap();
 
-    let mut cursor = None;
-    for _ in 0..1_000 {
-        cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap();
-        let paused = pauses.load(std::sync::atomic::Ordering::SeqCst) >= 1;
-        let at_page3 =
-            matches!(cursor, Some(ref cursor) if cursor.position.as_deref() == Some("page3"));
-        if at_page3 && paused {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-    }
-    let cursor = cursor.expect("this run's first page must have committed");
+    let cursor = wait_for_resumed_page(&storage, &pauses, "page3")
+        .await
+        .expect("this run's first page must have committed");
     assert_eq!(cursor.position.as_deref(), Some("page3"));
     assert!(
         cursor.resumed,
@@ -349,22 +424,9 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
 
     queue.resume();
 
-    let mut final_cursor = None;
-    for _ in 0..1_000 {
-        let candidate = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap()
-            .unwrap();
-        if candidate.completed {
-            final_cursor = Some(candidate);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-    }
-    let final_cursor = final_cursor.expect("backfill must complete");
+    let final_cursor = wait_for_completed_with_sleep(&storage)
+        .await
+        .expect("backfill must complete");
     assert!(
         final_cursor.resumed,
         "page 2+ of the same resumed run must still read as resumed, not flip back"
@@ -474,10 +536,8 @@ async fn persisted_messages_carry_metadata_membership_and_truncated_body_only() 
     assert_eq!(label_ids, vec!["STARRED".to_owned(), "TRASH".to_owned()]);
 }
 
-#[tokio::test]
-async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
-    let server = MockServer::start().await;
-    mount_profile(&server, 2).await;
+async fn mount_interrupted_backfill_mocks(server: &MockServer) {
+    mount_profile(server, 2).await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("pageToken"))
@@ -486,7 +546,7 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
             "nextPageToken": "page2"
         })))
         .expect(1)
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
@@ -494,7 +554,7 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "messages": [{"id": "m2", "threadId": "t2"}]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
@@ -507,14 +567,13 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
             })),
         )
         .expect(1)
-        .mount(&server)
+        .mount(server)
         .await;
-
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m2"))
         .respond_with(ResponseTemplate::new(403))
         .up_to_n_times(1)
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m2"))
@@ -526,57 +585,37 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
                 subject: "Second",
             })),
         )
-        .mount(&server)
+        .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
+    let server = MockServer::start().await;
+    mount_interrupted_backfill_mocks(&server).await;
 
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
 
-    let page_one = run_backfill_step(BackfillStepContext {
-        storage: &storage,
-        client: &client,
-        account_id: "account",
-        events: &latentmail_lib::sync::noop_event_sink(),
-        resumed: false,
-        cache: None,
-    })
-    .await;
+    let page_one = step_backfill(&storage, &client, false).await;
     assert!(page_one.is_ok(), "page 1 must commit cleanly");
     assert!(!page_one.unwrap(), "page 1 alone is not the whole backfill");
 
-    let page_two = run_backfill_step(BackfillStepContext {
-        storage: &storage,
-        client: &client,
-        account_id: "account",
-        events: &latentmail_lib::sync::noop_event_sink(),
-        resumed: false,
-        cache: None,
-    })
-    .await;
+    let page_two = step_backfill(&storage, &client, false).await;
     assert!(
         page_two.is_err(),
         "page 2's message fetch was mocked to fail"
     );
 
-    let connection = storage.connection().unwrap();
-    let cursor = TraversalCursorRepository::get(&connection, "account", TraversalKind::Backfill)
-        .unwrap()
+    let cursor = load_cursor(&storage, TraversalKind::Backfill)
+        .await
         .unwrap();
     assert_eq!(cursor.position.as_deref(), Some("page2"));
     assert_eq!(cursor.discovered_count, 2);
     assert_eq!(cursor.persisted_count, 1);
     assert!(!cursor.completed);
-    drop(connection);
 
-    let second_attempt = run_backfill_step(BackfillStepContext {
-        storage: &storage,
-        client: &client,
-        account_id: "account",
-        events: &latentmail_lib::sync::noop_event_sink(),
-        resumed: false,
-        cache: None,
-    })
-    .await;
+    let second_attempt = step_backfill(&storage, &client, false).await;
     assert!(second_attempt.unwrap(), "the resumed page is the last one");
 
     let connection = storage.connection().unwrap();
@@ -596,174 +635,86 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     server.verify().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_flight() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "emailAddress": "me@example.com", "messagesTotal": 0, "threadsTotal": 0, "historyId": "1"
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
-        .await;
+const SETTLING_YIELDS: usize = 200;
 
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .and(query_param("q", "newer_than:30d"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .and(query_param_is_missing("q"))
-        .and(query_param_is_missing("pageToken"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({"messages":[{"id":"m1","threadId":"t1"}],"nextPageToken":"page2"}),
-        ))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .and(query_param_is_missing("q"))
-        .and(query_param("pageToken", "page2"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"messages":[{"id":"m2","threadId":"t2"}]})),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    for (id, thread) in [("m1", "t1"), ("m2", "t2")] {
-        Mock::given(method("GET"))
-            .and(path(format!("/users/me/messages/{id}")))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
-                    id: id,
-                    thread_id: thread,
-                    history_id: "10",
-                    subject: id,
-                })),
-            )
-            .mount(&server)
-            .await;
+async fn let_spawned_tasks_settle() {
+    for _ in 0..SETTLING_YIELDS {
+        tokio::task::yield_now().await;
     }
+}
 
-    let (storage, _directory) = temp_storage();
+struct PausingTraversalEngine {
+    engine: Arc<SyncEngine>,
+    queue: Arc<latentmail_lib::queue::QueueEngine>,
+}
+
+fn build_pausing_traversal_engine(
+    storage: &Storage,
+    queue_events: &Arc<Mutex<Vec<serde_json::Value>>>,
+) -> PausingTraversalEngine {
     let registry = WorkRegistry::new();
-
-    let queue_events = Arc::new(Mutex::new(Vec::new()));
-    let sink_events = Arc::clone(&queue_events);
     let queue = latentmail_lib::sync::create_queue_engine_with_events(
         QueueRateConfig {
             rate_per_second: 250,
             burst: 250,
         },
         registry.clone(),
-        Arc::new(move |name, payload| {
-            if name == latentmail_lib::events::QUEUE_ITEM {
-                sink_events.lock().unwrap().push(payload);
-            }
-        }),
+        queue_item_collector(Arc::clone(queue_events)),
     );
-    let pause_queue = queue.clone();
-
-    let sink: EventSink = Arc::new(move |name, _payload| {
-        if name == latentmail_lib::events::SYNC_TRAVERSAL {
-            pause_queue.pause();
-        }
-    });
     let engine = SyncEngine::new(SyncEngineDeps {
         storage: storage.clone(),
         queue: queue.clone(),
         registry: registry,
-        events: sink,
+        events: pause_on_traversal_sink(queue.clone()),
     });
-    let client = GmailClient::with_base_url("token", server.uri());
+    PausingTraversalEngine {
+        engine: engine,
+        queue: queue,
+    }
+}
 
+#[tokio::test(start_paused = true)]
+async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_flight() {
+    let server = MockServer::start().await;
+    mount_two_page_backfill_mocks(&server, true).await;
+
+    let (storage, _directory) = temp_storage();
+    let queue_events = Arc::new(Mutex::new(Vec::new()));
+    let PausingTraversalEngine { engine, queue } =
+        build_pausing_traversal_engine(&storage, &queue_events);
+    let client = GmailClient::with_base_url("token", server.uri());
     engine
         .initial_sync("account", client.clone())
         .await
         .unwrap();
 
-    let distinct_traversal_ops = || {
-        let count = queue_events
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|event| event["status"] == "done")
-            .filter_map(|event| event["id"].as_str())
-            .filter(|id| id.starts_with("traversal:account:"))
-            .map(str::to_owned)
-            .collect::<std::collections::HashSet<_>>()
-            .len();
-        count
-    };
-
-    let mut cursor = None;
-    for _ in 0..1_000 {
-        cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap();
-        if matches!(cursor, Some(ref cursor) if cursor.position.as_deref() == Some("page2"))
-            && distinct_traversal_ops() == 1
-        {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    let cursor = wait_for_page_and_single_op(&storage, &queue_events, "page2")
+        .await
+        .expect("page 1 must have committed and its operation must settle");
+    assert_eq!(cursor.position.as_deref(), Some("page2"));
     assert_eq!(
-        cursor
-            .expect("page 1 must have committed and its operation must settle")
-            .position
-            .as_deref(),
-        Some("page2")
-    );
-    assert_eq!(
-        distinct_traversal_ops(),
+        completed_traversal_op_ids(&queue_events).len(),
         1,
         "only page 1 has completed so far"
     );
 
     engine.enqueue_backfill("account", client.clone()).await;
-
-    for _ in 0..200 {
-        tokio::task::yield_now().await;
-    }
+    let_spawned_tasks_settle().await;
     assert_eq!(
-        distinct_traversal_ops(),
+        completed_traversal_op_ids(&queue_events).len(),
         1,
         "a second enqueue_backfill call while the first chain is in-flight must not start a new chain"
     );
 
     queue.resume();
-    let mut completed = false;
-    for _ in 0..1_000 {
-        let cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
+    assert!(
+        wait_for_completed_and_ops(&storage, &queue_events, 2)
             .await
-            .unwrap()
-            .unwrap();
-        if cursor.completed && distinct_traversal_ops() == 2 {
-            completed = true;
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    assert!(completed, "the first (only) chain must complete");
+            .is_some(),
+        "the first (only) chain must complete"
+    );
     assert_eq!(
-        distinct_traversal_ops(),
+        completed_traversal_op_ids(&queue_events).len(),
         2,
         "the completed chain must be exactly the original two pages — no interleaved third op"
     );
@@ -771,11 +722,9 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
 
     queue.resume();
     engine.enqueue_backfill("account", client).await;
-    for _ in 0..200 {
-        tokio::task::yield_now().await;
-    }
+    let_spawned_tasks_settle().await;
     assert_eq!(
-        distinct_traversal_ops(),
+        completed_traversal_op_ids(&queue_events).len(),
         2,
         "a completed cursor must make enqueue_backfill a no-op rather than queue an operation that only re-reads it"
     );
@@ -808,24 +757,20 @@ async fn enqueue_backfill_still_starts_a_chain_when_the_cursor_stopped_short_of_
         .await;
 
     let (storage, _directory) = temp_storage();
-    storage
-        .run(|connection| {
-            TraversalCursorRepository::upsert(
-                connection,
-                &TraversalCursor {
-                    account_id: "account".to_owned(),
-                    kind: TraversalKind::Backfill,
-                    position: Some("page2".to_owned()),
-                    discovered_count: 2,
-                    persisted_count: 1,
-                    completed: false,
-                    last_advanced_at: 0,
-                    resumed: false,
-                },
-            )
-        })
-        .await
-        .unwrap();
+    save_cursor(
+        &storage,
+        TraversalCursor {
+            account_id: "account".to_owned(),
+            kind: TraversalKind::Backfill,
+            position: Some("page2".to_owned()),
+            discovered_count: 2,
+            persisted_count: 1,
+            completed: false,
+            last_advanced_at: 0,
+            resumed: false,
+        },
+    )
+    .await;
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
@@ -835,28 +780,12 @@ async fn enqueue_backfill_still_starts_a_chain_when_the_cursor_stopped_short_of_
         registry: registry,
         events: latentmail_lib::sync::noop_event_sink(),
     });
-
     engine
         .enqueue_backfill("account", GmailClient::with_base_url("token", server.uri()))
         .await;
 
-    let mut completed = false;
-    for _ in 0..1_000 {
-        let cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap()
-            .unwrap();
-        if cursor.completed {
-            completed = true;
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
     assert!(
-        completed,
+        wait_for_cursor_completed(&storage, 1_000).await.is_some(),
         "an unfinished cursor must still be resumed by enqueue_backfill"
     );
 }
@@ -886,53 +815,36 @@ async fn backfill_runs_normally_alongside_an_unrelated_reconciliation_cursor_row
         .await;
 
     let (storage, _directory) = temp_storage();
-    storage
-        .run(|connection| {
-            TraversalCursorRepository::upsert(
-                connection,
-                &TraversalCursor {
-                    account_id: "account".into(),
-                    kind: TraversalKind::Reconciliation,
-                    position: Some("in-progress".into()),
-                    discovered_count: 3,
-                    persisted_count: 3,
-                    completed: false,
-                    last_advanced_at: 1,
-                    resumed: false,
-                },
-            )
-        })
-        .await
-        .unwrap();
+    save_cursor(
+        &storage,
+        TraversalCursor {
+            account_id: "account".into(),
+            kind: TraversalKind::Reconciliation,
+            position: Some("in-progress".into()),
+            discovered_count: 3,
+            persisted_count: 3,
+            completed: false,
+            last_advanced_at: 1,
+            resumed: false,
+        },
+    )
+    .await;
 
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
+    step_backfill(&storage, &client, false).await.unwrap();
 
-    run_backfill_step(BackfillStepContext {
-        storage: &storage,
-        client: &client,
-        account_id: "account",
-        events: &latentmail_lib::sync::noop_event_sink(),
-        resumed: false,
-        cache: None,
-    })
-    .await
-    .unwrap();
-
-    let connection = storage.connection().unwrap();
-    let backfill_cursor =
-        TraversalCursorRepository::get(&connection, "account", TraversalKind::Backfill)
-            .unwrap()
-            .unwrap();
+    let backfill_cursor = load_cursor(&storage, TraversalKind::Backfill)
+        .await
+        .unwrap();
     assert!(
         backfill_cursor.completed,
         "backfill must run to completion, not silently no-op"
     );
     assert_eq!(backfill_cursor.discovered_count, 1);
 
-    let reconciliation_cursor =
-        TraversalCursorRepository::get(&connection, "account", TraversalKind::Reconciliation)
-            .unwrap()
-            .unwrap();
+    let reconciliation_cursor = load_cursor(&storage, TraversalKind::Reconciliation)
+        .await
+        .unwrap();
     assert_eq!(
         reconciliation_cursor.position.as_deref(),
         Some("in-progress")
@@ -944,36 +856,56 @@ async fn backfill_runs_normally_alongside_an_unrelated_reconciliation_cursor_row
     );
 }
 
-#[tokio::test]
-async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes() {
-    let server = MockServer::start().await;
-
+async fn mount_reconciliation_then_backfill_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/history"))
         .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "emailAddress": "me@example.com", "messagesTotal": 6, "threadsTotal": 0, "historyId": "50"
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
-        .mount(&server)
+        .mount(server)
         .await;
-
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("pageToken"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
-        .mount(&server)
+        .mount(server)
         .await;
+}
 
-    let (storage, _directory) = temp_storage();
+async fn mount_backfill_page_two_mock(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .and(query_param("pageToken", "page2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "messages": [{"id": "m1", "threadId": "t1"}]
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
+                id: "m1",
+                thread_id: "t1",
+                history_id: "10",
+                subject: "Hello",
+            })),
+        )
+        .mount(server)
+        .await;
+}
+
+async fn seed_account_with_half_done_backfill(storage: &Storage) {
     storage
         .run(|connection| {
             AccountRepository::upsert(
@@ -992,25 +924,46 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         })
         .await
         .unwrap();
+    save_cursor(
+        storage,
+        TraversalCursor {
+            account_id: "account".into(),
+            kind: TraversalKind::Backfill,
+            position: Some("page2".into()),
+            discovered_count: 5,
+            persisted_count: 5,
+            completed: false,
+            last_advanced_at: 1,
+            resumed: false,
+        },
+    )
+    .await;
+}
 
-    storage
-        .run(|connection| {
-            TraversalCursorRepository::upsert(
-                connection,
-                &TraversalCursor {
-                    account_id: "account".into(),
-                    kind: TraversalKind::Backfill,
-                    position: Some("page2".into()),
-                    discovered_count: 5,
-                    persisted_count: 5,
-                    completed: false,
-                    last_advanced_at: 1,
-                    resumed: false,
-                },
-            )
-        })
-        .await
-        .unwrap();
+async fn assert_reconciliation_left_backfill_untouched(storage: &Storage) {
+    let backfill_cursor = load_cursor(storage, TraversalKind::Backfill).await.unwrap();
+    assert_eq!(backfill_cursor.position.as_deref(), Some("page2"));
+    assert_eq!(backfill_cursor.discovered_count, 5);
+    assert_eq!(backfill_cursor.persisted_count, 5);
+    assert!(
+        !backfill_cursor.completed,
+        "reconciliation must not have advanced or completed backfill's cursor"
+    );
+    assert!(
+        load_cursor(storage, TraversalKind::Reconciliation)
+            .await
+            .unwrap()
+            .completed
+    );
+}
+
+#[tokio::test]
+async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes() {
+    let server = MockServer::start().await;
+    mount_reconciliation_then_backfill_mocks(&server).await;
+
+    let (storage, _directory) = temp_storage();
+    seed_account_with_half_done_backfill(&storage).await;
 
     let registry = WorkRegistry::new();
     let engine = SyncEngine::new(SyncEngineDeps {
@@ -1024,70 +977,14 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         .await
         .unwrap();
 
-    let backfill_cursor = storage
-        .run(|connection| {
-            TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-        })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(backfill_cursor.position.as_deref(), Some("page2"));
-    assert_eq!(backfill_cursor.discovered_count, 5);
-    assert_eq!(backfill_cursor.persisted_count, 5);
-    assert!(
-        !backfill_cursor.completed,
-        "reconciliation must not have advanced or completed backfill's cursor"
-    );
+    assert_reconciliation_left_backfill_untouched(&storage).await;
 
-    let reconciliation_cursor = storage
-        .run(|connection| {
-            TraversalCursorRepository::get(connection, "account", TraversalKind::Reconciliation)
-        })
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(reconciliation_cursor.completed);
-
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .and(query_param("pageToken", "page2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{"id": "m1", "threadId": "t1"}]
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages/m1"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(message_json(MessageJson {
-                id: "m1",
-                thread_id: "t1",
-                history_id: "10",
-                subject: "Hello",
-            })),
-        )
-        .mount(&server)
-        .await;
-
+    mount_backfill_page_two_mock(&server).await;
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
+    step_backfill(&storage, &client, true).await.unwrap();
 
-    run_backfill_step(BackfillStepContext {
-        storage: &storage,
-        client: &client,
-        account_id: "account",
-        events: &latentmail_lib::sync::noop_event_sink(),
-        resumed: true,
-        cache: None,
-    })
-    .await
-    .unwrap();
-
-    let resumed_cursor = storage
-        .run(|connection| {
-            TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-        })
+    let resumed_cursor = load_cursor(&storage, TraversalKind::Backfill)
         .await
-        .unwrap()
         .unwrap();
     assert!(
         resumed_cursor.completed,
@@ -1095,7 +992,6 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
     );
     assert_eq!(resumed_cursor.discovered_count, 6);
     assert_eq!(resumed_cursor.persisted_count, 6);
-
     let connection = storage.connection().unwrap();
     assert!(MessageRepository::get(&connection, "account", "m1")
         .unwrap()
@@ -1255,29 +1151,39 @@ async fn progress_events_carry_counts_only_never_a_percentage_or_estimate() {
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
-    let server = MockServer::start().await;
+async fn mount_initial_sync_inbox_mocks(server: &MockServer, two_pages: bool) {
+    mount_profile_and_inbox_label(server).await;
+    if !two_pages {
+        mount_single_inbox_page(server).await;
+        return;
+    }
+    mount_two_inbox_pages(server).await;
+}
+
+async fn mount_profile_and_inbox_label(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "emailAddress": "me@example.com", "messagesTotal": 1, "threadsTotal": 1, "historyId": "100"
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "labels": [{"id":"INBOX","name":"Inbox","type":"system","messagesTotal":1,"messagesUnread":0}]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
+}
+
+async fn mount_single_inbox_page(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "messages": [{"id": "m1", "threadId": "t1"}]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1"))
@@ -1289,76 +1195,11 @@ async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
                 subject: "Hello",
             })),
         )
-        .mount(&server)
+        .mount(server)
         .await;
-
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    {
-        let connection = storage.connection().unwrap();
-        latentmail_lib::storage::AccountRepository::upsert(
-            &connection,
-            &latentmail_lib::storage::Account {
-                id: "account".into(),
-                email: "me@example.com".into(),
-                display_name: String::new(),
-                avatar_url: None,
-                history_id: None,
-                needs_reauthentication: false,
-                created_at: 1,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-    }
-    let registry = WorkRegistry::new();
-    let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: queue,
-        registry: registry,
-        events: latentmail_lib::sync::noop_event_sink(),
-    });
-    let client = GmailClient::with_base_url("token", server.uri());
-
-    engine.initial_sync("account", client).await.unwrap();
-
-    let mut cursor = None;
-    for _ in 0..10_000 {
-        cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap();
-        if matches!(&cursor, Some(cursor) if cursor.completed) {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    assert!(
-        matches!(&cursor, Some(cursor) if cursor.completed),
-        "backfill enqueued by initial_sync never completed"
-    );
 }
 
-#[tokio::test(start_paused = true)]
-async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "emailAddress": "me@example.com", "messagesTotal": 1, "threadsTotal": 1, "historyId": "100"
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/labels"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "labels": [{"id":"INBOX","name":"Inbox","type":"system","messagesTotal":1,"messagesUnread":0}]
-        })))
-        .mount(&server)
-        .await;
+async fn mount_two_inbox_pages(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("pageToken"))
@@ -1366,7 +1207,7 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
             "messages": [{"id": "m1", "threadId": "t1"}],
             "nextPageToken": "page2"
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
@@ -1374,7 +1215,7 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "messages": [{"id": "m2", "threadId": "t2"}]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     for id in ["m1", "m2"] {
         Mock::given(method("GET"))
@@ -1387,44 +1228,50 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
                     subject: id,
                 })),
             )
-            .mount(&server)
+            .mount(server)
             .await;
     }
+}
 
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    {
-        let connection = storage.connection().unwrap();
-        latentmail_lib::storage::AccountRepository::upsert(
-            &connection,
-            &latentmail_lib::storage::Account {
-                id: "account".into(),
-                email: "me@example.com".into(),
-                display_name: String::new(),
-                avatar_url: None,
-                history_id: None,
-                needs_reauthentication: false,
-                created_at: 1,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-    }
+#[tokio::test(start_paused = true)]
+async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
+    let server = MockServer::start().await;
+    mount_initial_sync_inbox_mocks(&server, false).await;
+
+    let (storage, _directory) = temp_storage();
     let registry = WorkRegistry::new();
+    let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: queue,
+        registry: registry,
+        events: latentmail_lib::sync::noop_event_sink(),
+    });
+    let client = GmailClient::with_base_url("token", server.uri());
 
+    engine.initial_sync("account", client).await.unwrap();
+
+    assert!(
+        wait_for_cursor_completed(&storage, 10_000).await.is_some(),
+        "backfill enqueued by initial_sync never completed"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
+    let server = MockServer::start().await;
+    mount_initial_sync_inbox_mocks(&server, true).await;
+
+    let (storage, _directory) = temp_storage();
+    let registry = WorkRegistry::new();
     let queue_events = Arc::new(Mutex::new(Vec::new()));
-    let sink_events = Arc::clone(&queue_events);
     let queue = latentmail_lib::sync::create_queue_engine_with_events(
         QueueRateConfig {
             rate_per_second: 250,
             burst: 250,
         },
         registry.clone(),
-        Arc::new(move |name, payload| {
-            if name == latentmail_lib::events::QUEUE_ITEM {
-                sink_events.lock().unwrap().push(payload);
-            }
-        }),
+        queue_item_collector(Arc::clone(&queue_events)),
     );
     let engine = SyncEngine::new(SyncEngineDeps {
         storage: storage.clone(),
@@ -1436,35 +1283,10 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
 
     engine.initial_sync("account", client).await.unwrap();
 
-    let completed_traversal_ops = || {
-        queue_events
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|event| event["status"] == "done")
-            .filter_map(|event| event["id"].as_str())
-            .filter(|id| id.starts_with("traversal:account:"))
-            .map(str::to_owned)
-            .collect::<std::collections::HashSet<_>>()
-    };
-
-    let mut cursor = None;
-    for _ in 0..10_000 {
-        cursor = storage
-            .run(|connection| {
-                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
-            })
-            .await
-            .unwrap();
-        let settled = completed_traversal_ops().len() == 2;
-        if matches!(&cursor, Some(cursor) if cursor.completed) && settled {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    let cursor = wait_for_completed_and_ops(&storage, &queue_events, 2).await;
     assert!(matches!(&cursor, Some(cursor) if cursor.completed));
 
-    let distinct_traversal_ops = completed_traversal_ops();
+    let distinct_traversal_ops = completed_traversal_op_ids(&queue_events);
     assert_eq!(
         distinct_traversal_ops.len(),
         2,

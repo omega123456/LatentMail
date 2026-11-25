@@ -37,41 +37,41 @@ pub fn parse_logo_url(txt_value: &str) -> Option<String> {
     None
 }
 
+async fn resolve_candidate_logo(cache: &AvatarCache, candidate: &str) -> Option<Vec<u8>> {
+    let cache_key = hash_key(candidate);
+    match cache.answer(&cache_key, CacheDomain::Sender).await {
+        CacheAnswer::Fresh(Some(path)) => return std::fs::read(&path).ok(),
+        CacheAnswer::Fresh(None) => return None,
+        CacheAnswer::Stale => {}
+    }
+    let Some(url) = lookup_logo_url(candidate).await else {
+        let _ = cache.store_miss(&cache_key).await;
+        return None;
+    };
+    let Some(bytes) = resolver::download(&url).await else {
+        let _ = cache.store_miss(&cache_key).await;
+        return None;
+    };
+    let Ok(validated) = image::validate(&bytes) else {
+        let _ = cache.store_miss(&cache_key).await;
+        return None;
+    };
+    let png = image::normalize_to_png(validated);
+    let _ = cache
+        .store_hit(super::cache::CachedAvatar {
+            cache_key: &cache_key,
+            domain: CacheDomain::Sender,
+            png_bytes: &png,
+        })
+        .await;
+    Some(png)
+}
+
 pub async fn resolve_logo(cache: &AvatarCache, sender_domain: &str) -> Option<Vec<u8>> {
     for candidate in candidate_domains(sender_domain) {
-        let cache_key = hash_key(&candidate);
-        match cache.answer(&cache_key, CacheDomain::Sender).await {
-            CacheAnswer::Fresh(Some(path)) => {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    return Some(bytes);
-                }
-                continue;
-            }
-            CacheAnswer::Fresh(None) => continue,
-            CacheAnswer::Stale => {}
+        if let Some(logo) = resolve_candidate_logo(cache, &candidate).await {
+            return Some(logo);
         }
-
-        let Some(url) = lookup_logo_url(&candidate).await else {
-            let _ = cache.store_miss(&cache_key).await;
-            continue;
-        };
-        let Some(bytes) = resolver::download(&url).await else {
-            let _ = cache.store_miss(&cache_key).await;
-            continue;
-        };
-        let Ok(validated) = image::validate(&bytes) else {
-            let _ = cache.store_miss(&cache_key).await;
-            continue;
-        };
-        let png = image::normalize_to_png(validated);
-        let _ = cache
-            .store_hit(super::cache::CachedAvatar {
-                cache_key: &cache_key,
-                domain: CacheDomain::Sender,
-                png_bytes: &png,
-            })
-            .await;
-        return Some(png);
     }
     None
 }

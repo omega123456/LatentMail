@@ -86,6 +86,13 @@ async fn applies_idempotent_global_pause_state() {
 }
 
 #[cfg(unix)]
+async fn wait_for_socket(path: &std::path::Path) {
+    while !path.exists() {
+        tokio::time::sleep(chrono::Duration::milliseconds(1).to_std().unwrap()).await;
+    }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn serves_one_json_command_and_rejects_invalid_json() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -99,11 +106,7 @@ async fn serves_one_json_command_and_rejects_invalid_json() {
     let mut server = tokio::spawn(serve(path.clone(), Arc::clone(&queue)));
     let wait = tokio::time::timeout(
         chrono::Duration::milliseconds(100).to_std().unwrap(),
-        async {
-            while !path.exists() {
-                tokio::time::sleep(chrono::Duration::milliseconds(1).to_std().unwrap()).await;
-            }
-        },
+        wait_for_socket(&path),
     );
     tokio::select! {
         result = &mut server => panic!("server stopped: {result:?}"),

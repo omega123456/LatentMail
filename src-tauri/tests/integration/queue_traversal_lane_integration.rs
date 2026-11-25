@@ -18,18 +18,35 @@ fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn traversal_and_background_have_independent_concurrency() {
-    let (started, mut receiver) = mpsc::unbounded_channel();
-    let executor: Executor = Arc::new(move |operation| {
+fn pending_recording_executor(started: mpsc::UnboundedSender<String>) -> Executor {
+    Arc::new(move |operation| {
         let started = started.clone();
         Box::pin(async move {
             started.send(operation.id).unwrap();
-
             std::future::pending::<Result<(), QueueError>>().await
         })
-    });
-    let queue = QueueEngine::new(250, 250, executor);
+    })
+}
+
+fn interactive_notifying_executor(notify: Arc<tokio::sync::Notify>) -> Executor {
+    Arc::new(move |operation| Box::pin(notify_for_interactive_lane(Arc::clone(&notify), operation)))
+}
+
+async fn notify_for_interactive_lane(
+    notify: Arc<tokio::sync::Notify>,
+    operation: QueueOperation,
+) -> Result<(), QueueError> {
+    if operation.lane == Lane::Interactive {
+        notify.notify_one();
+        return Ok(());
+    }
+    std::future::pending::<Result<(), QueueError>>().await
+}
+
+#[tokio::test(start_paused = true)]
+async fn traversal_and_background_have_independent_concurrency() {
+    let (started, mut receiver) = mpsc::unbounded_channel();
+    let queue = QueueEngine::new(250, 250, pending_recording_executor(started));
     queue
         .enqueue(operation("background-stuck", Lane::Background, "bg"))
         .await
@@ -54,14 +71,7 @@ async fn traversal_and_background_have_independent_concurrency() {
 #[tokio::test(start_paused = true)]
 async fn traversal_yields_to_interactive_like_background() {
     let (started, mut receiver) = mpsc::unbounded_channel();
-    let executor: Executor = Arc::new(move |operation| {
-        let started = started.clone();
-        Box::pin(async move {
-            started.send(operation.id).unwrap();
-            std::future::pending::<Result<(), QueueError>>().await
-        })
-    });
-    let queue = QueueEngine::new(250, 250, executor);
+    let queue = QueueEngine::new(250, 250, pending_recording_executor(started));
     for index in 0..5 {
         queue
             .enqueue(operation(
@@ -89,18 +99,11 @@ async fn traversal_yields_to_interactive_like_background() {
 #[tokio::test(start_paused = true)]
 async fn interactive_dispatches_promptly_with_many_traversal_operations_queued() {
     let interactive_started = Arc::new(tokio::sync::Notify::new());
-    let notify_for_executor = Arc::clone(&interactive_started);
-    let executor: Executor = Arc::new(move |operation| {
-        let notify = Arc::clone(&notify_for_executor);
-        Box::pin(async move {
-            if operation.lane == Lane::Interactive {
-                notify.notify_one();
-                return Ok(());
-            }
-            std::future::pending::<Result<(), QueueError>>().await
-        })
-    });
-    let queue = QueueEngine::new(1_000, 1_000, executor);
+    let queue = QueueEngine::new(
+        1_000,
+        1_000,
+        interactive_notifying_executor(Arc::clone(&interactive_started)),
+    );
     for index in 0..200 {
         queue
             .enqueue(operation(

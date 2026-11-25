@@ -82,11 +82,73 @@ async fn mount_reconciliation_scaffold(server: &MockServer) {
         .await;
 }
 
-#[tokio::test]
-async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pipeline() {
-    let server = MockServer::start().await;
-    mount_reconciliation_scaffold(&server).await;
+fn thread_stub(id: &str, subject: &str) -> Thread {
+    Thread {
+        account_id: "account".into(),
+        id: id.into(),
+        subject: subject.into(),
+        participants: "sender@example.com".into(),
+        latest_at: 1,
+        message_count: 1,
+        is_unread: false,
+        is_starred: false,
+        has_attachments: false,
+        has_draft: false,
+        sender_identity: ThreadIdentity {
+            display: "sender@example.com".into(),
+            address: Some("sender@example.com".into()),
+        },
+        recipient_identity: None,
+    }
+}
 
+fn attach_labels(connection: &rusqlite::Connection, message_id: &str, labels: &[&str]) {
+    for label in labels {
+        LabelRepository::ensure_placeholder(connection, "account", label).unwrap();
+        MessageRepository::set_label_membership(
+            connection,
+            MessageKey {
+                account_id: "account",
+                message_id: message_id,
+            },
+            LabelMembershipChange {
+                label_id: label,
+                present: true,
+            },
+        )
+        .unwrap();
+    }
+}
+
+fn traversal_event_sink(
+    events: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) -> latentmail_lib::sync::EventSink {
+    std::sync::Arc::new(move |name, payload| {
+        if name == latentmail_lib::events::SYNC_TRAVERSAL {
+            events.lock().unwrap().push(payload);
+        }
+    })
+}
+
+async fn run_sync_with_sink(
+    storage: &Storage,
+    server: &MockServer,
+    events: latentmail_lib::sync::EventSink,
+) {
+    let registry = WorkRegistry::new();
+    let engine = SyncEngine::new(SyncEngineDeps {
+        storage: storage.clone(),
+        queue: create_queue_engine(250, 250, registry.clone()),
+        registry: registry,
+        events: events,
+    });
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+}
+
+async fn mount_trashed_starred_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("labelIds"))
@@ -97,7 +159,7 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
                 {"id": "kept", "threadId": "kept-thread"}
             ]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/starred-trash"))
@@ -106,7 +168,7 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
             "labelIds": ["TRASH", "STARRED", "UNREAD"], "internalDate": "1000",
             "payload": { "headers": [{"name": "Subject", "value": "Trashed"}] }
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     for label in ["TRASH", "STARRED", "UNREAD"] {
         Mock::given(method("GET"))
@@ -117,9 +179,16 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
                 "messages": [{"id": "starred-trash", "threadId": "thread-1"}]
             })))
             .expect(1)
-            .mount(&server)
+            .mount(server)
             .await;
     }
+}
+
+#[tokio::test]
+async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pipeline() {
+    let server = MockServer::start().await;
+    mount_reconciliation_scaffold(&server).await;
+    mount_trashed_starred_mocks(&server).await;
 
     let (storage, _directory) = temp_storage(Some(1));
     let connection = storage.connection().unwrap();
@@ -127,39 +196,12 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
         .unwrap();
     ThreadRepository::upsert(
         &connection,
-        &Thread {
-            account_id: "account".into(),
-            id: "kept-thread".into(),
-            subject: "STALE — must not be recomputed".into(),
-            participants: "sender@example.com".into(),
-            latest_at: 1,
-            message_count: 1,
-            is_unread: false,
-            is_starred: false,
-            has_attachments: false,
-            has_draft: false,
-            sender_identity: ThreadIdentity {
-                display: "sender@example.com".into(),
-                address: Some("sender@example.com".into()),
-            },
-            recipient_identity: None,
-        },
+        &thread_stub("kept-thread", "STALE — must not be recomputed"),
     )
     .unwrap();
     drop(connection);
 
-    let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: create_queue_engine(250, 250, registry.clone()),
-        registry: registry,
-        events: noop_event_sink(),
-    });
-    engine
-        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
-        .await
-        .unwrap();
-
+    run_sync_with_sink(&storage, &server, noop_event_sink()).await;
     server.verify().await;
 
     let connection = storage.connection().unwrap();
@@ -184,7 +226,6 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
             "UNREAD".to_owned()
         ]
     );
-
     let kept_thread = ThreadRepository::get(&connection, "account", "kept-thread")
         .unwrap()
         .unwrap();
@@ -250,18 +291,35 @@ async fn reconciliation_failure_never_adopts_the_new_checkpoint() {
     );
 }
 
+async fn mount_single_message_for_all_labels(
+    server: &MockServer,
+    message_id: &str,
+    thread_id: &str,
+) {
+    let listing = serde_json::json!({
+        "messages": [{"id": message_id, "threadId": thread_id}]
+    });
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .and(query_param_is_missing("labelIds"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(listing.clone()))
+        .mount(server)
+        .await;
+    for label in ["TRASH", "STARRED", "UNREAD"] {
+        Mock::given(method("GET"))
+            .and(path("/users/me/messages"))
+            .and(query_param("labelIds", label))
+            .respond_with(ResponseTemplate::new(200).set_body_json(listing.clone()))
+            .mount(server)
+            .await;
+    }
+}
+
 #[tokio::test]
 async fn progress_counts_report_the_distinct_universe_size_not_a_sum_across_labels() {
     let server = MockServer::start().await;
     mount_reconciliation_scaffold(&server).await;
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .and(query_param_is_missing("labelIds"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{"id": "in-every-label", "threadId": "thread-1"}]
-        })))
-        .mount(&server)
-        .await;
+    mount_single_message_for_all_labels(&server, "in-every-label", "thread-1").await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/in-every-label"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -271,36 +329,15 @@ async fn progress_counts_report_the_distinct_universe_size_not_a_sum_across_labe
         })))
         .mount(&server)
         .await;
-    for label in ["TRASH", "STARRED", "UNREAD"] {
-        Mock::given(method("GET"))
-            .and(path("/users/me/messages"))
-            .and(query_param("labelIds", label))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "messages": [{"id": "in-every-label", "threadId": "thread-1"}]
-            })))
-            .mount(&server)
-            .await;
-    }
 
     let (storage, _directory) = temp_storage(Some(1));
     let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let sink_events = std::sync::Arc::clone(&events);
-    let sink: latentmail_lib::sync::EventSink = std::sync::Arc::new(move |name, payload| {
-        if name == latentmail_lib::events::SYNC_TRAVERSAL {
-            sink_events.lock().unwrap().push(payload);
-        }
-    });
-    let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: create_queue_engine(250, 250, registry.clone()),
-        registry: registry,
-        events: sink,
-    });
-    engine
-        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
-        .await
-        .unwrap();
+    run_sync_with_sink(
+        &storage,
+        &server,
+        traversal_event_sink(std::sync::Arc::clone(&events)),
+    )
+    .await;
 
     let events = events.lock().unwrap();
     let completed = events
@@ -327,25 +364,7 @@ async fn progress_counts_report_the_distinct_universe_size_not_a_sum_across_labe
 async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing_listing_order() {
     let server = MockServer::start().await;
     mount_reconciliation_scaffold(&server).await;
-
-    Mock::given(method("GET"))
-        .and(path("/users/me/messages"))
-        .and(query_param_is_missing("labelIds"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{"id": "multi-label", "threadId": "multi-thread"}]
-        })))
-        .mount(&server)
-        .await;
-    for label in ["TRASH", "STARRED", "UNREAD"] {
-        Mock::given(method("GET"))
-            .and(path("/users/me/messages"))
-            .and(query_param("labelIds", label))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "messages": [{"id": "multi-label", "threadId": "multi-thread"}]
-            })))
-            .mount(&server)
-            .await;
-    }
+    mount_single_message_for_all_labels(&server, "multi-label", "multi-thread").await;
 
     let (storage, _directory) = temp_storage(Some(1));
     let connection = storage.connection().unwrap();
@@ -354,56 +373,15 @@ async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing
         &row("multi-label", "multi-thread", "Real Subject"),
     )
     .unwrap();
-    for label in ["TRASH", "STARRED", "UNREAD"] {
-        LabelRepository::ensure_placeholder(&connection, "account", label).unwrap();
-        MessageRepository::set_label_membership(
-            &connection,
-            MessageKey {
-                account_id: "account",
-                message_id: "multi-label",
-            },
-            LabelMembershipChange {
-                label_id: label,
-                present: true,
-            },
-        )
-        .unwrap();
-    }
+    attach_labels(&connection, "multi-label", &["TRASH", "STARRED", "UNREAD"]);
     ThreadRepository::upsert(
         &connection,
-        &Thread {
-            account_id: "account".into(),
-            id: "multi-thread".into(),
-            subject: "STALE — must not be recomputed".into(),
-            participants: "sender@example.com".into(),
-            latest_at: 1,
-            message_count: 1,
-            is_unread: false,
-            is_starred: false,
-            has_attachments: false,
-            has_draft: false,
-            sender_identity: ThreadIdentity {
-                display: "sender@example.com".into(),
-                address: Some("sender@example.com".into()),
-            },
-            recipient_identity: None,
-        },
+        &thread_stub("multi-thread", "STALE — must not be recomputed"),
     )
     .unwrap();
     drop(connection);
 
-    let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: create_queue_engine(250, 250, registry.clone()),
-        registry: registry,
-        events: noop_event_sink(),
-    });
-    engine
-        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
-        .await
-        .unwrap();
-
+    run_sync_with_sink(&storage, &server, noop_event_sink()).await;
     server.verify().await;
 
     let connection = storage.connection().unwrap();
@@ -428,44 +406,47 @@ async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing
     );
 }
 
-#[tokio::test]
-async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
-    let server = MockServer::start().await;
+async fn mount_sent_reconciliation_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/history"))
         .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "emailAddress": "me@example.com", "messagesTotal": 1, "threadsTotal": 1, "historyId": "50"
         })))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "labels": [{"id": "SENT", "name": "Sent", "type": "system"}]
         })))
-        .mount(&server)
+        .mount(server)
         .await;
+    let listing = serde_json::json!({
+        "messages": [{"id": "sent-1", "threadId": "sent-thread"}]
+    });
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("labelIds"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{"id": "sent-1", "threadId": "sent-thread"}]
-        })))
-        .mount(&server)
+        .respond_with(ResponseTemplate::new(200).set_body_json(listing.clone()))
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param("labelIds", "SENT"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{"id": "sent-1", "threadId": "sent-thread"}]
-        })))
-        .mount(&server)
+        .respond_with(ResponseTemplate::new(200).set_body_json(listing))
+        .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
+    let server = MockServer::start().await;
+    mount_sent_reconciliation_mocks(&server).await;
 
     let (storage, _directory) = temp_storage(Some(1));
     let connection = storage.connection().unwrap();
@@ -488,41 +469,10 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
         },
     )
     .unwrap();
-    ThreadRepository::upsert(
-        &connection,
-        &Thread {
-            account_id: "account".into(),
-            id: "sent-thread".into(),
-            subject: "Reply to team".into(),
-            participants: "sender@example.com".into(),
-            latest_at: 1,
-            message_count: 1,
-            is_unread: false,
-            is_starred: false,
-            has_attachments: false,
-            has_draft: false,
-            sender_identity: ThreadIdentity {
-                display: "sender@example.com".into(),
-                address: Some("sender@example.com".into()),
-            },
-            recipient_identity: None,
-        },
-    )
-    .unwrap();
+    ThreadRepository::upsert(&connection, &thread_stub("sent-thread", "Reply to team")).unwrap();
     drop(connection);
 
-    let registry = WorkRegistry::new();
-    let engine = SyncEngine::new(SyncEngineDeps {
-        storage: storage.clone(),
-        queue: create_queue_engine(250, 250, registry.clone()),
-        registry: registry,
-        events: noop_event_sink(),
-    });
-    engine
-        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
-        .await
-        .unwrap();
-
+    run_sync_with_sink(&storage, &server, noop_event_sink()).await;
     server.verify().await;
 
     let connection = storage.connection().unwrap();

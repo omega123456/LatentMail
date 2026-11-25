@@ -1,8 +1,11 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use latentmail_lib::{
-    queue::{Executor, QueueEventSink, QueueOperation},
-    storage::{Account, HtmlPresence, Message, Storage},
+    queue::{Executor, QueueError, QueueEventSink, QueueOperation},
+    storage::{Account, HtmlPresence, LabelRepository, Message, Storage},
     sync::{noop_event_sink, SyncEngine, SyncEngineDeps, WorkRegistry},
 };
 use tokio::sync::{mpsc, oneshot};
@@ -101,4 +104,29 @@ pub fn message(account_id: &str, id: &str, thread_id: &str) -> Message {
         truncated_body: None,
         html_presence: HtmlPresence::Present,
     }
+}
+
+pub fn ensure_placeholder_labels(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    label_ids: &[&str],
+) {
+    for label_id in label_ids {
+        LabelRepository::ensure_placeholder(connection, account_id, label_id).unwrap();
+    }
+}
+
+pub fn fail_first_call_executor(calls: Arc<AtomicUsize>, first_call_error: QueueError) -> Executor {
+    Arc::new(move |_| Box::pin(fail_first_call(Arc::clone(&calls), first_call_error)))
+}
+
+async fn fail_first_call(
+    calls: Arc<AtomicUsize>,
+    first_call_error: QueueError,
+) -> Result<(), QueueError> {
+    let is_first_call = calls.fetch_add(1, Ordering::SeqCst) == 0;
+    if is_first_call {
+        return Err(first_call_error);
+    }
+    Ok(())
 }

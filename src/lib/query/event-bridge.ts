@@ -110,7 +110,7 @@ function handleComposeFailed(event: IpcEventMap['compose://failed']) {
     .showError(event.kind === 'send' ? 'Couldn’t send your message.' : 'Couldn’t save draft.');
 }
 
-function createEventSubscriptions(
+function createQueueAndAccountSubscriptions(
   queryClient: QueryClient,
   debouncers: BridgeDebouncers,
 ): BridgeSubscription[] {
@@ -119,6 +119,31 @@ function createEventSubscriptions(
       useSyncStore.getState().setQueue(summary);
       debouncers.queueSnapshot.trigger();
     }),
+    on('queue://item', (item) => {
+      debouncers.queueSnapshot.trigger();
+      const finished = item.status === 'done' || item.status === 'failed';
+      const finishedMutation = finished && item.id.startsWith('mutation:');
+      if (!finishedMutation) return;
+      debouncers.mailboxInvalidation.add(item.accountId);
+    }),
+    on('avatar://resolved', (event) => {
+      const avatarKey =
+        event.pipeline === 'sender'
+          ? queryKeys.senderAvatar(event.key)
+          : queryKeys.accountAvatar(event.key);
+      void queryClient.invalidateQueries({ queryKey: avatarKey });
+    }),
+    on('account://state', () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
+    }),
+    on('account://removed', () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
+    }),
+  ];
+}
+
+function createAiSubscriptions(queryClient: QueryClient): BridgeSubscription[] {
+  return [
     on('ai://config', (event) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.aiConfigs });
       void queryClient.invalidateQueries({ queryKey: queryKeys.aiIndexStatuses });
@@ -136,6 +161,14 @@ function createEventSubscriptions(
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.aiIndexStatuses });
     }),
+  ];
+}
+
+function createSyncAndMailSubscriptions(
+  queryClient: QueryClient,
+  debouncers: BridgeDebouncers,
+): BridgeSubscription[] {
+  return [
     on('sync://progress', (progress) => {
       useSyncStore.getState().setSyncState(progress.state);
     }),
@@ -181,6 +214,11 @@ function createEventSubscriptions(
         queryKey: queryKeys.messageBodiesForMessage(event.accountId, event.messageId),
       });
     }),
+  ];
+}
+
+function createComposeAndOsSubscriptions(queryClient: QueryClient): BridgeSubscription[] {
+  return [
     on('os://intent', (intent) => {
       void handleOsIntent(intent);
     }),
@@ -204,26 +242,18 @@ function createEventSubscriptions(
       });
     }),
     on('compose://failed', handleComposeFailed),
-    on('queue://item', (item) => {
-      debouncers.queueSnapshot.trigger();
-      const finished = item.status === 'done' || item.status === 'failed';
-      const finishedMutation = finished && item.id.startsWith('mutation:');
-      if (!finishedMutation) return;
-      debouncers.mailboxInvalidation.add(item.accountId);
-    }),
-    on('avatar://resolved', (event) => {
-      const avatarKey =
-        event.pipeline === 'sender'
-          ? queryKeys.senderAvatar(event.key)
-          : queryKeys.accountAvatar(event.key);
-      void queryClient.invalidateQueries({ queryKey: avatarKey });
-    }),
-    on('account://state', () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
-    }),
-    on('account://removed', () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
-    }),
+  ];
+}
+
+function createEventSubscriptions(
+  queryClient: QueryClient,
+  debouncers: BridgeDebouncers,
+): BridgeSubscription[] {
+  return [
+    ...createQueueAndAccountSubscriptions(queryClient, debouncers),
+    ...createAiSubscriptions(queryClient),
+    ...createSyncAndMailSubscriptions(queryClient, debouncers),
+    ...createComposeAndOsSubscriptions(queryClient),
   ];
 }
 

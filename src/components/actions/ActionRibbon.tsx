@@ -83,45 +83,34 @@ type RibbonVisibility = ReturnType<typeof computeRibbonVisibility>;
 
 function buildSecondaryActions({
   visibility,
-  starred,
-  labels,
-  moveToCurrentLabelIds,
-  systemLabelIds,
-  onToggleStar,
-  onCreateLabel,
-  onApplyLabels,
-  onMoveTo,
-  onToggleSpam,
-}: Pick<
-  ActionRibbonProps,
-  | 'starred'
-  | 'labels'
-  | 'moveToCurrentLabelIds'
-  | 'systemLabelIds'
-  | 'onToggleStar'
-  | 'onCreateLabel'
-  | 'onApplyLabels'
-  | 'onMoveTo'
-  | 'onToggleSpam'
-> & { visibility: RibbonVisibility }) {
+  props,
+}: {
+  visibility: RibbonVisibility;
+  props: ActionRibbonProps;
+}) {
   const starButton = visibility.showStar && (
-    <RibbonStarButton key="star" theme={THEME} starred={starred} onToggleStar={onToggleStar} />
+    <RibbonStarButton
+      key="star"
+      theme={THEME}
+      starred={props.starred}
+      onToggleStar={props.onToggleStar}
+    />
   );
   const labelsButton = visibility.showLabels && (
     <RibbonLabelsPopover
       key="labels"
       theme={THEME}
-      labels={labels}
-      onCreateLabel={onCreateLabel}
-      onApplyLabels={onApplyLabels}
+      labels={props.labels}
+      onCreateLabel={props.onCreateLabel}
+      onApplyLabels={props.onApplyLabels}
     />
   );
   const moveToButton = visibility.showMoveTo && (
     <RibbonMoveToPopover
       key="move-to"
       theme={THEME}
-      currentSystemLabelIds={moveToCurrentLabelIds ?? systemLabelIds}
-      onMoveTo={onMoveTo}
+      currentSystemLabelIds={props.moveToCurrentLabelIds ?? props.systemLabelIds}
+      onMoveTo={props.onMoveTo}
     />
   );
   const spamButton = visibility.showSpamToggle && (
@@ -129,7 +118,7 @@ function buildSecondaryActions({
       key="spam"
       theme={THEME}
       spamMode={visibility.spamMode}
-      onToggleSpam={onToggleSpam}
+      onToggleSpam={props.onToggleSpam}
     />
   );
   const contiguousSecondary = [starButton, labelsButton, moveToButton].filter(Boolean);
@@ -194,89 +183,83 @@ function RibbonSecondaryActions({
   );
 }
 
-export function ActionRibbon({
-  systemLabelIds,
-  moveToCurrentLabelIds,
-  unread,
-  starred,
-  labels,
-  onToggleRead,
-  onToggleStar,
-  onApplyLabels,
-  onMoveTo,
-  onToggleSpam,
-  onDelete,
-  onCreateLabel,
-  onReply,
-  onReplyAll,
-  onForward,
-  onEditDraft,
-}: ActionRibbonProps) {
+function RibbonMeasureProbe({
+  probeRef,
+  includeCompose,
+  visibility,
+  includeSecondary,
+}: {
+  probeRef: React.RefObject<HTMLDivElement | null>;
+  includeCompose: boolean;
+  visibility: RibbonVisibility;
+  includeSecondary: boolean;
+}) {
+  return (
+    <div
+      ref={probeRef}
+      aria-hidden="true"
+      inert
+      className="pointer-events-none invisible absolute left-0 top-0 -z-10 flex items-center gap-ribbon-gap"
+    >
+      <RibbonMeasure
+        includeCompose={includeCompose}
+        visibility={visibility}
+        includeSecondary={includeSecondary}
+      />
+    </div>
+  );
+}
+
+export function ActionRibbon(props: ActionRibbonProps) {
   const { containerRef, probeRef, narrow } = useMeasuredOverflow();
   const [overflowOpen, setOverflowOpen] = useState(false);
-  const visibility = computeRibbonVisibility(systemLabelIds);
-
-  const composeGroup = onReply && onReplyAll && onForward && (
-    <RibbonComposeGroup
-      theme={THEME}
-      onReply={onReply}
-      onReplyAll={onReplyAll}
-      onForward={onForward}
-      onEditDraft={onEditDraft}
-    />
-  );
-
-  const readUnreadButton = visibility.showReadToggle && (
-    <RibbonReadButton key="read-unread" theme={THEME} unread={unread} onToggleRead={onToggleRead} />
-  );
-
-  const { contiguousSecondary, spamButton, secondaryItems } = buildSecondaryActions({
-    visibility: visibility,
-    starred: starred,
-    labels: labels,
-    moveToCurrentLabelIds: moveToCurrentLabelIds,
-    systemLabelIds: systemLabelIds,
-    onToggleStar: onToggleStar,
-    onCreateLabel: onCreateLabel,
-    onApplyLabels: onApplyLabels,
-    onMoveTo: onMoveTo,
-    onToggleSpam: onToggleSpam,
-  });
+  const visibility = computeRibbonVisibility(props.systemLabelIds);
+  const hasCompose = Boolean(props.onReply && props.onReplyAll && props.onForward);
+  const secondary = buildSecondaryActions({ visibility: visibility, props: props });
 
   return (
     <div ref={containerRef} className="relative w-full">
-      <div
-        ref={probeRef}
-        aria-hidden="true"
-        inert
-        className="pointer-events-none invisible absolute left-0 top-0 -z-10 flex items-center gap-ribbon-gap"
-      >
-        <RibbonMeasure
-          includeCompose={Boolean(composeGroup)}
-          visibility={visibility}
-          includeSecondary={secondaryItems.length > 0}
-        />
-      </div>
+      <RibbonMeasureProbe
+        probeRef={probeRef}
+        includeCompose={hasCompose}
+        visibility={visibility}
+        includeSecondary={secondary.secondaryItems.length > 0}
+      />
       <div
         data-testid="action-ribbon"
         role="toolbar"
         aria-label="Conversation actions"
         className="flex items-center gap-ribbon-gap"
       >
-        {composeGroup}
-        {readUnreadButton}
+        {props.onReply && props.onReplyAll && props.onForward && (
+          <RibbonComposeGroup
+            theme={THEME}
+            onReply={props.onReply}
+            onReplyAll={props.onReplyAll}
+            onForward={props.onForward}
+            onEditDraft={props.onEditDraft}
+          />
+        )}
+        {visibility.showReadToggle && (
+          <RibbonReadButton
+            key="read-unread"
+            theme={THEME}
+            unread={props.unread}
+            onToggleRead={props.onToggleRead}
+          />
+        )}
         <RibbonSecondaryActions
           narrow={narrow}
           overflowOpen={overflowOpen}
           onOverflowOpenChange={setOverflowOpen}
-          contiguousSecondary={contiguousSecondary}
-          spamButton={spamButton}
-          secondaryItems={secondaryItems}
+          contiguousSecondary={secondary.contiguousSecondary}
+          spamButton={secondary.spamButton}
+          secondaryItems={secondary.secondaryItems}
         />
         {visibility.showDelete && (
           <>
             <RibbonSeparator theme={THEME} />
-            <RibbonDeleteButton theme={THEME} onDelete={onDelete} />
+            <RibbonDeleteButton theme={THEME} onDelete={props.onDelete} />
           </>
         )}
       </div>

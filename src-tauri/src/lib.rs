@@ -38,47 +38,61 @@ pub mod updater;
 pub use http::{http_client, is_retryable_status};
 
 #[cfg(not(coverage))]
-use tauri::Manager;
-
-#[cfg(all(windows, not(coverage)))]
-fn attach_parent_console() {
-    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
-
-    unsafe {
-        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
-    }
-}
-
-#[cfg(all(not(windows), not(coverage)))]
-fn attach_parent_console() {}
+pub use runtime::run;
 
 #[cfg(not(coverage))]
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    if let Some(outcome) = cli::run_client(&std::env::args().collect::<Vec<_>>()) {
-        attach_parent_console();
-        println!("{}", outcome.message);
-        std::process::exit(outcome.exit_code);
+mod runtime {
+    use tauri::Manager;
+
+    use crate::{
+        ai, auth, avatars, cli, http_client, inline_images, ipc, logging, os, remote_images,
+        settings, shell, storage, sync,
+    };
+
+    #[cfg(windows)]
+    fn attach_parent_console() {
+        use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+
+        unsafe {
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
     }
-    let builder = register_image_protocols(
-        shell::register_plugins(ipc::register(tauri::Builder::default())),
-        http_client(),
-    );
-    builder
-        .setup(|app| {
-            let bootstrap = AppBootstrap::new(app.handle()).init_logging()?;
-            let storage = bootstrap.open_storage()?;
-            bootstrap.init_services(storage)?;
-            Ok(())
-        })
-        .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                os::window::on_close(window, event);
-            }
-        })
-        .build(tauri::generate_context!())
-        .expect("error while running LatentMail")
-        .run(handle_run_event);
+
+    #[cfg(not(windows))]
+    fn attach_parent_console() {}
+
+    #[cfg_attr(mobile, tauri::mobile_entry_point)]
+    pub fn run() {
+        if let Some(outcome) = cli::run_client(&std::env::args().collect::<Vec<_>>()) {
+            attach_parent_console();
+            println!("{}", outcome.message);
+            std::process::exit(outcome.exit_code);
+        }
+        let builder = register_image_protocols(
+            shell::register_plugins(ipc::register(tauri::Builder::default())),
+            http_client(),
+        );
+        builder
+            .setup(|app| {
+                let bootstrap = AppBootstrap::new(app.handle()).init_logging()?;
+                let storage = bootstrap.open_storage()?;
+                bootstrap.init_services(storage)?;
+                Ok(())
+            })
+            .on_window_event(handle_window_event)
+            .build(tauri::generate_context!())
+            .expect("error while running LatentMail")
+            .run(handle_run_event);
+    }
+
+    fn handle_window_event<R: tauri::Runtime>(
+        window: &tauri::Window<R>,
+        event: &tauri::WindowEvent,
+    ) {
+        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            os::window::on_close(window, event);
+        }
+    }
 
     struct AppBootstrap<'a, R: tauri::Runtime> {
         handle: &'a tauri::AppHandle<R>,
@@ -121,21 +135,61 @@ pub fn run() {
         }
     }
 
-    fn spawn_vacuum_loop(storage: storage::Storage) {
-        tauri::async_runtime::spawn(async move {
-            let mut ticker = tokio::time::interval(storage::vacuum_interval());
-            loop {
-                ticker.tick().await;
-                match storage.vacuum().await {
-                    Ok(pages) => {
-                        tracing::info!(target: "storage", pages, "incremental vacuum complete")
-                    }
-                    Err(error) => {
-                        tracing::warn!(target: "storage", %error, "incremental vacuum failed")
-                    }
-                }
+    async fn run_vacuum_step(storage: &storage::Storage) {
+        match storage.vacuum().await {
+            Ok(pages) => {
+                tracing::info!(target: "storage", pages, "incremental vacuum complete");
             }
-        });
+            Err(error) => {
+                tracing::warn!(target: "storage", %error, "incremental vacuum failed");
+            }
+        }
+    }
+
+    async fn vacuum_loop(storage: storage::Storage) {
+        let mut ticker = tokio::time::interval(storage::vacuum_interval());
+        loop {
+            ticker.tick().await;
+            run_vacuum_step(&storage).await;
+        }
+    }
+
+    fn spawn_vacuum_loop(storage: storage::Storage) {
+        tauri::async_runtime::spawn(vacuum_loop(storage));
+    }
+
+    async fn respond_remote_image(
+        client: reqwest::Client,
+        uri: String,
+        responder: tauri::UriSchemeResponder,
+    ) {
+        let response =
+            remote_images::respond(&client, &uri, remote_images::HostScope::PublicOnly).await;
+        responder.respond(response);
+    }
+
+    async fn respond_inline_image(
+        storage: storage::Storage,
+        uri: String,
+        responder: tauri::UriSchemeResponder,
+    ) {
+        responder.respond(inline_images::respond(&storage, &uri).await);
+    }
+
+    fn handle_inline_image_request<R: tauri::Runtime>(
+        app: tauri::UriSchemeContext<'_, R>,
+        request: tauri::http::Request<Vec<u8>>,
+        responder: tauri::UriSchemeResponder,
+    ) {
+        let Some(storage) = app
+            .app_handle()
+            .try_state::<storage::Storage>()
+            .map(|state| state.inner().clone())
+        else {
+            return;
+        };
+        let uri = request.uri().to_string();
+        tauri::async_runtime::spawn(respond_inline_image(storage, uri, responder));
     }
 
     fn register_image_protocols<R: tauri::Runtime>(
@@ -146,36 +200,28 @@ pub fn run() {
             .register_asynchronous_uri_scheme_protocol(
                 remote_images::SCHEME,
                 move |_app, request, responder| {
-                    let client = image_client.clone();
-                    let uri = request.uri().to_string();
-                    tauri::async_runtime::spawn(async move {
-                        responder.respond(
-                            remote_images::respond(
-                                &client,
-                                &uri,
-                                remote_images::HostScope::PublicOnly,
-                            )
-                            .await,
-                        );
-                    });
+                    tauri::async_runtime::spawn(respond_remote_image(
+                        image_client.clone(),
+                        request.uri().to_string(),
+                        responder,
+                    ));
                 },
             )
             .register_asynchronous_uri_scheme_protocol(
                 inline_images::SCHEME,
-                |app, request, responder| {
-                    let Some(storage) = app
-                        .app_handle()
-                        .try_state::<storage::Storage>()
-                        .map(|state| state.inner().clone())
-                    else {
-                        return;
-                    };
-                    let uri = request.uri().to_string();
-                    tauri::async_runtime::spawn(async move {
-                        responder.respond(inline_images::respond(&storage, &uri).await);
-                    });
-                },
+                handle_inline_image_request,
             )
+    }
+
+    fn confirm_and_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>, wait: bool) {
+        if wait {
+            return;
+        }
+        app.state::<os::OsIntegration>()
+            .lifecycle()
+            .expect("lifecycle initialized")
+            .confirm_close();
+        app.exit(0);
     }
 
     fn handle_exit_requested<R: tauri::Runtime>(
@@ -200,15 +246,7 @@ pub fn run() {
                 "Wait".into(),
                 "Close Anyway".into(),
             ))
-            .show(move |wait| {
-                if !wait {
-                    app.state::<os::OsIntegration>()
-                        .lifecycle()
-                        .expect("lifecycle initialized")
-                        .confirm_close();
-                    app.exit(0);
-                }
-            });
+            .show(move |wait| confirm_and_exit(&app, wait));
     }
 
     fn handle_run_event<R: tauri::Runtime>(handle: &tauri::AppHandle<R>, event: tauri::RunEvent) {

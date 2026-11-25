@@ -186,6 +186,31 @@ fn removing_one_staged_part_never_touches_its_siblings_or_a_live_snapshot() {
     assert!(snapshot.parts[1].path.exists());
 }
 
+fn note_descriptor(
+    directory: &std::path::Path,
+    id: &str,
+) -> latentmail_lib::compose::staging::StagedPart {
+    latentmail_lib::compose::staging::StagedPart {
+        id: id.into(),
+        filename: "note.txt".into(),
+        mime_type: "text/plain".into(),
+        path: directory.join("unused"),
+        content_id: None,
+        size: 0,
+    }
+}
+
+fn note_lookup<'a>(owners: &'a [&'a str], id: &'a str) -> PartLookup<'a> {
+    PartLookup {
+        account_id: "account",
+        owners: owners,
+        id: id,
+        filename: "note.txt".into(),
+        mime_type: "text/plain".into(),
+        content_id: None,
+    }
+}
+
 #[test]
 fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
     let directory = tempfile::tempdir().unwrap();
@@ -196,49 +221,25 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
                 account_id: "account",
                 owner: "session",
             },
-            descriptor: &latentmail_lib::compose::staging::StagedPart {
-                id: "part".into(),
-                filename: "note.txt".into(),
-                mime_type: "text/plain".into(),
-                path: directory.path().join("unused"),
-                content_id: None,
-                size: 0,
-            },
+            descriptor: &note_descriptor(directory.path(), "part"),
             bytes: b"note",
         })
         .unwrap();
 
-    staging
-        .move_owner(OwnerTransfer {
-            account_id: "account",
-            from: "nonexistent-owner",
-            to: "draft",
-        })
-        .unwrap();
-    staging
-        .move_owner(OwnerTransfer {
-            account_id: "account",
-            from: "session",
-            to: "draft",
-        })
-        .unwrap();
-    staging
-        .move_owner(OwnerTransfer {
-            account_id: "account",
-            from: "draft",
-            to: "draft",
-        })
-        .unwrap();
-    let moved = staging
-        .part(PartLookup {
-            account_id: "account",
-            owners: &["draft"],
-            id: "part",
-            filename: "note.txt".into(),
-            mime_type: "text/plain".into(),
-            content_id: None,
-        })
-        .unwrap();
+    for (from, to) in [
+        ("nonexistent-owner", "draft"),
+        ("session", "draft"),
+        ("draft", "draft"),
+    ] {
+        staging
+            .move_owner(OwnerTransfer {
+                account_id: "account",
+                from: from,
+                to: to,
+            })
+            .unwrap();
+    }
+    let moved = staging.part(note_lookup(&["draft"], "part")).unwrap();
     assert_eq!(moved.read().unwrap().bytes, b"note");
     assert!(!part.path.exists(), "the session owner was renamed");
 
@@ -247,37 +248,20 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
     assert!(!snapshot.parts[0].path.exists());
     staging.release_owner("account", "draft").unwrap();
     staging.release_owner("account", "missing").unwrap();
-    assert!(staging
-        .part(PartLookup {
-            account_id: "account",
-            owners: &["draft"],
-            id: "part",
-            filename: "note.txt".into(),
-            mime_type: "text/plain".into(),
-            content_id: None
-        })
-        .is_err());
+    assert!(staging.part(note_lookup(&["draft"], "part")).is_err());
 }
 
 #[test]
 fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
     let directory = tempfile::tempdir().unwrap();
     let staging = Staging::new(directory.path().join("staged"));
-    let descriptor = |id: &str| latentmail_lib::compose::staging::StagedPart {
-        id: id.into(),
-        filename: "note.txt".into(),
-        mime_type: "text/plain".into(),
-        path: directory.path().join("unused"),
-        content_id: None,
-        size: 0,
-    };
     staging
         .stage_bytes(StageBytesRequest {
             scope: OwnerScope {
                 account_id: "account",
                 owner: "session",
             },
-            descriptor: &descriptor("early"),
+            descriptor: &note_descriptor(directory.path(), "early"),
             bytes: b"early",
         })
         .unwrap();
@@ -287,22 +271,13 @@ fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
                 account_id: "account",
                 owner: "draft",
             },
-            descriptor: &descriptor("late"),
+            descriptor: &note_descriptor(directory.path(), "late"),
             bytes: b"late",
         })
         .unwrap();
 
     let owners = ["draft", "session"];
-    let early = staging
-        .part(PartLookup {
-            account_id: "account",
-            owners: &owners,
-            id: "early",
-            filename: "note.txt".into(),
-            mime_type: "text/plain".into(),
-            content_id: None,
-        })
-        .unwrap();
+    let early = staging.part(note_lookup(&owners, "early")).unwrap();
     assert_eq!(early.read().unwrap().bytes, b"early");
 
     staging
@@ -313,32 +288,14 @@ fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
         })
         .unwrap();
     for (id, bytes) in [("early", &b"early"[..]), ("late", &b"late"[..])] {
-        let part = staging
-            .part(PartLookup {
-                account_id: "account",
-                owners: &owners,
-                id: id,
-                filename: "note.txt".into(),
-                mime_type: "text/plain".into(),
-                content_id: None,
-            })
-            .unwrap();
+        let part = staging.part(note_lookup(&owners, id)).unwrap();
         assert_eq!(part.read().unwrap().bytes, bytes, "{id} survived the merge");
     }
     assert!(
         !early.path.exists(),
         "the session owner is gone once merged"
     );
-    assert!(staging
-        .part(PartLookup {
-            account_id: "account",
-            owners: &[],
-            id: "early",
-            filename: "note.txt".into(),
-            mime_type: "text/plain".into(),
-            content_id: None
-        })
-        .is_err());
+    assert!(staging.part(note_lookup(&[], "early")).is_err());
 }
 
 #[test]

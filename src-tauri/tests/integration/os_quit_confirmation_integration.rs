@@ -20,21 +20,42 @@ fn operation(id: &str, kind: OperationKind) -> QueueOperation {
     }
 }
 
-#[tokio::test]
-async fn only_executing_sends_warrant_a_quit_confirmation() {
-    let gate = Arc::new(tokio::sync::Notify::new());
-    let executor_gate = Arc::clone(&gate);
-    let queue = QueueEngine::new(
+fn gated_queue(gate: Arc<tokio::sync::Notify>) -> Arc<QueueEngine> {
+    QueueEngine::new(
         250,
         250,
         Arc::new(move |_| {
-            let gate = Arc::clone(&executor_gate);
+            let gate = Arc::clone(&gate);
             Box::pin(async move {
                 gate.notified().await;
                 Ok(())
             })
         }),
-    );
+    )
+}
+
+async fn wait_for_executing_sends(queue: &QueueEngine, expected: usize) {
+    tokio::time::timeout(Duration::seconds(1).to_std().unwrap(), async {
+        while queue.executing_sends() != expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn immediate_lifecycle(queue: &Arc<QueueEngine>) -> Lifecycle {
+    Lifecycle::new(
+        Arc::clone(queue),
+        Duration::zero(),
+        Arc::new(|| Box::pin(async {})),
+    )
+}
+
+#[tokio::test]
+async fn only_executing_sends_warrant_a_quit_confirmation() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let queue = gated_queue(Arc::clone(&gate));
     queue
         .enqueue(operation("send", OperationKind::Send))
         .await
@@ -43,18 +64,8 @@ async fn only_executing_sends_warrant_a_quit_confirmation() {
         .enqueue(operation("draft", OperationKind::Draft))
         .await
         .unwrap();
-    tokio::time::timeout(Duration::seconds(1).to_std().unwrap(), async {
-        while queue.executing_sends() != 1 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    let lifecycle = Lifecycle::new(
-        Arc::clone(&queue),
-        Duration::zero(),
-        Arc::new(|| Box::pin(async {})),
-    );
+    wait_for_executing_sends(&queue, 1).await;
+    let lifecycle = immediate_lifecycle(&queue);
     assert_eq!(
         lifecycle.exit_decision(false),
         ExitDecision::Confirm {
@@ -71,26 +82,11 @@ async fn only_executing_sends_warrant_a_quit_confirmation() {
 #[tokio::test]
 async fn no_active_send_exits_and_multiple_sends_use_plural_wording() {
     let empty_queue = QueueEngine::no_op();
-    let empty_lifecycle = Lifecycle::new(
-        Arc::clone(&empty_queue),
-        Duration::zero(),
-        Arc::new(|| Box::pin(async {})),
-    );
+    let empty_lifecycle = immediate_lifecycle(&empty_queue);
     assert_eq!(empty_lifecycle.exit_decision(false), ExitDecision::Exit);
 
     let gate = Arc::new(tokio::sync::Notify::new());
-    let executor_gate = Arc::clone(&gate);
-    let queue = QueueEngine::new(
-        250,
-        250,
-        Arc::new(move |_| {
-            let gate = Arc::clone(&executor_gate);
-            Box::pin(async move {
-                gate.notified().await;
-                Ok(())
-            })
-        }),
-    );
+    let queue = gated_queue(Arc::clone(&gate));
     queue
         .enqueue(operation("first", OperationKind::Send))
         .await
@@ -99,18 +95,8 @@ async fn no_active_send_exits_and_multiple_sends_use_plural_wording() {
         .enqueue(operation("second", OperationKind::Send))
         .await
         .unwrap();
-    tokio::time::timeout(Duration::seconds(1).to_std().unwrap(), async {
-        while queue.executing_sends() != 2 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    let lifecycle = Lifecycle::new(
-        Arc::clone(&queue),
-        Duration::zero(),
-        Arc::new(|| Box::pin(async {})),
-    );
+    wait_for_executing_sends(&queue, 2).await;
+    let lifecycle = immediate_lifecycle(&queue);
     assert_eq!(
         lifecycle.exit_decision(false),
         ExitDecision::Confirm {

@@ -27,6 +27,45 @@ function resolveErrorLine(
   return null;
 }
 
+function OperationActionControls({
+  description,
+  canCancel,
+  canRetry,
+  onCancel,
+  onRetry,
+}: {
+  description: string;
+  canCancel: boolean;
+  canRetry: boolean;
+  onCancel: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <span className="flex w-10 shrink-0 justify-end opacity-0 focus-within:opacity-100 group-hover:opacity-100">
+      {canCancel && (
+        <button
+          type="button"
+          aria-label={`Cancel ${description}`}
+          onClick={onCancel}
+          className="grid size-6 cursor-pointer place-items-center rounded-chip text-settings-ink-mute hover:bg-settings-container hover:text-settings-error focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container dark:hover:text-dark-settings-error"
+        >
+          <X aria-hidden="true" size={ICON_SIZE.xs} />
+        </button>
+      )}
+      {canRetry && (
+        <button
+          type="button"
+          aria-label={`Retry ${description}`}
+          onClick={onRetry}
+          className="grid size-6 cursor-pointer place-items-center rounded-chip text-settings-ink-mute hover:bg-settings-container hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container dark:hover:text-dark-settings-ink"
+        >
+          <RotateCcw aria-hidden="true" size={ICON_SIZE.xs} />
+        </button>
+      )}
+    </span>
+  );
+}
+
 export function QueueOperationRow({
   operation,
   now = new Date(),
@@ -64,28 +103,13 @@ export function QueueOperationRow({
         <span className="w-33 shrink-0 whitespace-nowrap text-right text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
           {describeTiming(operation, now)}
         </span>
-        <span className="flex w-10 shrink-0 justify-end opacity-0 focus-within:opacity-100 group-hover:opacity-100">
-          {canCancel && (
-            <button
-              type="button"
-              aria-label={`Cancel ${operation.description}`}
-              onClick={() => void handleCancel()}
-              className="grid size-6 cursor-pointer place-items-center rounded-chip text-settings-ink-mute hover:bg-settings-container hover:text-settings-error focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container dark:hover:text-dark-settings-error"
-            >
-              <X aria-hidden="true" size={ICON_SIZE.xs} />
-            </button>
-          )}
-          {canRetry && (
-            <button
-              type="button"
-              aria-label={`Retry ${operation.description}`}
-              onClick={() => onRetry(operation.id)}
-              className="grid size-6 cursor-pointer place-items-center rounded-chip text-settings-ink-mute hover:bg-settings-container hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container dark:hover:text-dark-settings-ink"
-            >
-              <RotateCcw aria-hidden="true" size={ICON_SIZE.xs} />
-            </button>
-          )}
-        </span>
+        <OperationActionControls
+          description={operation.description}
+          canCancel={canCancel}
+          canRetry={canRetry}
+          onCancel={() => void handleCancel()}
+          onRetry={() => onRetry(operation.id)}
+        />
       </div>
       {errorLine && (
         <p

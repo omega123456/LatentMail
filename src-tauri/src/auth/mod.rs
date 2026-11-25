@@ -238,43 +238,14 @@ impl AuthService {
             refresh_token,
             target,
         } = request;
-        let email_for_db = email.clone();
+        let input = PersistAccountInput {
+            email: email,
+            target: target,
+            now: now,
+        };
         let account = self
             .storage
-            .run(move |connection| {
-                let existing = match target.as_deref() {
-                    Some(id) => AccountRepository::get(connection, id)?,
-                    None => AccountRepository::get_by_email(connection, &email_for_db)?,
-                };
-                if target.is_some()
-                    && existing
-                        .as_ref()
-                        .is_some_and(|account| account.email != email_for_db)
-                {
-                    return Err(rusqlite::Error::InvalidQuery);
-                }
-                let id = existing
-                    .as_ref()
-                    .map_or_else(|| email_for_db.clone(), |account| account.id.clone());
-
-                let display_name = existing
-                    .as_ref()
-                    .map(|account| account.display_name.clone())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| local_part(&email_for_db));
-                let account = Account {
-                    id: id,
-                    email: email_for_db,
-                    display_name: display_name,
-                    avatar_url: None,
-                    history_id: existing.as_ref().and_then(|value| value.history_id),
-                    needs_reauthentication: false,
-                    created_at: existing.as_ref().map_or(now, |value| value.created_at),
-                    updated_at: now,
-                };
-                AccountRepository::upsert(connection, &account)?;
-                Ok(account)
-            })
+            .run(move |connection| persist_account(connection, input))
             .await
             .map_err(|error| error.to_string())?;
         save_refresh_token(&account.id, &refresh_token)?;
@@ -287,26 +258,9 @@ impl AuthService {
         update: ProfileUpdate,
     ) -> Result<Option<AccountDto>, String> {
         let account_id = account_id.to_owned();
-        let ProfileUpdate {
-            display_name,
-            avatar_url,
-        } = update;
         let updated = self
             .storage
-            .run(move |connection| {
-                let Some(mut account) = AccountRepository::get(connection, &account_id)? else {
-                    return Ok(None);
-                };
-                if let Some(name) = display_name.filter(|name| !name.is_empty()) {
-                    account.display_name = name;
-                }
-                if avatar_url.is_some() {
-                    account.avatar_url = avatar_url;
-                }
-                account.updated_at = chrono::Utc::now().timestamp();
-                AccountRepository::upsert(connection, &account)?;
-                Ok(Some(account))
-            })
+            .run(move |connection| update_account_profile(connection, &account_id, update))
             .await
             .map_err(|error| error.to_string())?;
         Ok(updated.map(account_dto))
@@ -319,15 +273,7 @@ impl AuthService {
     ) -> Result<(), String> {
         let updated = self
             .storage
-            .run(move |connection| {
-                let Some(mut account) = AccountRepository::get(connection, &account_id)? else {
-                    return Ok(None);
-                };
-                account.needs_reauthentication = true;
-                account.updated_at = chrono::Utc::now().timestamp();
-                AccountRepository::upsert(connection, &account)?;
-                Ok(Some(account))
-            })
+            .run(move |connection| flag_account_reauthentication(connection, &account_id))
             .await
             .map_err(|error| error.to_string())?;
         let account = updated.ok_or_else(|| "Unknown account".to_owned())?;
@@ -343,21 +289,24 @@ impl AuthService {
         }
     }
 
+    fn cached_access_token(&self, account_id: &str) -> Result<Option<String>, String> {
+        let tokens = self
+            .access_tokens
+            .lock()
+            .map_err(|_| "refresh lock poisoned".to_owned())?;
+        Ok(tokens
+            .get(account_id)
+            .filter(|(_, expiry)| Utc::now() + ACCESS_TOKEN_EXPIRY_SKEW < *expiry)
+            .map(|(token, _)| token.clone()))
+    }
+
     pub async fn refresh_access_token<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         account_id: &str,
     ) -> Result<String, String> {
-        {
-            let tokens = self
-                .access_tokens
-                .lock()
-                .map_err(|_| "refresh lock poisoned".to_owned())?;
-            if let Some((token, expiry)) = tokens.get(account_id) {
-                if Utc::now() + ACCESS_TOKEN_EXPIRY_SKEW < *expiry {
-                    return Ok(token.clone());
-                }
-            }
+        if let Some(token) = self.cached_access_token(account_id)? {
+            return Ok(token);
         }
         let failure = match exchange_refresh_token(account_id).await {
             Ok(fresh) => return self.remember_access_token(account_id, fresh),
@@ -771,6 +720,83 @@ pub async fn remove_account<R: Runtime>(
     CommandPayload(request): CommandPayload<AccountIdRequest>,
 ) -> Result<(), String> {
     remove_account_with_cleanup(&services, request.account_id).await
+}
+
+struct PersistAccountInput {
+    email: String,
+    target: Option<String>,
+    now: i64,
+}
+
+fn persist_account(
+    connection: &rusqlite::Connection,
+    input: PersistAccountInput,
+) -> rusqlite::Result<Account> {
+    let existing = match input.target.as_deref() {
+        Some(id) => AccountRepository::get(connection, id)?,
+        None => AccountRepository::get_by_email(connection, &input.email)?,
+    };
+    let email_mismatch = input.target.is_some()
+        && existing
+            .as_ref()
+            .is_some_and(|account| account.email != input.email);
+    if email_mismatch {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let id = existing
+        .as_ref()
+        .map_or_else(|| input.email.clone(), |account| account.id.clone());
+    let display_name = existing
+        .as_ref()
+        .map(|account| account.display_name.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| local_part(&input.email));
+    let account = Account {
+        id: id,
+        email: input.email,
+        display_name: display_name,
+        avatar_url: None,
+        history_id: existing.as_ref().and_then(|value| value.history_id),
+        needs_reauthentication: false,
+        created_at: existing
+            .as_ref()
+            .map_or(input.now, |value| value.created_at),
+        updated_at: input.now,
+    };
+    AccountRepository::upsert(connection, &account)?;
+    Ok(account)
+}
+
+fn update_account_profile(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    update: ProfileUpdate,
+) -> rusqlite::Result<Option<Account>> {
+    let Some(mut account) = AccountRepository::get(connection, account_id)? else {
+        return Ok(None);
+    };
+    if let Some(name) = update.display_name.filter(|name| !name.is_empty()) {
+        account.display_name = name;
+    }
+    if update.avatar_url.is_some() {
+        account.avatar_url = update.avatar_url;
+    }
+    account.updated_at = chrono::Utc::now().timestamp();
+    AccountRepository::upsert(connection, &account)?;
+    Ok(Some(account))
+}
+
+fn flag_account_reauthentication(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+) -> rusqlite::Result<Option<Account>> {
+    let Some(mut account) = AccountRepository::get(connection, account_id)? else {
+        return Ok(None);
+    };
+    account.needs_reauthentication = true;
+    account.updated_at = chrono::Utc::now().timestamp();
+    AccountRepository::upsert(connection, &account)?;
+    Ok(Some(account))
 }
 
 fn local_part(email: &str) -> String {

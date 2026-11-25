@@ -15,6 +15,40 @@ pub enum FanOutError<E> {
     Join(JoinError),
 }
 
+struct FanOutPool<U, E, F> {
+    tasks: JoinSet<Result<U, E>>,
+    permits: Arc<Semaphore>,
+    work: F,
+}
+
+impl<U, E, F> FanOutPool<U, E, F>
+where
+    U: Send + 'static,
+    E: Send + 'static,
+{
+    fn new(width: usize, work: F) -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            permits: Arc::new(Semaphore::new(width)),
+            work: work,
+        }
+    }
+
+    async fn spawn<T, Fut>(&mut self, item: T)
+    where
+        T: Send + 'static,
+        F: Fn(T) -> Fut + Clone + Send + 'static,
+        Fut: Future<Output = Result<U, E>> + Send + 'static,
+    {
+        let permit = Arc::clone(&self.permits).acquire_owned().await.unwrap();
+        let operation = self.work.clone();
+        self.tasks.spawn(async move {
+            let _permit = permit;
+            operation(item).await
+        });
+    }
+}
+
 pub async fn fan_out<T, U, E, F, Fut>(
     items: Vec<T>,
     width: usize,
@@ -29,35 +63,21 @@ where
 {
     assert!(width > 0);
     let mut items = items.into_iter();
-    let mut tasks = JoinSet::new();
+    let mut pool = FanOutPool::new(width, work);
     let mut results = Vec::new();
-    let permits = Arc::new(Semaphore::new(width));
 
-    for _ in 0..width {
-        let Some(item) = items.next() else {
-            break;
-        };
-        let permit = Arc::clone(&permits).acquire_owned().await.unwrap();
-        let operation = work.clone();
-        tasks.spawn(async move {
-            let _permit = permit;
-            operation(item).await
-        });
+    for item in items.by_ref().take(width) {
+        pool.spawn(item).await;
     }
 
-    while let Some(result) = tasks.join_next().await {
+    while let Some(result) = pool.tasks.join_next().await {
         match result {
-            Ok(Ok(result)) => results.push(result),
+            Ok(Ok(value)) => results.push(value),
             Ok(Err(error)) => return Err(FanOutError::Work(error)),
             Err(error) => return Err(FanOutError::Join(error)),
         }
         if let Some(item) = items.next() {
-            let permit = Arc::clone(&permits).acquire_owned().await.unwrap();
-            let operation = work.clone();
-            tasks.spawn(async move {
-                let _permit = permit;
-                operation(item).await
-            });
+            pool.spawn(item).await;
         }
     }
 

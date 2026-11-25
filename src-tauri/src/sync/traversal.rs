@@ -63,23 +63,52 @@ struct TraversalWriteTarget<'a> {
     cache: Option<&'a AttachmentCache>,
 }
 
-pub async fn run_backfill_step(context: BackfillStepContext<'_>) -> Result<bool, SyncError> {
-    let existing = context
-        .storage
-        .run({
-            let account = context.account_id.to_owned();
-            move |connection| {
-                TraversalCursorRepository::get(connection, &account, TraversalKind::Backfill)
-            }
+struct BackfillCommit {
+    account_id: String,
+    cache: Option<AttachmentCache>,
+    messages: Vec<GmailMessage>,
+    cursor: TraversalCursor,
+}
+
+async fn load_backfill_cursor(
+    storage: &Storage,
+    account_id: &str,
+) -> Result<Option<TraversalCursor>, SyncError> {
+    let account = account_id.to_owned();
+    Ok(storage
+        .run(move |connection| {
+            TraversalCursorRepository::get(connection, &account, TraversalKind::Backfill)
         })
-        .await?;
+        .await?)
+}
 
-    if let Some(cursor) = &existing {
-        if cursor.completed {
-            return Ok(true);
-        }
-    }
+fn persist_backfill_commit(
+    connection: &rusqlite::Connection,
+    commit: &BackfillCommit,
+) -> rusqlite::Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    write_traversal_messages_and_recompute(
+        &transaction,
+        TraversalWriteTarget {
+            account_id: &commit.account_id,
+            cache: commit.cache.as_ref(),
+        },
+        &commit.messages,
+    )?;
+    TraversalCursorRepository::upsert(&transaction, &commit.cursor)?;
+    transaction.commit()
+}
 
+struct BackfillCursorState {
+    token: Option<String>,
+    discovered: i64,
+    persisted: i64,
+}
+
+async fn resolve_backfill_state(
+    client: &GmailClient,
+    existing: Option<TraversalCursor>,
+) -> Result<BackfillCursorState, SyncError> {
     let needs_mailbox_total = existing
         .as_ref()
         .is_none_or(|cursor| cursor.discovered_count <= cursor.persisted_count);
@@ -91,65 +120,58 @@ pub async fn run_backfill_step(context: BackfillStepContext<'_>) -> Result<bool,
         ),
         None => (None, 0, 0),
     };
-
     if needs_mailbox_total {
-        discovered = context.client.profile().await?.messages_total;
+        discovered = client.profile().await?.messages_total;
     }
+    Ok(BackfillCursorState {
+        token: token,
+        discovered: discovered,
+        persisted: persisted,
+    })
+}
 
-    let options = ListOptions {
-        include_spam_and_trash: true,
-        page_size: MAX_PAGE_SIZE,
-    };
-
+pub async fn run_backfill_step(context: BackfillStepContext<'_>) -> Result<bool, SyncError> {
+    let existing = load_backfill_cursor(context.storage, context.account_id).await?;
+    if existing.as_ref().is_some_and(|cursor| cursor.completed) {
+        return Ok(true);
+    }
+    let state = resolve_backfill_state(context.client, existing).await?;
     let page = context
         .client
         .list_messages_page_matching(MessageListQuery {
             label_ids: &[],
             query_filter: None,
-            page_token: token.as_deref(),
-            options: options,
+            page_token: state.token.as_deref(),
+            options: ListOptions {
+                include_spam_and_trash: true,
+                page_size: MAX_PAGE_SIZE,
+            },
         })
         .await?;
     let is_last_page = page.next_page_token.is_none();
-    let next_token = page.next_page_token.clone();
     let ids: Vec<String> = page.items.iter().map(|item| item.id.clone()).collect();
-
     let messages = concurrency::fetch_messages(context.client, ids).await?;
 
-    let persisted = persisted + messages.len() as i64;
-    let account_owned = context.account_id.to_owned();
-    let position = next_token;
+    let persisted = state.persisted + messages.len() as i64;
     let now = chrono::Utc::now().timestamp();
-    let cache = context.cache;
-    let resumed = context.resumed;
+    let commit = BackfillCommit {
+        account_id: context.account_id.to_owned(),
+        cache: context.cache,
+        messages: messages,
+        cursor: TraversalCursor {
+            account_id: context.account_id.to_owned(),
+            kind: TraversalKind::Backfill,
+            position: page.next_page_token,
+            discovered_count: state.discovered,
+            persisted_count: persisted,
+            completed: is_last_page,
+            last_advanced_at: now,
+            resumed: context.resumed,
+        },
+    };
     context
         .storage
-        .run(move |connection| {
-            let transaction = connection.unchecked_transaction()?;
-            write_traversal_messages_and_recompute(
-                &transaction,
-                TraversalWriteTarget {
-                    account_id: &account_owned,
-                    cache: cache.as_ref(),
-                },
-                &messages,
-            )?;
-
-            TraversalCursorRepository::upsert(
-                &transaction,
-                &TraversalCursor {
-                    account_id: account_owned.clone(),
-                    kind: TraversalKind::Backfill,
-                    position: position,
-                    discovered_count: discovered,
-                    persisted_count: persisted,
-                    completed: is_last_page,
-                    last_advanced_at: now,
-                    resumed: resumed,
-                },
-            )?;
-            transaction.commit()
-        })
+        .run(move |connection| persist_backfill_commit(connection, &commit))
         .await?;
 
     emit_traversal_progress(
@@ -157,12 +179,12 @@ pub async fn run_backfill_step(context: BackfillStepContext<'_>) -> Result<bool,
         TraversalProgressEvent {
             account_id: context.account_id.to_owned(),
             kind: "backfill",
-            discovered_count: discovered,
+            discovered_count: state.discovered,
             persisted_count: persisted,
             completed: is_last_page,
             state: backfill_state(is_last_page),
             last_advanced_at: to_millis(now),
-            is_resumed: resumed,
+            is_resumed: context.resumed,
         },
     );
 

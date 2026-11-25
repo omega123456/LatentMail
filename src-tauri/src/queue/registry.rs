@@ -265,99 +265,139 @@ impl QueueRegistry {
         interactive_outstanding: &HashSet<String>,
     ) -> Vec<AccountQueueSnapshot> {
         let inner = self.lock();
-        let mut accounts: HashSet<String> = inner
-            .operations
-            .values()
-            .map(|record| record.account_id.clone())
-            .collect();
-        accounts.extend(inner.history.keys().cloned());
-        accounts.extend(inner.account_paused.iter().cloned());
-        accounts.extend(inner.lane_paused.iter().map(|(account, _)| account.clone()));
-
+        let accounts = collect_known_accounts(&inner);
         let mut snapshots: Vec<AccountQueueSnapshot> = accounts
             .into_iter()
             .map(|account_id| {
-                let empty_history = VecDeque::new();
-                let history = inner.history.get(&account_id).unwrap_or(&empty_history);
-                let interactive_paused =
-                    global_paused || inner.is_scope_paused(&account_id, Lane::Interactive);
-                let blocked_by_interactive =
-                    !interactive_paused && interactive_outstanding.contains(&account_id);
-
-                let lanes: Vec<LaneSnapshot> = Lane::ALL
-                    .into_iter()
-                    .map(|lane| {
-                        let mut operations: Vec<OperationRecord> = inner
-                            .operations
-                            .values()
-                            .filter(|record| record.account_id == account_id && record.lane == lane)
-                            .cloned()
-                            .collect();
-                        operations.sort_by(|left, right| {
-                            right
-                                .updated_at
-                                .cmp(&left.updated_at)
-                                .then_with(|| left.id.cmp(&right.id))
-                        });
-                        operations.extend(
-                            history
-                                .iter()
-                                .rev()
-                                .filter(|record| record.lane == lane)
-                                .cloned(),
-                        );
-                        operations.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
-
-                        let active = operations
-                            .iter()
-                            .filter(|record| record.status == OperationStatus::Active)
-                            .count();
-                        let backlog = operations
-                            .iter()
-                            .filter(|record| {
-                                matches!(
-                                    record.status,
-                                    OperationStatus::Queued | OperationStatus::Retrying
-                                )
-                            })
-                            .count();
-
-                        let paused = global_paused || inner.is_scope_paused(&account_id, lane);
-                        let blocked =
-                            !paused && lane != Lane::Interactive && blocked_by_interactive;
-                        let running = !paused && !blocked && active > 0;
-                        let state = lane_state(paused, blocked, running);
-
-                        LaneSnapshot {
-                            lane: lane,
-                            capacity: lane.capacity(),
-                            active: active,
-                            backlog: backlog,
-                            state: state,
-                            operations: operations,
-                        }
-                    })
-                    .collect();
-
-                let active = lanes.iter().map(|lane| lane.active).sum();
-                let queued = lanes.iter().map(|lane| lane.backlog).sum();
-                let failed = lanes
-                    .iter()
-                    .flat_map(|lane| &lane.operations)
-                    .filter(|record| record.status == OperationStatus::Failed)
-                    .count();
-
-                AccountQueueSnapshot {
-                    account_id,
-                    active,
-                    queued,
-                    failed,
-                    lanes,
-                }
+                build_account_snapshot(AccountSnapshotInput {
+                    inner: &inner,
+                    account_id: account_id,
+                    global_paused: global_paused,
+                    interactive_outstanding: interactive_outstanding,
+                })
             })
             .collect();
         snapshots.sort_by(|left, right| left.account_id.cmp(&right.account_id));
         snapshots
+    }
+}
+
+struct AccountSnapshotInput<'a> {
+    inner: &'a Inner,
+    account_id: String,
+    global_paused: bool,
+    interactive_outstanding: &'a HashSet<String>,
+}
+
+struct LaneSnapshotInput<'a> {
+    inner: &'a Inner,
+    account_id: &'a str,
+    history: &'a VecDeque<OperationRecord>,
+    lane: Lane,
+    global_paused: bool,
+    blocked_by_interactive: bool,
+}
+
+fn collect_known_accounts(inner: &Inner) -> HashSet<String> {
+    let mut accounts: HashSet<String> = inner
+        .operations
+        .values()
+        .map(|record| record.account_id.clone())
+        .collect();
+    accounts.extend(inner.history.keys().cloned());
+    accounts.extend(inner.account_paused.iter().cloned());
+    accounts.extend(inner.lane_paused.iter().map(|(account, _)| account.clone()));
+    accounts
+}
+
+fn build_lane_snapshot(input: LaneSnapshotInput<'_>) -> LaneSnapshot {
+    let mut operations: Vec<OperationRecord> = input
+        .inner
+        .operations
+        .values()
+        .filter(|record| record.account_id == input.account_id && record.lane == input.lane)
+        .cloned()
+        .collect();
+    operations.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    operations.extend(
+        input
+            .history
+            .iter()
+            .rev()
+            .filter(|record| record.lane == input.lane)
+            .cloned(),
+    );
+    operations.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
+    let active = operations
+        .iter()
+        .filter(|record| record.status == OperationStatus::Active)
+        .count();
+    let backlog = operations
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.status,
+                OperationStatus::Queued | OperationStatus::Retrying
+            )
+        })
+        .count();
+    let paused = input.global_paused || input.inner.is_scope_paused(input.account_id, input.lane);
+    let blocked = !paused && input.lane != Lane::Interactive && input.blocked_by_interactive;
+    let running = !paused && !blocked && active > 0;
+    LaneSnapshot {
+        lane: input.lane,
+        capacity: input.lane.capacity(),
+        active: active,
+        backlog: backlog,
+        state: lane_state(paused, blocked, running),
+        operations: operations,
+    }
+}
+
+fn build_account_snapshot(input: AccountSnapshotInput<'_>) -> AccountQueueSnapshot {
+    let empty_history = VecDeque::new();
+    let history = input
+        .inner
+        .history
+        .get(&input.account_id)
+        .unwrap_or(&empty_history);
+    let interactive_paused = input.global_paused
+        || input
+            .inner
+            .is_scope_paused(&input.account_id, Lane::Interactive);
+    let blocked_by_interactive =
+        !interactive_paused && input.interactive_outstanding.contains(&input.account_id);
+    let lanes: Vec<LaneSnapshot> = Lane::ALL
+        .into_iter()
+        .map(|lane| {
+            build_lane_snapshot(LaneSnapshotInput {
+                inner: input.inner,
+                account_id: &input.account_id,
+                history: history,
+                lane: lane,
+                global_paused: input.global_paused,
+                blocked_by_interactive: blocked_by_interactive,
+            })
+        })
+        .collect();
+    let active = lanes.iter().map(|lane| lane.active).sum();
+    let queued = lanes.iter().map(|lane| lane.backlog).sum();
+    let failed = lanes
+        .iter()
+        .flat_map(|lane| &lane.operations)
+        .filter(|record| record.status == OperationStatus::Failed)
+        .count();
+    AccountQueueSnapshot {
+        account_id: input.account_id,
+        active: active,
+        queued: queued,
+        failed: failed,
+        lanes: lanes,
     }
 }
 

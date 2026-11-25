@@ -5,6 +5,15 @@ import { ZoomToolbar } from './ZoomToolbar';
 
 const IMAGE_FIT_CAP = 1;
 
+function scaledImageFrameStyle(content: Size | null, zoom: number) {
+  if (!content) return undefined;
+  return {
+    width: content.width * zoom,
+    height: content.height * zoom,
+    padding: PREVIEW_PADDING * zoom,
+  };
+}
+
 export function ImagePreview({ src, filename }: { src: string; filename: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [natural, setNatural] = useState<Size | null>(null);
@@ -34,15 +43,7 @@ export function ImagePreview({ src, filename }: { src: string; filename: string 
         <div className="grid min-h-full w-max min-w-full place-items-center">
           <div
             className={natural ? 'shrink-0' : 'invisible absolute'}
-            style={
-              content
-                ? {
-                    width: content.width * zoom,
-                    height: content.height * zoom,
-                    padding: PREVIEW_PADDING * zoom,
-                  }
-                : undefined
-            }
+            style={scaledImageFrameStyle(content, zoom)}
           >
             <img
               src={src}

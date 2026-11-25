@@ -349,6 +349,13 @@ async fn rendezvous_endpoint(arrivals: Arc<Mutex<Vec<String>>>) -> String {
     format!("http://{address}")
 }
 
+fn has_complete_http_request(received: &[u8]) -> bool {
+    let Some(head) = head_length(received) else {
+        return false;
+    };
+    received.len() >= head + declared_body_length(&received[..head])
+}
+
 async fn serve_after_rendezvous(
     mut socket: TcpStream,
     barrier: Arc<Barrier>,
@@ -362,10 +369,8 @@ async fn serve_after_rendezvous(
             return;
         }
         received.extend_from_slice(&chunk[..read]);
-        if let Some(head) = head_length(&received) {
-            if received.len() >= head + declared_body_length(&received[..head]) {
-                break;
-            }
+        if has_complete_http_request(&received) {
+            break;
         }
     }
     let head = String::from_utf8_lossy(&received).into_owned();
@@ -682,9 +687,8 @@ async fn a_planner_filter_that_matches_nothing_falls_back_to_the_unfiltered_arms
     );
 }
 
-#[tokio::test]
-async fn a_contextual_follow_up_searches_the_prior_topic_inside_the_supported_date_filter() {
-    let (_directory, storage, _sequences) = build(&[
+fn october_follow_up_corpus() -> Vec<(Message, Vec<f32>)> {
+    vec![
         (
             message(SeedMessage {
                 id: "october-ssd",
@@ -712,7 +716,28 @@ async fn a_contextual_follow_up_searches_the_prior_topic_inside_the_supported_da
             }),
             vec![1.0, 0.0],
         ),
-    ]);
+    ]
+}
+
+async fn received_embedding_inputs(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|received| received.url.path() == "/v1/embeddings")
+        .map(|received| {
+            serde_json::from_slice::<serde_json::Value>(&received.body).unwrap()["input"][0]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_contextual_follow_up_searches_the_prior_topic_inside_the_supported_date_filter() {
+    let (_directory, storage, _sequences) = build(&october_follow_up_corpus());
     let server = MockServer::start().await;
     plan_reply(
         &server,
@@ -745,21 +770,8 @@ async fn a_contextual_follow_up_searches_the_prior_topic_inside_the_supported_da
         .sources
         .iter()
         .any(|source| source.message_id == "older-ssd"));
-    let embedding_inputs = server
-        .received_requests()
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|received| received.url.path() == "/v1/embeddings")
-        .map(|received| {
-            serde_json::from_slice::<serde_json::Value>(&received.body).unwrap()["input"][0]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        embedding_inputs,
+        received_embedding_inputs(&server).await,
         vec![
             "how about in october last year?".to_owned(),
             "SSD health drive report".to_owned()

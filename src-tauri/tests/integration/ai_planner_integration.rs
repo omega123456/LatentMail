@@ -325,32 +325,8 @@ async fn an_empty_conversation_is_labelled_and_a_transport_failure_plans_nothing
     );
 }
 
-#[test]
-fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
-    let now = Local
-        .from_local_datetime(
-            &NaiveDate::from_ymd_opt(2026, 8, 26)
-                .unwrap()
-                .and_hms_opt(14, 30, 0)
-                .unwrap(),
-        )
-        .earliest()
-        .unwrap();
-    let system = prompts::system(now, "me@example.com");
-    assert!(system.contains("Wednesday, August 26, 2026, 2:30 PM"));
-    assert!(system.contains("me@example.com"));
-    assert!(system.contains(
-        "The metadata line is the only evidence about attachments, starring and read state."
-    ));
-    assert!(!system.contains("{{"));
-    let plan = prompts::plan(now, "me@example.com", &["Inbox".into(), "Sent".into()]);
-    assert!(plan.contains("Today's date: 2026-08-26"));
-    assert!(plan.contains("Available folders: Inbox, Sent"));
-    assert!(plan.contains("office lease renewal"));
-    assert!(plan.contains("dateOrder decision table"));
-    assert!(plan.contains("Wrong interpretations"));
-    assert!(!plan.contains("{{"));
-    let block = prompts::passage_block(&[
+fn sample_passages() -> Vec<Passage> {
+    vec![
         Passage {
             message_seq: 1,
             chunk_index: 0,
@@ -393,7 +369,35 @@ fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
             is_starred: false,
             is_unread: true,
         },
-    ]);
+    ]
+}
+
+#[test]
+fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
+    let now = Local
+        .from_local_datetime(
+            &NaiveDate::from_ymd_opt(2026, 8, 26)
+                .unwrap()
+                .and_hms_opt(14, 30, 0)
+                .unwrap(),
+        )
+        .earliest()
+        .unwrap();
+    let system = prompts::system(now, "me@example.com");
+    assert!(system.contains("Wednesday, August 26, 2026, 2:30 PM"));
+    assert!(system.contains("me@example.com"));
+    assert!(system.contains(
+        "The metadata line is the only evidence about attachments, starring and read state."
+    ));
+    assert!(!system.contains("{{"));
+    let plan = prompts::plan(now, "me@example.com", &["Inbox".into(), "Sent".into()]);
+    assert!(plan.contains("Today's date: 2026-08-26"));
+    assert!(plan.contains("Available folders: Inbox, Sent"));
+    assert!(plan.contains("office lease renewal"));
+    assert!(plan.contains("dateOrder decision table"));
+    assert!(plan.contains("Wrong interpretations"));
+    assert!(!plan.contains("{{"));
+    let block = prompts::passage_block(&sample_passages());
     assert!(block.starts_with("[1] From: Alice <alice@example.com>\nTo: me@example.com\nSubject: Budget\nDate: Wednesday, August 26, 2026, 2:00 PM\nAttachments: none | Starred: no | Unread: no\nfirst passage"));
     assert!(block.contains("\n\n---\n\n[2] From: Bob <bob@example.com>"));
     assert!(block.contains(

@@ -134,31 +134,7 @@ impl Staging {
     }
 
     pub fn part(&self, lookup: PartLookup<'_>) -> std::io::Result<StagedPart> {
-        let mut first_error = None;
-        for owner in lookup.owners {
-            let path = self
-                .owner_dir(OwnerScope {
-                    account_id: lookup.account_id,
-                    owner: owner,
-                })
-                .join(lookup.id);
-            match fs::metadata(&path) {
-                Ok(metadata) => {
-                    return Ok(StagedPart {
-                        id: lookup.id.to_owned(),
-                        filename: lookup.filename,
-                        mime_type: lookup.mime_type,
-                        path: path,
-                        content_id: lookup.content_id,
-                        size: metadata.len(),
-                    })
-                }
-                Err(error) => first_error.get_or_insert(error),
-            };
-        }
-        Err(first_error.unwrap_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "no candidate owner given")
-        }))
+        find_part_across_owners(self, lookup)
     }
 
     pub fn move_owner(&self, transfer: OwnerTransfer<'_>) -> std::io::Result<()> {
@@ -285,12 +261,7 @@ impl Staging {
             return Ok(());
         };
         for entry in entries {
-            let entry = entry?;
-            if entry.file_type()?.is_dir()
-                && !live_operation_ids.contains(&entry.file_name().to_string_lossy().into_owned())
-            {
-                fs::remove_dir_all(entry.path())?;
-            }
+            remove_if_orphan_snapshot(entry?, live_operation_ids)?;
         }
         Ok(())
     }
@@ -305,4 +276,47 @@ impl Staging {
         }
         Ok(())
     }
+}
+
+fn find_part_across_owners(
+    staging: &Staging,
+    lookup: PartLookup<'_>,
+) -> std::io::Result<StagedPart> {
+    let mut first_error = None;
+    for owner in lookup.owners {
+        let path = staging
+            .owner_dir(OwnerScope {
+                account_id: lookup.account_id,
+                owner: owner,
+            })
+            .join(lookup.id);
+        match fs::metadata(&path) {
+            Ok(metadata) => {
+                return Ok(StagedPart {
+                    id: lookup.id.to_owned(),
+                    filename: lookup.filename,
+                    mime_type: lookup.mime_type,
+                    path: path,
+                    content_id: lookup.content_id,
+                    size: metadata.len(),
+                });
+            }
+            Err(error) => first_error.get_or_insert(error),
+        };
+    }
+    Err(first_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no candidate owner given")
+    }))
+}
+
+fn remove_if_orphan_snapshot(
+    entry: fs::DirEntry,
+    live_operation_ids: &HashSet<String>,
+) -> std::io::Result<()> {
+    let is_orphan_dir = entry.file_type()?.is_dir()
+        && !live_operation_ids.contains(&entry.file_name().to_string_lossy().into_owned());
+    if is_orphan_dir {
+        fs::remove_dir_all(entry.path())?;
+    }
+    Ok(())
 }

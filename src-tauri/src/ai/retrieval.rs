@@ -135,6 +135,89 @@ fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::SeqCst)
 }
 
+struct ArmQuery<'a> {
+    account_id: &'a str,
+    question: &'a str,
+}
+
+struct VectorArmInput<'a> {
+    account_id: &'a str,
+    vector: &'a [f32],
+    filters: &'a RetrievalFilters,
+}
+
+fn run_vector_arm(
+    connection: &rusqlite::Connection,
+    input: VectorArmInput<'_>,
+) -> Result<ArmOutput, rusqlite::Error> {
+    let passages = RetrievalRepository::candidates(
+        connection,
+        &CandidateQuery {
+            account_id: input.account_id,
+            vector: input.vector,
+            limit: CANDIDATE_BUDGET,
+            filters: input.filters,
+        },
+    )?
+    .into_iter()
+    .map(|candidate| Selected {
+        message_seq: candidate.message_seq,
+        chunk_index: candidate.chunk_index,
+        similarity: 1.0 - candidate.distance,
+    })
+    .filter(|entry| entry.similarity >= SIMILARITY_FLOOR)
+    .collect();
+    Ok(ArmOutput::Passages(passages))
+}
+
+fn execute_arm(
+    connection: &rusqlite::Connection,
+    target: &ArmQuery<'_>,
+    arm: Arm,
+) -> Result<ArmOutput, rusqlite::Error> {
+    match arm {
+        Arm::Vector(vector, filters) => run_vector_arm(
+            connection,
+            VectorArmInput {
+                account_id: target.account_id,
+                vector: &vector,
+                filters: &filters,
+            },
+        ),
+        Arm::Lexical(filters) => Ok(ArmOutput::Sequences(
+            RetrievalRepository::lexical_relevance(
+                connection,
+                &LexicalQuery {
+                    account_id: target.account_id,
+                    question: target.question,
+                    limit: LEXICAL_LIMIT,
+                    filters: &filters,
+                },
+            )?,
+        )),
+        Arm::Chronological(filters) => Ok(ArmOutput::Sequences(
+            RetrievalRepository::lexical_chronological(
+                connection,
+                &LexicalQuery {
+                    account_id: target.account_id,
+                    question: target.question,
+                    limit: CHRONOLOGICAL_LIMIT,
+                    filters: &filters,
+                },
+            )?,
+        )),
+        Arm::Recency(filters, ascending) => Ok(ArmOutput::Sequences(RetrievalRepository::recency(
+            connection,
+            &RecencyQuery {
+                account_id: target.account_id,
+                limit: RECENCY_LIMIT,
+                filters: &filters,
+                ascending: ascending,
+            },
+        )?)),
+    }
+}
+
 async fn run_arm(target: OwnedArmTarget, arm: Arm) -> Result<ArmOutput, String> {
     let OwnedArmTarget {
         storage,
@@ -142,59 +225,15 @@ async fn run_arm(target: OwnedArmTarget, arm: Arm) -> Result<ArmOutput, String> 
         question,
     } = target;
     storage
-        .run(move |connection| match arm {
-            Arm::Vector(vector, filters) => Ok(ArmOutput::Passages(
-                RetrievalRepository::candidates(
-                    connection,
-                    &CandidateQuery {
-                        account_id: &account_id,
-                        vector: &vector,
-                        limit: CANDIDATE_BUDGET,
-                        filters: &filters,
-                    },
-                )?
-                .into_iter()
-                .map(|candidate| Selected {
-                    message_seq: candidate.message_seq,
-                    chunk_index: candidate.chunk_index,
-                    similarity: 1.0 - candidate.distance,
-                })
-                .filter(|entry| entry.similarity >= SIMILARITY_FLOOR)
-                .collect(),
-            )),
-            Arm::Lexical(filters) => Ok(ArmOutput::Sequences(
-                RetrievalRepository::lexical_relevance(
-                    connection,
-                    &LexicalQuery {
-                        account_id: &account_id,
-                        question: &question,
-                        limit: LEXICAL_LIMIT,
-                        filters: &filters,
-                    },
-                )?,
-            )),
-            Arm::Chronological(filters) => Ok(ArmOutput::Sequences(
-                RetrievalRepository::lexical_chronological(
-                    connection,
-                    &LexicalQuery {
-                        account_id: &account_id,
-                        question: &question,
-                        limit: CHRONOLOGICAL_LIMIT,
-                        filters: &filters,
-                    },
-                )?,
-            )),
-            Arm::Recency(filters, ascending) => {
-                Ok(ArmOutput::Sequences(RetrievalRepository::recency(
-                    connection,
-                    &RecencyQuery {
-                        account_id: &account_id,
-                        limit: RECENCY_LIMIT,
-                        filters: &filters,
-                        ascending: ascending,
-                    },
-                )?))
-            }
+        .run(move |connection| {
+            execute_arm(
+                connection,
+                &ArmQuery {
+                    account_id: &account_id,
+                    question: &question,
+                },
+                arm,
+            )
         })
         .await
         .map_err(storage_error)
@@ -220,18 +259,20 @@ async fn run_arms(target: ArmTarget<'_>, arms: Vec<Arm>) -> Vec<Result<ArmOutput
     collected.into_iter().map(|(_, result)| result).collect()
 }
 
+fn unique_passage_sequences(entries: &[Selected]) -> Vec<i64> {
+    let mut ordered: Vec<i64> = Vec::new();
+    for entry in entries {
+        if !ordered.contains(&entry.message_seq) {
+            ordered.push(entry.message_seq);
+        }
+    }
+    ordered
+}
+
 fn sequences(output: &ArmOutput) -> Vec<i64> {
     match output {
         ArmOutput::Sequences(entries) => entries.clone(),
-        ArmOutput::Passages(entries) => {
-            let mut ordered: Vec<i64> = Vec::new();
-            for entry in entries {
-                if !ordered.contains(&entry.message_seq) {
-                    ordered.push(entry.message_seq);
-                }
-            }
-            ordered
-        }
+        ArmOutput::Passages(entries) => unique_passage_sequences(entries),
     }
 }
 
@@ -402,16 +443,86 @@ fn select_outputs(
     unfiltered.into_iter().chain(filtered).collect()
 }
 
+struct PlannedArmsInput<'a> {
+    filters: &'a RetrievalFilters,
+    ascending: bool,
+    planned_vector: Option<Vec<f32>>,
+    prefer_filtered: bool,
+}
+
+fn build_planned_arms(input: PlannedArmsInput<'_>) -> Vec<Arm> {
+    let mut extra: Vec<Arm> = Vec::new();
+    if input.prefer_filtered {
+        if let Some(vector) = input.planned_vector {
+            extra.push(Arm::Vector(vector, input.filters.clone()));
+        }
+        extra.push(Arm::Lexical(input.filters.clone()));
+    }
+    if !input.filters.is_empty() {
+        extra.push(Arm::Recency(input.filters.clone(), input.ascending));
+    }
+    if input.ascending {
+        extra.push(Arm::Chronological(input.filters.clone()));
+    }
+    extra
+}
+
+async fn finalize_retrieval(
+    context: RetrieveContext<'_>,
+    account_id: &str,
+    outputs: Vec<ArmOutput>,
+) -> Result<Retrieval, String> {
+    let arms: Vec<Vec<i64>> = outputs.iter().map(sequences).collect();
+    let order = fusion::fuse(&arms);
+    let selected = fusion::select(&order, &scored(&outputs), PASSAGE_LIMIT);
+    let wanted: Vec<i64> = selected.iter().map(|entry| entry.message_seq).collect();
+    let account = account_id.to_owned();
+    let sources = context
+        .storage
+        .run(move |connection| RetrievalRepository::sources(connection, &account, &wanted))
+        .await
+        .map_err(storage_error)?;
+    let passages = assemble(&selected, &sources);
+    if cancelled(context.cancel) {
+        return Ok(Retrieval::Cancelled);
+    }
+    if passages.is_empty() {
+        return Ok(Retrieval::Empty);
+    }
+    Ok(Retrieval::Found(Box::new(Retrieved {
+        sources: cited_sources(&passages, &sources),
+        context: prompts::passage_block(&passages),
+        passages: passages,
+    })))
+}
+
+async fn load_folder_names(storage: &Storage, account_id: &str) -> Result<Vec<String>, String> {
+    let account = account_id.to_owned();
+    storage
+        .run(move |connection| RetrievalRepository::folder_names(connection, &account))
+        .await
+        .map_err(storage_error)
+}
+
+fn merge_arm_outcomes(
+    base_outcomes: Vec<Result<ArmOutput, String>>,
+    narrowed_outcomes: Vec<Result<ArmOutput, String>>,
+    prefer_filtered: bool,
+) -> Result<Vec<ArmOutput>, String> {
+    let unfiltered = split(base_outcomes);
+    let filtered = split(narrowed_outcomes);
+    let outputs = select_outputs(unfiltered.outputs, filtered.outputs, prefer_filtered);
+    if let (true, Some(error)) = (outputs.is_empty(), unfiltered.failure.or(filtered.failure)) {
+        return Err(error);
+    }
+    Ok(outputs)
+}
+
 pub async fn retrieve(
     context: RetrieveContext<'_>,
     request: &RetrievalRequest<'_>,
 ) -> Result<Retrieval, String> {
-    let account = request.account_id.to_owned();
-    let folders = context
-        .storage
-        .run(move |connection| RetrievalRepository::folder_names(connection, &account))
-        .await
-        .map_err(storage_error)?;
+    let folders = load_folder_names(context.storage, request.account_id).await?;
     if cancelled(context.cancel) {
         return Ok(Retrieval::Cancelled);
     }
@@ -439,21 +550,13 @@ pub async fn retrieve(
     if cancelled(context.cancel) {
         return Ok(Retrieval::Cancelled);
     }
-    let constrained = !plan.filters.is_empty();
-    let prefer_filtered = constrained || contextual;
-    let mut extra: Vec<Arm> = Vec::new();
-    if prefer_filtered {
-        if let Some(vector) = planned_vector {
-            extra.push(Arm::Vector(vector, plan.filters.clone()));
-        }
-        extra.push(Arm::Lexical(plan.filters.clone()));
-    }
-    if constrained {
-        extra.push(Arm::Recency(plan.filters.clone(), plan.ascending));
-    }
-    if plan.ascending {
-        extra.push(Arm::Chronological(plan.filters.clone()));
-    }
+    let prefer_filtered = !plan.filters.is_empty() || contextual;
+    let extra = build_planned_arms(PlannedArmsInput {
+        filters: &plan.filters,
+        ascending: plan.ascending,
+        planned_vector: planned_vector,
+        prefer_filtered: prefer_filtered,
+    });
     let mut narrowed: Vec<Result<ArmOutput, String>> = Vec::new();
     if !extra.is_empty() {
         narrowed = run_arms(
@@ -469,32 +572,6 @@ pub async fn retrieve(
             return Ok(Retrieval::Cancelled);
         }
     }
-    let unfiltered = split(base.outcomes);
-    let filtered = split(narrowed);
-    let outputs = select_outputs(unfiltered.outputs, filtered.outputs, prefer_filtered);
-    if let (true, Some(error)) = (outputs.is_empty(), unfiltered.failure.or(filtered.failure)) {
-        return Err(error);
-    }
-    let arms: Vec<Vec<i64>> = outputs.iter().map(sequences).collect();
-    let order = fusion::fuse(&arms);
-    let selected = fusion::select(&order, &scored(&outputs), PASSAGE_LIMIT);
-    let wanted: Vec<i64> = selected.iter().map(|entry| entry.message_seq).collect();
-    let account = request.account_id.to_owned();
-    let sources = context
-        .storage
-        .run(move |connection| RetrievalRepository::sources(connection, &account, &wanted))
-        .await
-        .map_err(storage_error)?;
-    let passages = assemble(&selected, &sources);
-    if cancelled(context.cancel) {
-        return Ok(Retrieval::Cancelled);
-    }
-    if passages.is_empty() {
-        return Ok(Retrieval::Empty);
-    }
-    Ok(Retrieval::Found(Box::new(Retrieved {
-        sources: cited_sources(&passages, &sources),
-        context: prompts::passage_block(&passages),
-        passages: passages,
-    })))
+    let outputs = merge_arm_outcomes(base.outcomes, narrowed, prefer_filtered)?;
+    finalize_retrieval(context, request.account_id, outputs).await
 }

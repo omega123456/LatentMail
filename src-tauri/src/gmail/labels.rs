@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::client::SendRequest;
 use super::{
     GmailClient, GmailError, GmailLabel, LabelColorPair, DRAFTS_DELETE_COST, LABELS_CREATE_COST,
     LABELS_DELETE_COST, LABELS_UPDATE_COST,
@@ -200,7 +201,7 @@ impl GmailClient {
         color: Option<&LabelColorPair>,
     ) -> Result<GmailLabel, GmailError> {
         let raw: RawLabel = self
-            .send(super::SendRequest {
+            .send(SendRequest {
                 method: reqwest::Method::POST,
                 path: "/users/me/labels",
                 body: &CreateLabelRequest {
@@ -224,7 +225,7 @@ impl GmailClient {
     ) -> Result<GmailLabel, GmailError> {
         let path = format!("/users/me/labels/{id}");
         let raw: RawLabel = self
-            .send(super::SendRequest {
+            .send(SendRequest {
                 method: reqwest::Method::PATCH,
                 path: &path,
                 body: &UpdateLabelRequest {
@@ -244,7 +245,7 @@ impl GmailClient {
     pub async fn delete_label(&self, id: &str) -> Result<(), GmailError> {
         let path = format!("/users/me/labels/{id}");
         let _: serde_json::Value = self
-            .send(super::SendRequest {
+            .send(SendRequest {
                 method: reqwest::Method::DELETE,
                 path: &path,
                 body: &(),
@@ -258,7 +259,7 @@ impl GmailClient {
     pub async fn delete_draft(&self, id: &str) -> Result<(), GmailError> {
         let path = format!("/users/me/drafts/{id}");
         let _: serde_json::Value = self
-            .send(super::SendRequest {
+            .send(SendRequest {
                 method: reqwest::Method::DELETE,
                 path: &path,
                 body: &(),

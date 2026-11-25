@@ -47,61 +47,17 @@ export type MessageActionRibbonProps = {
 
 const THEME = RIBBON_THEMES.sm;
 
-export function MessageActionRibbon({
-  systemLabelIds,
-  unread,
-  starred,
-  labels,
-  onToggleRead,
-  onToggleStar,
-  onApplyLabels,
-  onMoveTo,
+function MessageDestructiveActions({
+  visibility,
   onToggleSpam,
   onDelete,
-  onCreateLabel,
-  onReply,
-  onReplyAll,
-  onForward,
-  onEditDraft,
-  exportActions,
-}: MessageActionRibbonProps) {
-  const visibility = computeRibbonVisibility(systemLabelIds);
-
+}: {
+  visibility: ReturnType<typeof computeRibbonVisibility>;
+  onToggleSpam: () => void;
+  onDelete: () => void;
+}) {
   return (
-    <div
-      data-testid="message-action-ribbon"
-      role="toolbar"
-      aria-label="Message actions"
-      className="flex items-center gap-1"
-    >
-      <RibbonComposeGroup
-        theme={THEME}
-        onReply={onReply}
-        onReplyAll={onReplyAll}
-        onForward={onForward}
-        onEditDraft={onEditDraft}
-      />
-      {visibility.showReadToggle && (
-        <RibbonReadButton theme={THEME} unread={unread} onToggleRead={onToggleRead} />
-      )}
-      {visibility.showStar && (
-        <RibbonStarButton theme={THEME} starred={starred} onToggleStar={onToggleStar} />
-      )}
-      {visibility.showLabels && (
-        <RibbonLabelsPopover
-          theme={THEME}
-          labels={labels}
-          onCreateLabel={onCreateLabel}
-          onApplyLabels={onApplyLabels}
-        />
-      )}
-      {visibility.showMoveTo && (
-        <RibbonMoveToPopover
-          theme={THEME}
-          currentSystemLabelIds={systemLabelIds}
-          onMoveTo={onMoveTo}
-        />
-      )}
+    <>
       {visibility.showSpamToggle && (
         <>
           <RibbonSeparator theme={THEME} />
@@ -118,7 +74,54 @@ export function MessageActionRibbon({
           <RibbonDeleteButton theme={THEME} onDelete={onDelete} />
         </>
       )}
-      {exportActions && <MoreMessageActions actions={exportActions} />}
+    </>
+  );
+}
+
+export function MessageActionRibbon(props: MessageActionRibbonProps) {
+  const visibility = computeRibbonVisibility(props.systemLabelIds);
+
+  return (
+    <div
+      data-testid="message-action-ribbon"
+      role="toolbar"
+      aria-label="Message actions"
+      className="flex items-center gap-1"
+    >
+      <RibbonComposeGroup
+        theme={THEME}
+        onReply={props.onReply}
+        onReplyAll={props.onReplyAll}
+        onForward={props.onForward}
+        onEditDraft={props.onEditDraft}
+      />
+      {visibility.showReadToggle && (
+        <RibbonReadButton theme={THEME} unread={props.unread} onToggleRead={props.onToggleRead} />
+      )}
+      {visibility.showStar && (
+        <RibbonStarButton theme={THEME} starred={props.starred} onToggleStar={props.onToggleStar} />
+      )}
+      {visibility.showLabels && (
+        <RibbonLabelsPopover
+          theme={THEME}
+          labels={props.labels}
+          onCreateLabel={props.onCreateLabel}
+          onApplyLabels={props.onApplyLabels}
+        />
+      )}
+      {visibility.showMoveTo && (
+        <RibbonMoveToPopover
+          theme={THEME}
+          currentSystemLabelIds={props.systemLabelIds}
+          onMoveTo={props.onMoveTo}
+        />
+      )}
+      <MessageDestructiveActions
+        visibility={visibility}
+        onToggleSpam={props.onToggleSpam}
+        onDelete={props.onDelete}
+      />
+      {props.exportActions && <MoreMessageActions actions={props.exportActions} />}
     </div>
   );
 }

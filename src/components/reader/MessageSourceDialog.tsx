@@ -23,6 +23,36 @@ export function MessageSourceDialog() {
   return <MessageSourceContent key={target.messageId} target={target} onClose={close} />;
 }
 
+function MessageSourceActions({
+  hasData,
+  onCopy,
+  onDownload,
+}: {
+  hasData: boolean;
+  onCopy: () => void;
+  onDownload: () => void;
+}) {
+  return (
+    <>
+      {hasData && (
+        <button type="button" onClick={onCopy} className={dialogQuietButtonClass}>
+          <Copy size={ICON_SIZE.sm} aria-hidden="true" />
+          Copy
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onDownload}
+        disabled={!hasData}
+        className={`${dialogPrimaryButtonClass} disabled:cursor-default disabled:opacity-60`}
+      >
+        <Download size={ICON_SIZE.sm} aria-hidden="true" />
+        Download .eml
+      </button>
+    </>
+  );
+}
+
 function MessageSourceContent({
   target,
   onClose,
@@ -58,25 +88,7 @@ function MessageSourceContent({
       testId="message-source-modal"
       closeLabel="Close original message"
       onClose={onClose}
-      actions={
-        <>
-          {data && (
-            <button type="button" onClick={copy} className={dialogQuietButtonClass}>
-              <Copy size={ICON_SIZE.sm} aria-hidden="true" />
-              Copy
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={download}
-            disabled={!data}
-            className={`${dialogPrimaryButtonClass} disabled:cursor-default disabled:opacity-60`}
-          >
-            <Download size={ICON_SIZE.sm} aria-hidden="true" />
-            Download .eml
-          </button>
-        </>
-      }
+      actions={<MessageSourceActions hasData={Boolean(data)} onCopy={copy} onDownload={download} />}
     >
       <MessageSourceDialogBody
         data={data}

@@ -43,6 +43,13 @@ type MailLayoutCommandsInput = {
   toggleAssistant: () => void;
 };
 
+function runCommand(action: () => void) {
+  return (event: KeyboardEvent) => {
+    event.preventDefault();
+    action();
+  };
+}
+
 export function useMailLayoutCommands({
   activeAccount,
   activeAccountId,
@@ -80,38 +87,17 @@ export function useMailLayoutCommands({
   }, [activeAccount, keyboardConversation.data, keyboardMultiSelect]);
 
   useCommands({
-    newMessage: (event) => {
-      event.preventDefault();
-      compose();
-    },
-    replyToMessage: (event) => {
-      event.preventDefault();
-      composeTarget('reply');
-    },
-    replyAllToMessage: (event) => {
-      event.preventDefault();
-      composeTarget('reply-all');
-    },
-    forwardMessage: (event) => {
-      event.preventDefault();
-      composeTarget('forward');
-    },
-    editDraft: (event) => {
-      event.preventDefault();
-      composeTarget('edit-draft');
-    },
+    newMessage: runCommand(compose),
+    replyToMessage: runCommand(() => composeTarget('reply')),
+    replyAllToMessage: runCommand(() => composeTarget('reply-all')),
+    forwardMessage: runCommand(() => composeTarget('forward')),
+    editDraft: runCommand(() => composeTarget('edit-draft')),
     focusSearch: (event) => {
       event.preventDefault();
       searchFieldRef.current?.focus();
     },
-    toggleAssistant: (event) => {
-      event.preventDefault();
-      toggleAssistant();
-    },
-    showOriginal: (event) => {
-      event.preventDefault();
-      showOriginal();
-    },
+    toggleAssistant: runCommand(toggleAssistant),
+    showOriginal: runCommand(showOriginal),
   });
 
   return { compose };

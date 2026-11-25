@@ -6,77 +6,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
 import { EventBridge } from '@/lib/query/event-bridge';
 import type { MessageBody } from '@/lib/types/ipc';
-import { useSelectionStore } from '@/stores/selection';
 import { useMultiSelectStore } from '@/stores/multi-select';
-import { useSearchStore } from '@/stores/search';
+import { useSelectionStore } from '@/stores/selection';
 import { ipc } from '@/tests/ipc-mock';
 import { captureConsole } from '@/tests/console';
+import {
+  conversationFor,
+  renderWithClient,
+  resetReadingPaneSearchStore,
+  selectAccount,
+} from '@/tests/components/reader/reading-pane-helpers';
 
 const LABEL_CHANGE_COUNT = 2;
-const SELECTED_THREAD_COUNT = 2;
-
-function renderWithClient({ bridged }: { bridged: boolean } = { bridged: false }) {
-  const client = new QueryClient();
-  return render(
-    <QueryClientProvider client={client}>
-      {bridged && <EventBridge />}
-      <ReadingPaneContainer threadId="thread-1" />
-    </QueryClientProvider>,
-  );
-}
-
-function conversationFor(htmlPresence: 'neverFetched' | 'present' | 'tooLarge') {
-  return {
-    threadId: 'thread-1',
-    subject: 'Subject',
-    messages: [
-      {
-        id: 'message-1',
-        sender: 'Alex <alex@example.com>',
-        recipients: ['me@example.com'],
-        subject: 'Subject',
-        sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
-        snippet: 'Preview',
-        htmlBody: null,
-        htmlPresence: htmlPresence,
-        truncated: false,
-        plainBody: null,
-        hasAttachments: false,
-        isUnread: false,
-        isStarred: false,
-        labelIds: ['INBOX'],
-        remoteImagesBlocked: false,
-        remoteImagesAllowed: false,
-        inlineImagesPending: false,
-        attachments: [],
-      },
-    ],
-  };
-}
-
-function selectAccount() {
-  act(() =>
-    useSelectionStore.setState({
-      activeAccountId: 'account-1',
-      activeMailboxId: 'INBOX',
-      activeThreadId: 'thread-1',
-      keyboardCursor: null,
-    }),
-  );
-}
 
 describe('ReadingPaneContainer', () => {
-  afterEach(() =>
-    act(() =>
-      useSearchStore.setState({
-        draft: '',
-        submittedQuery: '',
-        scope: { kind: 'default' },
-        active: false,
-        panelOpen: false,
-      }),
-    ),
-  );
+  afterEach(() => resetReadingPaneSearchStore());
 
   it('reads a cached body locally without requesting Gmail', async () => {
     selectAccount();
@@ -173,149 +117,6 @@ describe('ReadingPaneContainer', () => {
     expect(consoleInfo).toHaveBeenCalledWith(
       'event message://body-fetched {"accountId":"account-1","messageId":"message-1"}',
     );
-  });
-
-  it('resolves bulk selection state from the search results list while search is active, not the mailbox listing', async () => {
-    useSelectionStore.setState({
-      activeAccountId: 'account-1',
-      activeMailboxId: 'INBOX',
-      activeThreadId: null,
-      keyboardCursor: null,
-    });
-    useSearchStore.setState({
-      draft: 'from:anna',
-      submittedQuery: 'from:anna',
-      scope: { kind: 'default' },
-      active: true,
-      panelOpen: false,
-    });
-    useMultiSelectStore.setState({ selectedIds: new Set(['thread-search-1']), anchorId: null });
-    ipc.override('list_threads', { items: [], nextCursor: null });
-    ipc.override('search_threads', {
-      items: [
-        {
-          id: 'thread-search-1',
-          subject: 'Found via search',
-          sender: { display: 'Anna', address: 'anna@example.com' },
-          sentRecipient: null,
-          latestAt: getTime(parseISO('2026-08-11T10:00:00Z')),
-          messageCount: 1,
-          isUnread: true,
-          isStarred: true,
-          hasAttachments: false,
-          hasDraft: false,
-          systemLabelIds: ['SPAM'],
-        },
-      ],
-      nextCursor: null,
-      total: 1,
-    });
-
-    renderWithClient();
-
-    const panel = await screen.findByTestId('bulk-selection-panel');
-    expect(within(panel).getByText('1 conversation selected')).toBeInTheDocument();
-    const ribbon = within(panel);
-    expect(await ribbon.findByRole('button', { name: 'Unstar' })).toBeInTheDocument();
-    expect(await ribbon.findByRole('button', { name: 'Not spam' })).toBeInTheDocument();
-  });
-
-  it('disables a Move to destination for a bulk selection only when every selected thread already carries it', async () => {
-    const user = userEvent.setup();
-    useSelectionStore.setState({
-      activeAccountId: 'account-1',
-      activeMailboxId: 'INBOX',
-      activeThreadId: null,
-      keyboardCursor: null,
-    });
-    useMultiSelectStore.setState({
-      selectedIds: new Set(['thread-trash', 'thread-inbox']),
-      anchorId: null,
-    });
-    ipc.override('list_threads', {
-      items: [
-        {
-          id: 'thread-trash',
-          subject: 'In trash',
-          sender: { display: 'Anna', address: 'anna@example.com' },
-          sentRecipient: null,
-          latestAt: getTime(parseISO('2026-08-11T10:00:00Z')),
-          messageCount: 1,
-          isUnread: false,
-          isStarred: false,
-          hasAttachments: false,
-          hasDraft: false,
-          systemLabelIds: ['TRASH'],
-        },
-        {
-          id: 'thread-inbox',
-          subject: 'In inbox',
-          sender: { display: 'Bob', address: 'bob@example.com' },
-          sentRecipient: null,
-          latestAt: getTime(parseISO('2026-08-10T10:00:00Z')),
-          messageCount: 1,
-          isUnread: false,
-          isStarred: false,
-          hasAttachments: false,
-          hasDraft: false,
-          systemLabelIds: ['INBOX'],
-        },
-      ],
-      nextCursor: null,
-    });
-
-    renderWithClient();
-
-    const panel = await screen.findByTestId('bulk-selection-panel');
-    await user.click(within(panel).getByRole('button', { name: 'Move to' }));
-    expect(await screen.findByRole('menuitem', { name: /Trash/ })).toBeEnabled();
-  });
-
-  it('shows each label in its own colour in the bulk selection labels menu', async () => {
-    const user = userEvent.setup();
-    useSelectionStore.setState({
-      activeAccountId: 'account-1',
-      activeMailboxId: 'INBOX',
-      activeThreadId: null,
-      keyboardCursor: null,
-    });
-    useMultiSelectStore.setState({
-      selectedIds: new Set(['thread-one', 'thread-two']),
-      anchorId: null,
-    });
-    ipc.override('list_labels', [
-      {
-        id: 'Label_1',
-        name: 'Projects',
-        kind: 'user',
-        color: { background: '#434343', text: '#ffffff' },
-        messageCount: 2,
-        unreadCount: 0,
-      },
-    ]);
-    ipc.override('list_threads', {
-      items: ['thread-one', 'thread-two'].map((id) => ({
-        id: id,
-        subject: id,
-        sender: { display: 'Anna', address: 'anna@example.com' },
-        sentRecipient: null,
-        latestAt: getTime(parseISO('2026-08-11T10:00:00Z')),
-        messageCount: 1,
-        isUnread: false,
-        isStarred: false,
-        hasAttachments: false,
-        hasDraft: false,
-        systemLabelIds: ['INBOX'],
-      })),
-      nextCursor: null,
-    });
-
-    renderWithClient();
-
-    const panel = await screen.findByTestId('bulk-selection-panel');
-    await user.click(within(panel).getByRole('button', { name: 'Labels' }));
-    const entry = await screen.findByRole('menuitemcheckbox', { name: /Projects/ });
-    expect(entry.querySelector('.size-chip-dot')).toHaveClass('bg-label-gmail-1');
   });
 
   it('never removes a user label when moving a thread found through a user-label mailbox', async () => {
@@ -490,55 +291,5 @@ describe('ReadingPaneContainer', () => {
     ]);
     expect(deleteMessageChanges).toEqual([expect.objectContaining({ messageIds: ['message-1'] })]);
     expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account-1"}');
-  });
-
-  it('keeps the bulk selection after a bulk action so more actions can follow', async () => {
-    const user = userEvent.setup();
-    useSelectionStore.setState({
-      activeAccountId: 'account-1',
-      activeMailboxId: 'INBOX',
-      activeThreadId: null,
-      keyboardCursor: null,
-    });
-    useMultiSelectStore.setState({
-      selectedIds: new Set(['thread-a', 'thread-b']),
-      anchorId: null,
-    });
-    const threadChanges: unknown[] = [];
-    ipc.override('list_threads', {
-      items: ['thread-a', 'thread-b'].map((id, index) => ({
-        id: id,
-        subject: `Subject ${id}`,
-        sender: { display: `Sender ${id}`, address: `${id}@example.com` },
-        sentRecipient: null,
-        latestAt: getTime(parseISO('2026-08-11T10:00:00Z')) - index,
-        messageCount: 1,
-        isUnread: false,
-        isStarred: false,
-        hasAttachments: false,
-        hasDraft: false,
-        systemLabelIds: ['INBOX'],
-      })),
-      nextCursor: null,
-    });
-    ipc.override('mutate_threads', (request) => {
-      threadChanges.push(request);
-      return [];
-    });
-
-    renderWithClient();
-
-    const panel = within(await screen.findByTestId('bulk-selection-panel'));
-    await user.click(panel.getByRole('button', { name: 'Star' }));
-    await waitFor(() => expect(threadChanges).toHaveLength(1));
-    expect(threadChanges).toEqual([
-      expect.objectContaining({ threadIds: ['thread-a', 'thread-b'], add: ['STARRED'] }),
-    ]);
-    expect(useMultiSelectStore.getState().selectedIds.size).toBe(SELECTED_THREAD_COUNT);
-    expect(
-      within(await screen.findByTestId('bulk-selection-panel')).getByText(
-        '2 conversations selected',
-      ),
-    ).toBeInTheDocument();
   });
 });

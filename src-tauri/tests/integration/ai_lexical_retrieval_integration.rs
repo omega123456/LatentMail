@@ -244,78 +244,54 @@ fn the_recency_path_returns_mail_that_no_keyword_can_reach() {
     );
 }
 
+fn filter_with(configure: impl FnOnce(&mut RetrievalFilters)) -> RetrievalFilters {
+    let mut filters = RetrievalFilters::default();
+    configure(&mut filters);
+    filters
+}
+
 #[test]
 fn every_filter_field_restricts_the_recency_path() {
     let (connection, early_seq, late_seq) = filtered_fixture();
     let cases = [
         (
-            RetrievalFilters {
-                date_from: Some(1_500),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.date_from = Some(1_500)),
             late_seq,
         ),
         (
-            RetrievalFilters {
-                date_to: Some(1_500),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.date_to = Some(1_500)),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                sender: Some("alice@example.com".into()),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.sender = Some("alice@example.com".into())),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                recipient: Some("team@example.com".into()),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.recipient = Some("team@example.com".into())),
             late_seq,
         ),
         (
-            RetrievalFilters {
-                folder: Some("Inbox".into()),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.folder = Some("Inbox".into())),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                folder: Some("Sent".into()),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.folder = Some("Sent".into())),
             late_seq,
         ),
         (
-            RetrievalFilters {
-                has_attachment: Some(true),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.has_attachment = Some(true)),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                is_read: Some(true),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.is_read = Some(true)),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                is_read: Some(false),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.is_read = Some(false)),
             late_seq,
         ),
         (
-            RetrievalFilters {
-                is_starred: Some(true),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.is_starred = Some(true)),
             early_seq,
         ),
     ];
@@ -328,10 +304,7 @@ fn every_filter_field_restricts_the_recency_path() {
         );
     }
 
-    let unknown_folder = RetrievalFilters {
-        folder: Some("SENT".into()),
-        ..RetrievalFilters::default()
-    };
+    let unknown_folder = filter_with(|filters| filters.folder = Some("SENT".into()));
     assert!(recency(&connection, &unknown_folder, false).is_empty());
 }
 
@@ -530,59 +503,35 @@ fn every_filter_field_restricts_both_lexical_paths() {
     let (connection, early_seq, late_seq) = filtered_fixture();
     let cases = [
         (
-            RetrievalFilters {
-                date_from: Some(1_500),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.date_from = Some(1_500)),
             late_seq,
         ),
         (
-            RetrievalFilters {
-                date_to: Some(1_500),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.date_to = Some(1_500)),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                sender: Some("alice@example.com".into()),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.sender = Some("alice@example.com".into())),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                recipient: Some("team@example.com".into()),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.recipient = Some("team@example.com".into())),
             late_seq,
         ),
         (
-            RetrievalFilters {
-                folder: Some("Inbox".into()),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.folder = Some("Inbox".into())),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                has_attachment: Some(true),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.has_attachment = Some(true)),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                is_read: Some(true),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.is_read = Some(true)),
             early_seq,
         ),
         (
-            RetrievalFilters {
-                is_starred: Some(true),
-                ..RetrievalFilters::default()
-            },
+            filter_with(|filters| filters.is_starred = Some(true)),
             early_seq,
         ),
     ];
