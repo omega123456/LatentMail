@@ -696,12 +696,12 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
 
     let server = MockServer::start().await;
     mount_empty_sync_mocks(&server).await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token(&account_id, "refresh-token").unwrap();
 
     let application = app();
@@ -745,16 +745,16 @@ async fn initialize_manages_the_storage_the_read_commands_resolve() {
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
 
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let application = app();
 
@@ -842,12 +842,12 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
 #[tokio::test]
 async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_direct_call() {
     let server = mount_fetch_body_server().await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
 
     let (storage, _directory) = open_account_storage();

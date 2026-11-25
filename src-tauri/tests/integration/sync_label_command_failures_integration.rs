@@ -47,12 +47,12 @@ async fn start_mock_label_server() -> MockServer {
 
 async fn harness(account_id: &str) -> Harness {
     let server = start_mock_label_server().await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token(account_id, "refresh").unwrap();
 
     let directory = tempfile::tempdir().unwrap();

@@ -32,10 +32,9 @@ impl MessageRepository {
         thread_id: &str,
     ) -> Result<Vec<Message>> {
         let mut statement = connection.prepare_cached("SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at")?;
-        let messages = statement
+        statement
             .query_map(params![account_id, thread_id], message)?
-            .collect();
-        messages
+            .collect()
     }
     pub fn list_by_threads(
         connection: &Connection,
@@ -124,10 +123,9 @@ impl MessageRepository {
     pub fn all_ids(connection: &Connection, account_id: &str) -> Result<Vec<String>> {
         let mut statement =
             connection.prepare("SELECT id FROM messages WHERE account_id=?1 ORDER BY id")?;
-        let ids = statement
+        statement
             .query_map([account_id], |row| row.get(0))?
-            .collect();
-        ids
+            .collect()
     }
 
     pub fn missing_ids(

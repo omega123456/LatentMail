@@ -542,9 +542,9 @@ async fn the_tauri_commands_delegate_to_the_service() {
 #[test]
 fn initialize_creates_the_avatar_cache_directory_and_manages_service_state() {
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let application = app();
     let storage_directory = tempfile::tempdir().unwrap();
@@ -559,9 +559,9 @@ fn initialize_creates_the_avatar_cache_directory_and_manages_service_state() {
 #[test]
 fn initialize_surfaces_a_readable_error_when_the_cache_path_is_unusable() {
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let application = app();
     let storage_directory = tempfile::tempdir().unwrap();

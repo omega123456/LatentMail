@@ -22,14 +22,13 @@ impl SettingRepository {
     }
     pub fn list(connection: &Connection) -> Result<Vec<SettingEntry>> {
         let mut statement = connection.prepare("SELECT key,value FROM settings")?;
-        let settings = statement
+        statement
             .query_map([], |row| {
                 Ok(SettingEntry {
                     key: row.get(0)?,
                     value: row.get(1)?,
                 })
             })?
-            .collect();
-        settings
+            .collect()
     }
 }

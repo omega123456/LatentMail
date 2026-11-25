@@ -114,7 +114,7 @@ impl EmbeddingRepository {
         limit: i64,
     ) -> Result<Vec<EmbeddingBacklog>> {
         let mut statement = connection.prepare_cached("SELECT m.seq,m.sender,m.recipients,m.subject,m.plain_body,m.html_body,m.truncated_body FROM messages m WHERE m.seq IN (SELECT k.seq FROM messages k WHERE k.account_id=?1 AND NOT EXISTS (SELECT 1 FROM message_embeddings e WHERE e.account_id=k.account_id AND e.message_seq=k.seq) AND NOT EXISTS (SELECT 1 FROM message_labels l WHERE l.account_id=k.account_id AND l.message_id=k.id AND l.label_id IN ('TRASH','SPAM','DRAFT')) LIMIT ?2)")?;
-        let rows = statement
+        statement
             .query_map(params![account_id, limit], |row| {
                 Ok(EmbeddingBacklog {
                     message_seq: row.get(0)?,
@@ -126,8 +126,7 @@ impl EmbeddingRepository {
                     truncated_body: row.get(6)?,
                 })
             })?
-            .collect();
-        rows
+            .collect()
     }
 
     pub fn count_indexed(connection: &Connection, account_id: &str) -> Result<i64> {
@@ -231,14 +230,13 @@ impl EmbeddingRepository {
             .flat_map(|value| value.to_le_bytes())
             .collect();
         let mut statement = connection.prepare_cached(&format!("SELECT e.message_seq,v.distance FROM {table} v JOIN message_embeddings e ON e.seq=v.rowid WHERE v.embedding MATCH ?1 AND k=?2 AND e.account_id=?3 ORDER BY v.distance"))?;
-        let rows = statement
+        statement
             .query_map(params![bytes, query.limit, account_id], |row| {
                 Ok(NearestPassage {
                     message_seq: row.get(0)?,
                     distance: row.get(1)?,
                 })
             })?
-            .collect();
-        rows
+            .collect()
     }
 }

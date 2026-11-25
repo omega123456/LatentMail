@@ -35,8 +35,7 @@ impl OperationRepository {
     }
     pub fn pending_durable(connection: &Connection) -> Result<Vec<Operation>> {
         let mut statement = connection.prepare("SELECT id,account_id,lane,kind,entity_key,payload,status,attempts,next_attempt_at,error,created_at,updated_at FROM operations WHERE kind IN ('send','draft') AND status='queued' ORDER BY created_at")?;
-        let operations = statement.query_map([], operation)?.collect();
-        operations
+        statement.query_map([], operation)?.collect()
     }
 
     pub fn failed_durable(
@@ -46,15 +45,13 @@ impl OperationRepository {
         match account_id {
             Some(account_id) => {
                 let mut statement = connection.prepare("SELECT id,account_id,lane,kind,entity_key,payload,status,attempts,next_attempt_at,error,created_at,updated_at FROM operations WHERE kind IN ('send','draft') AND status='failed' AND account_id=?1 ORDER BY created_at")?;
-                let rows = statement
+                statement
                     .query_map(params![account_id], operation)?
-                    .collect();
-                rows
+                    .collect()
             }
             None => {
                 let mut statement = connection.prepare("SELECT id,account_id,lane,kind,entity_key,payload,status,attempts,next_attempt_at,error,created_at,updated_at FROM operations WHERE kind IN ('send','draft') AND status='failed' ORDER BY created_at")?;
-                let rows = statement.query_map([], operation)?.collect();
-                rows
+                statement.query_map([], operation)?.collect()
             }
         }
     }

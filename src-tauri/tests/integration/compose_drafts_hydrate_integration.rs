@@ -26,12 +26,12 @@ fn build_hydration_app(server: &MockServer) -> HydrationApp {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     upsert_default_account(&storage.connection().unwrap());
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token("account", "refresh-token").unwrap();
 
     let registry = WorkRegistry::new();

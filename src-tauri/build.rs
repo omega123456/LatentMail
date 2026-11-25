@@ -32,7 +32,6 @@ fn isolate_debug_identifier() {
     }
     let config = config.to_string();
     println!("cargo::rustc-env=TAURI_CONFIG={config}");
-    std::env::set_var("TAURI_CONFIG", config);
 }
 
 fn main() {

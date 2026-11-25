@@ -34,8 +34,7 @@ impl AccountRepository {
     }
     pub fn list(connection: &Connection) -> Result<Vec<Account>> {
         let mut statement = connection.prepare_cached("SELECT id,email,display_name,avatar_url,history_id,needs_reauthentication,created_at,updated_at FROM accounts ORDER BY created_at")?;
-        let accounts = statement.query_map([], account)?.collect();
-        accounts
+        statement.query_map([], account)?.collect()
     }
     pub fn delete(connection: &Connection, id: &str) -> Result<usize> {
         connection.execute("DELETE FROM accounts WHERE id=?1", params![id])

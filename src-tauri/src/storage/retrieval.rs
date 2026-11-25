@@ -179,7 +179,7 @@ impl RetrievalRepository {
     pub fn recency(connection: &Connection, query: &RecencyQuery<'_>) -> Result<Vec<i64>> {
         let sql = Self::recency_sql(query.ascending);
         let mut statement = connection.prepare_cached(sql)?;
-        let sequences = statement
+        statement
             .query_map(
                 params![
                     query.account_id,
@@ -195,8 +195,7 @@ impl RetrievalRepository {
                 ],
                 |row| row.get(0),
             )?
-            .collect();
-        sequences
+            .collect()
     }
 
     fn lexical(connection: &Connection, sql: &str, query: &LexicalQuery<'_>) -> Result<Vec<i64>> {
@@ -204,7 +203,7 @@ impl RetrievalRepository {
             return Ok(Vec::new());
         };
         let mut statement = connection.prepare_cached(sql)?;
-        let sequences = statement
+        statement
             .query_map(
                 params![
                     expression,
@@ -221,8 +220,7 @@ impl RetrievalRepository {
                 ],
                 |row| row.get(0),
             )?
-            .collect();
-        sequences
+            .collect()
     }
 
     pub fn candidate_sql(table: &str, filtered: bool) -> String {
@@ -276,10 +274,9 @@ impl RetrievalRepository {
                 )?
                 .collect();
         }
-        let rows = statement
+        statement
             .query_map(params![bytes, query.limit, query.account_id], read)?
-            .collect();
-        rows
+            .collect()
     }
 
     pub fn sources(

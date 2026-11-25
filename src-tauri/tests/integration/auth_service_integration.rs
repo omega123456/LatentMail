@@ -183,8 +183,8 @@ async fn refresh_access_token_succeeds_against_a_mock_token_endpoint() {
         })))
         .mount(&server)
         .await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
@@ -205,8 +205,8 @@ async fn refresh_access_token_succeeds_against_a_mock_token_endpoint() {
 #[tokio::test]
 async fn refresh_access_token_caches_within_expiry_and_skips_tokens_shorter_than_the_skew() {
     let server = MockServer::start().await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
@@ -275,8 +275,8 @@ async fn refresh_access_token_marks_reauthentication_after_three_consecutive_fai
         )
         .mount(&server)
         .await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
@@ -317,8 +317,8 @@ async fn assert_three_failures_leave_reauthentication_unmarked(
     token_url: String,
     account_id: &str,
 ) {
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var("LATENTMAIL_GOOGLE_TOKEN_URL", token_url);
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env("LATENTMAIL_GOOGLE_TOKEN_URL", token_url);
     let (service, _directory) = service_with_storage();
     service
         .save_account(SaveAccountRequest {
@@ -369,10 +369,10 @@ async fn refresh_failures_from_a_struggling_token_server_never_mark_reauthentica
 
 #[test]
 fn client_id_prefers_the_runtime_override_and_rejects_an_empty_one() {
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "runtime-client");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "runtime-client");
     assert_eq!(auth::client_id().unwrap(), "runtime-client");
 
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "");
     assert_eq!(
         auth::client_id().unwrap_err(),
         "LATENTMAIL_GOOGLE_CLIENT_ID is not configured"
@@ -381,25 +381,25 @@ fn client_id_prefers_the_runtime_override_and_rejects_an_empty_one() {
 
 #[test]
 fn client_secret_is_optional_and_ignores_an_empty_value() {
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "runtime-secret");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_SECRET", "runtime-secret");
     assert_eq!(
         auth::client_secret().map(|secret| secret.secret().to_owned()),
         Some("runtime-secret".to_owned())
     );
 
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_SECRET", "");
     assert!(auth::client_secret().is_none());
 }
 
 #[tokio::test]
 async fn refresh_access_token_forwards_a_configured_client_secret_to_the_token_exchange() {
     let server = MockServer::start().await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "configured-secret");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_SECRET", "configured-secret");
     let (service, _directory) = service_with_storage();
     let application = app();
     let handle = application.handle().clone();
@@ -425,12 +425,12 @@ async fn refresh_access_token_forwards_a_configured_client_secret_to_the_token_e
     let body = String::from_utf8(requests[0].body.clone()).unwrap();
     assert!(body.contains("client_secret=configured-secret"));
 
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_SECRET", "");
 }
 
 #[tokio::test]
 async fn start_requires_a_configured_client_id() {
-    std::env::remove_var("LATENTMAIL_GOOGLE_CLIENT_ID");
+    crate::support::remove_env("LATENTMAIL_GOOGLE_CLIENT_ID");
     let (service, _directory) = service_with_storage();
     let application = app();
 
@@ -444,7 +444,7 @@ async fn start_requires_a_configured_client_id() {
 
 #[tokio::test]
 async fn start_fails_when_the_system_browser_cannot_be_opened_in_tests() {
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
     let (service, _directory) = service_with_storage();
     let application = app();
 
@@ -458,7 +458,7 @@ async fn start_fails_when_the_system_browser_cannot_be_opened_in_tests() {
 
 #[tokio::test]
 async fn list_accounts_begin_sign_in_and_begin_reauthentication_commands() {
-    std::env::remove_var("LATENTMAIL_GOOGLE_CLIENT_ID");
+    crate::support::remove_env("LATENTMAIL_GOOGLE_CLIENT_ID");
     let (service, _directory) = service_with_storage();
     let application = app();
     application.manage(service);
@@ -555,7 +555,7 @@ async fn exchange_code_round_trips_against_a_mock_token_endpoint() {
         })))
         .mount(&server)
         .await;
-    std::env::set_var(
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
@@ -585,7 +585,7 @@ async fn profile_maps_the_camel_case_email_address_field() {
         })))
         .mount(&server)
         .await;
-    std::env::set_var(
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_PROFILE_URL",
         format!("{}/profile", server.uri()),
     );
@@ -598,9 +598,9 @@ async fn profile_maps_the_camel_case_email_address_field() {
 #[test]
 fn initialize_manages_auth_service_from_the_setup_storage() {
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let application = app();
 
@@ -699,7 +699,7 @@ async fn exchange_and_profile_surface_http_and_payload_errors() {
         .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
         .mount(&server)
         .await;
-    std::env::set_var(
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
@@ -725,12 +725,12 @@ async fn exchange_and_profile_surface_http_and_payload_errors() {
     .await
     .is_err());
 
-    std::env::set_var(
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_PROFILE_URL",
         format!("{}/profile-error", server.uri()),
     );
     assert!(profile("token").await.is_err());
-    std::env::set_var(
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_PROFILE_URL",
         format!("{}/profile-invalid", server.uri()),
     );

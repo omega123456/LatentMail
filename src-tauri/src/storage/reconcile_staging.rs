@@ -83,12 +83,11 @@ impl ReconcileStagingRepository {
              WHERE r.account_id=?1 AND m.id IS NULL AND r.message_id>COALESCE(?2,'')
              ORDER BY r.message_id LIMIT ?3",
         )?;
-        let ids = statement
+        statement
             .query_map(params![account_id, after, RECONCILE_BATCH_SIZE], |row| {
                 row.get(0)
             })?
-            .collect();
-        ids
+            .collect()
     }
 
     pub fn absent_message_ids(
@@ -102,12 +101,11 @@ impl ReconcileStagingRepository {
              WHERE m.account_id=?1 AND r.message_id IS NULL AND m.id>COALESCE(?2,'')
              ORDER BY m.id LIMIT ?3",
         )?;
-        let ids = statement
+        statement
             .query_map(params![account_id, after, RECONCILE_BATCH_SIZE], |row| {
                 row.get(0)
             })?
-            .collect();
-        ids
+            .collect()
     }
 
     pub fn membership_message_ids(
@@ -123,12 +121,11 @@ impl ReconcileStagingRepository {
                  OR EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=r.account_id AND ml.message_id=r.message_id AND NOT EXISTS (SELECT 1 FROM reconcile_remote_labels l WHERE l.account_id=ml.account_id AND l.message_id=ml.message_id AND l.label_id=ml.label_id)))
              ORDER BY r.message_id LIMIT ?3",
         )?;
-        let ids = statement
+        statement
             .query_map(params![account_id, after, RECONCILE_BATCH_SIZE], |row| {
                 row.get(0)
             })?
-            .collect();
-        ids
+            .collect()
     }
 
     pub fn remote_message_ids(
@@ -141,12 +138,11 @@ impl ReconcileStagingRepository {
              WHERE account_id=?1 AND message_id>COALESCE(?2,'')
              ORDER BY message_id LIMIT ?3",
         )?;
-        let ids = statement
+        statement
             .query_map(params![account_id, after, RECONCILE_BATCH_SIZE], |row| {
                 row.get(0)
             })?
-            .collect();
-        ids
+            .collect()
     }
 
     pub fn labels_for_message(
@@ -169,10 +165,9 @@ impl ReconcileStagingRepository {
         account_id: &str,
         message_id: &str,
     ) -> Result<Vec<String>> {
-        let labels = statement
+        statement
             .query_map(params![account_id, message_id], |row| row.get(0))?
-            .collect();
-        labels
+            .collect()
     }
 
     pub fn clear(connection: &Connection, account_id: &str) -> Result<()> {

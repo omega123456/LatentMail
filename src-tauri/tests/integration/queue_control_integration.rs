@@ -802,9 +802,9 @@ async fn wait_for_first_operation_id(queue: &QueueEngine, account_id: &str) -> S
 #[tokio::test]
 async fn the_production_cancellation_hook_wired_in_initialize_evicts_a_real_work_registry_entry() {
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let application = app();
     tauri::WebviewWindowBuilder::new(&application, "main", Default::default())

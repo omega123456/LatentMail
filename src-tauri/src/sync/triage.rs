@@ -41,10 +41,9 @@ pub fn thread_raw_membership(
          WHERE m.account_id=?1 AND m.thread_id=?2
            AND ml.account_id=m.account_id AND ml.message_id=m.id",
     )?;
-    let labels = statement
+    statement
         .query_map(params![account_id, thread_id], |row| row.get(0))?
-        .collect();
-    labels
+        .collect()
 }
 
 pub fn message_raw_membership(

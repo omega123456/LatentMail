@@ -62,12 +62,12 @@ async fn mount_token_and_configure_env(server: &MockServer) {
         })))
         .mount(server)
         .await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
 }
 

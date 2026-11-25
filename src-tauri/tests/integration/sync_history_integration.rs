@@ -875,9 +875,9 @@ struct StartupFixture {
 
 fn prepare_startup_fixture() -> StartupFixture {
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let application = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -1002,12 +1002,12 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
     let server = MockServer::start().await;
     mount_startup_sync_mocks(&server).await;
 
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
 
     let fixture = prepare_startup_fixture();
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();

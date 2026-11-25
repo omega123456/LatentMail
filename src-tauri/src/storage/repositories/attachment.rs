@@ -51,10 +51,9 @@ impl AttachmentRepository {
         let mut statement = connection.prepare_cached(
             "SELECT attachment_id,filename,mime_type,size,position FROM message_attachments WHERE account_id=?1 AND message_id=?2 ORDER BY position",
         )?;
-        let attachments = statement
+        statement
             .query_map(params![account_id, message_id], attachment)?
-            .collect();
-        attachments
+            .collect()
     }
 
     pub fn get(

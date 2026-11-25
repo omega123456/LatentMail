@@ -65,7 +65,7 @@ impl MessageRepository {
         message_id: &str,
     ) -> Result<Vec<InlinePart>> {
         let mut statement = connection.prepare("SELECT content_id,mime_type,bytes FROM message_inline_parts WHERE account_id=?1 AND message_id=?2")?;
-        let parts = statement
+        statement
             .query_map(params![account_id, message_id], |row| {
                 Ok(InlinePart {
                     content_id: row.get(0)?,
@@ -73,8 +73,7 @@ impl MessageRepository {
                     bytes: row.get(2)?,
                 })
             })?
-            .collect();
-        parts
+            .collect()
     }
 
     pub fn inline_content_ids(
@@ -85,10 +84,9 @@ impl MessageRepository {
         let mut statement = connection.prepare_cached(
             "SELECT content_id FROM message_inline_parts WHERE account_id=?1 AND message_id=?2",
         )?;
-        let content_ids = statement
+        statement
             .query_map(params![account_id, message_id], |row| row.get(0))?
-            .collect();
-        content_ids
+            .collect()
     }
 
     pub fn inline_part(

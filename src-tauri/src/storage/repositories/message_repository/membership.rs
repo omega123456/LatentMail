@@ -242,10 +242,9 @@ impl MessageRepository {
         account_id: &str,
         id: &str,
     ) -> Result<Vec<String>> {
-        let labels = statement
+        statement
             .query_map(params![account_id, id], |row| row.get(0))?
-            .collect();
-        labels
+            .collect()
     }
 
     pub fn reconciliation_message(

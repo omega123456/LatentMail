@@ -113,7 +113,7 @@ pub fn lookup(connection: &Connection, account_id: &str, prefix: &str) -> Result
          WHERE account_id=?1 AND address LIKE ?2
          ORDER BY frequency DESC,last_seen_at DESC,address ASC LIMIT 10",
     )?;
-    let contacts = statement
+    statement
         .query_map(params![account_id, prefix], |row| {
             Ok(Contact {
                 account_id: row.get(0)?,
@@ -123,8 +123,7 @@ pub fn lookup(connection: &Connection, account_id: &str, prefix: &str) -> Result
                 last_seen_at: row.get(4)?,
             })
         })?
-        .collect();
-    contacts
+        .collect()
 }
 
 fn learnable_mailbox(mailbox: &str) -> Option<Mailbox> {

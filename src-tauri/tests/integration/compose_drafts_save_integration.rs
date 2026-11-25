@@ -148,13 +148,13 @@ pub(super) fn invoke(
 }
 
 fn boot_with_gmail_base(token_url: String, gmail_base_url: String) -> BootedDraftApp {
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var("LATENTMAIL_GOOGLE_TOKEN_URL", token_url);
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", gmail_base_url);
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env("LATENTMAIL_GOOGLE_TOKEN_URL", token_url);
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", gmail_base_url);
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
@@ -573,8 +573,8 @@ fn build_direct_executor_harness(server: &MockServer) -> DirectExecutorHarness {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     upsert_default_account(&storage.connection().unwrap());
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );

@@ -78,8 +78,7 @@ impl LabelRepository {
     }
     pub fn list(connection: &Connection, account_id: &str) -> Result<Vec<Label>> {
         let mut statement = connection.prepare_cached("SELECT account_id,id,name,kind,color_text,color_background,message_count FROM labels WHERE account_id=?1 ORDER BY name")?;
-        let labels = statement.query_map([account_id], label)?.collect();
-        labels
+        statement.query_map([account_id], label)?.collect()
     }
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Label>> {
         connection.query_row("SELECT account_id,id,name,kind,color_text,color_background,message_count FROM labels WHERE account_id=?1 AND id=?2", params![account_id, id], label).optional()

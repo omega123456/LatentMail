@@ -21,8 +21,7 @@ pub struct AccountAiConfigRepository;
 impl AccountAiConfigRepository {
     pub fn list(connection: &Connection) -> Result<Vec<AccountAiConfig>> {
         let mut statement = connection.prepare_cached("SELECT account_id,enabled,index_paused,base_url,chat_model,embedding_model,embedding_dimensions FROM account_ai_config")?;
-        let configs = statement.query_map([], config)?.collect();
-        configs
+        statement.query_map([], config)?.collect()
     }
 
     pub fn get(connection: &Connection, account_id: &str) -> Result<Option<AccountAiConfig>> {

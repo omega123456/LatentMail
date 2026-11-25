@@ -53,11 +53,11 @@ fn lists_the_sync_commands() {
 fn socket_path_honors_the_process_override() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("control.sock");
-    std::env::set_var("LATENTMAIL_CLI_SOCKET", &path);
+    crate::support::set_env("LATENTMAIL_CLI_SOCKET", &path);
 
     assert_eq!(socket_path(), path);
 
-    std::env::remove_var("LATENTMAIL_CLI_SOCKET");
+    crate::support::remove_env("LATENTMAIL_CLI_SOCKET");
 }
 
 #[tokio::test]
@@ -147,18 +147,18 @@ const TEST_PIPE_PREFIX: &str = r"\\.\pipe\latentmail-test-";
 #[test]
 fn pipe_name_honors_the_process_override() {
     let override_path = format!("{TEST_PIPE_PREFIX}override");
-    std::env::set_var("LATENTMAIL_CLI_SOCKET", &override_path);
+    crate::support::set_env("LATENTMAIL_CLI_SOCKET", &override_path);
 
     assert_eq!(socket_path(), override_path);
 
-    std::env::remove_var("LATENTMAIL_CLI_SOCKET");
+    crate::support::remove_env("LATENTMAIL_CLI_SOCKET");
 }
 
 #[cfg(windows)]
 #[test]
 fn pipe_name_keeps_only_safe_characters_of_the_user_name() {
-    std::env::remove_var("LATENTMAIL_CLI_SOCKET");
-    std::env::set_var("USERNAME", "jo hn.doe_1-x");
+    crate::support::remove_env("LATENTMAIL_CLI_SOCKET");
+    crate::support::set_env("USERNAME", "jo hn.doe_1-x");
 
     assert!(socket_path().starts_with(r"\\.\pipe\latentmail-johndoe_1-x"));
 }

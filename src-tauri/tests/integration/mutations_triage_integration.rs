@@ -301,12 +301,12 @@ async fn draft_deletion_errors_when_gmail_lists_no_draft_for_the_message() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "drafts": [] })))
         .mount(&server)
         .await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token("account", "refresh").unwrap();
 
     let (engine, directory) = seeded_engine();
@@ -339,12 +339,12 @@ async fn start_oauth_mock_server(account_id: &str) -> MockServer {
         )
         .mount(&server)
         .await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token(account_id, "refresh").unwrap();
     server
 }
@@ -526,12 +526,12 @@ async fn triage_harness(
         )
         .mount(&server)
         .await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token(account_id, "refresh").unwrap();
 
     let directory = tempfile::tempdir().unwrap();

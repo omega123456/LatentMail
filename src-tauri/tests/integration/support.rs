@@ -130,3 +130,11 @@ async fn fail_first_call(
     }
     Ok(())
 }
+
+pub fn set_env(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+    unsafe { std::env::set_var(key, value) }
+}
+
+pub fn remove_env(key: &str) {
+    unsafe { std::env::remove_var(key) }
+}

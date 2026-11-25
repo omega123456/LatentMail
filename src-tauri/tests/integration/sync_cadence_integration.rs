@@ -280,12 +280,12 @@ async fn suspended_queue_skips_both_cadence_network_paths() {
         .expect(0)
         .mount(&server)
         .await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     auth.save_account(SaveAccountRequest {
         email: "cadence@example.com".into(),
         refresh_token: "refresh-token".into(),

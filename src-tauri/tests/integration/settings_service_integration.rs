@@ -290,9 +290,9 @@ async fn write_surfaces_a_storage_error_when_the_settings_table_cannot_accept_an
 #[test]
 fn initialize_manages_settings_from_the_setup_storage() {
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let app = tauri::test::mock_app();
     tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -312,9 +312,9 @@ fn initialize_manages_settings_from_the_setup_storage() {
 #[test]
 fn initialize_reports_a_missing_main_window() {
     let home = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", home.path());
-    std::env::set_var("APPDATA", home.path());
-    std::env::set_var("XDG_DATA_HOME", home.path());
+    crate::support::set_env("HOME", home.path());
+    crate::support::set_env("APPDATA", home.path());
+    crate::support::set_env("XDG_DATA_HOME", home.path());
 
     let app = tauri::test::mock_app();
     let directory = app.path().app_data_dir().unwrap();

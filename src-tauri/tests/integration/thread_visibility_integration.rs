@@ -571,12 +571,12 @@ async fn mount_token_and_message_mocks(server: &MockServer) {
 async fn delete_threads_intent_computes_labels_from_real_membership_and_batch_modifies() {
     let server = MockServer::start().await;
     mount_token_and_message_mocks(&server).await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token("account-delete-threads", "refresh").unwrap();
     let (engine, _directory) = seeded_intent_engine("account-delete-threads");
     let app = app();
@@ -610,12 +610,12 @@ async fn delete_threads_intent_computes_labels_from_real_membership_and_batch_mo
 async fn move_threads_intent_computes_labels_from_real_membership_and_batch_modifies() {
     let server = MockServer::start().await;
     mount_token_and_message_mocks(&server).await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token("account-move-threads", "refresh").unwrap();
     let (engine, _directory) = seeded_intent_engine("account-move-threads");
     let app = app();
@@ -650,12 +650,12 @@ async fn move_threads_intent_computes_labels_from_real_membership_and_batch_modi
 async fn move_threads_rejects_an_unrecognised_destination_before_touching_gmail() {
     let server = MockServer::start().await;
     mount_token_and_message_mocks(&server).await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token("account-move-invalid", "refresh").unwrap();
     let (engine, _directory) = seeded_intent_engine("account-move-invalid");
     let app = app();
@@ -681,12 +681,12 @@ async fn move_threads_rejects_an_unrecognised_destination_before_touching_gmail(
 async fn delete_messages_intent_computes_labels_from_the_messages_own_membership() {
     let server = MockServer::start().await;
     mount_token_and_message_mocks(&server).await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token("account-delete-messages", "refresh").unwrap();
     let (engine, _directory) = seeded_intent_engine("account-delete-messages");
     let app = app();
@@ -719,12 +719,12 @@ async fn delete_messages_intent_computes_labels_from_the_messages_own_membership
 async fn move_messages_intent_computes_labels_from_the_messages_own_membership() {
     let server = MockServer::start().await;
     mount_token_and_message_mocks(&server).await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token("account-move-messages", "refresh").unwrap();
     let (engine, _directory) = seeded_intent_engine("account-move-messages");
     let app = app();
@@ -758,12 +758,12 @@ async fn move_messages_intent_computes_labels_from_the_messages_own_membership()
 async fn move_messages_rejects_an_unrecognised_destination_before_touching_gmail() {
     let server = MockServer::start().await;
     mount_token_and_message_mocks(&server).await;
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token("account-move-messages-invalid", "refresh").unwrap();
     let (engine, _directory) = seeded_intent_engine("account-move-messages-invalid");
     let app = app();
@@ -850,12 +850,12 @@ fn seed_draft_thread_storage(account_id: &str) -> (Storage, tempfile::TempDir) {
 async fn run_delete_draft_thread_check() {
     let server = mount_draft_delete_server().await;
     let account_id = "account-delete-draft-thread";
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var(
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env(
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    crate::support::set_env("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     save_refresh_token(account_id, "refresh").unwrap();
 
     let (storage, _directory) = seed_draft_thread_storage(account_id);

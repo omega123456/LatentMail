@@ -266,8 +266,8 @@ async fn ensure_attachment_cached_fails_when_the_attachment_row_is_missing() {
 
 #[tokio::test]
 async fn ensure_attachment_cached_fails_when_the_account_has_no_refresh_token() {
-    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
-    std::env::set_var("LATENTMAIL_GOOGLE_TOKEN_URL", "http://127.0.0.1:9/token");
+    crate::support::set_env("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    crate::support::set_env("LATENTMAIL_GOOGLE_TOKEN_URL", "http://127.0.0.1:9/token");
 
     let app = app();
     let directory = tempfile::tempdir().unwrap();
