@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, Connection, OptionalExtension, Result, Statement};
+use rusqlite::{params, CachedStatement, Connection, OptionalExtension, Result, Statement};
 
 use super::super::shared::{string_pair_row, ChunkedAccountQuery, ChunkedQuery};
 use super::MessageRepository;
@@ -9,31 +9,31 @@ use crate::storage::{
 };
 
 pub struct MembershipStatements<'a> {
-    pub delete: Statement<'a>,
-    pub insert: Statement<'a>,
-    pub flags: Statement<'a>,
+    pub delete: CachedStatement<'a>,
+    pub insert: CachedStatement<'a>,
+    pub flags: CachedStatement<'a>,
 }
 
 impl<'a> MembershipStatements<'a> {
     pub fn prepare(connection: &'a Connection) -> Result<Self> {
         Ok(Self {
-            delete: connection.prepare(DELETE_MESSAGE_MEMBERSHIP)?,
-            insert: connection.prepare(INSERT_MESSAGE_LABEL)?,
-            flags: connection.prepare(UPDATE_MESSAGE_LABEL_FLAGS)?,
+            delete: connection.prepare_cached(DELETE_MESSAGE_MEMBERSHIP)?,
+            insert: connection.prepare_cached(INSERT_MESSAGE_LABEL)?,
+            flags: connection.prepare_cached(UPDATE_MESSAGE_LABEL_FLAGS)?,
         })
     }
 }
 
 pub struct ReconciliationStatements<'a> {
-    pub message: Statement<'a>,
-    pub labels: Statement<'a>,
+    pub message: CachedStatement<'a>,
+    pub labels: CachedStatement<'a>,
 }
 
 impl<'a> ReconciliationStatements<'a> {
     pub fn prepare(connection: &'a Connection) -> Result<Self> {
         Ok(Self {
-            message: connection.prepare(SELECT_RECONCILIATION_MESSAGE)?,
-            labels: connection.prepare(SELECT_MESSAGE_LABEL_IDS)?,
+            message: connection.prepare_cached(SELECT_RECONCILIATION_MESSAGE)?,
+            labels: connection.prepare_cached(SELECT_MESSAGE_LABEL_IDS)?,
         })
     }
 }
@@ -147,11 +147,7 @@ impl MessageRepository {
         message: MessageKey<'_>,
         label_ids: &[String],
     ) -> Result<()> {
-        let mut statements = MembershipStatements {
-            delete: connection.prepare(DELETE_MESSAGE_MEMBERSHIP)?,
-            insert: connection.prepare(INSERT_MESSAGE_LABEL)?,
-            flags: connection.prepare(UPDATE_MESSAGE_LABEL_FLAGS)?,
-        };
+        let mut statements = MembershipStatements::prepare(connection)?;
         Self::overwrite_membership_with(&mut statements, message, label_ids)
     }
 
