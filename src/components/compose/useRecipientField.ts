@@ -123,18 +123,18 @@ export function useRecipientOverflow(
   };
 }
 
-function useEscapeDismiss(open: boolean, onDismiss: () => void) {
+function useEscapeDismiss(open: boolean, setDismissed: (dismissed: boolean) => void) {
   useEffect(() => {
     if (!open) return;
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
-        onDismiss();
+        setDismissed(true);
       }
     };
     window.addEventListener('keydown', handler, { capture: true });
     return () => window.removeEventListener('keydown', handler, { capture: true });
-  }, [open, onDismiss]);
+  }, [open, setDismissed]);
 }
 
 function formatSuggestionAddress(item: ContactSuggestion): string {
@@ -157,7 +157,7 @@ export function useRecipientFieldController(fieldRole: RecipientRole, accountId:
   const suggestions = useDebouncedSuggestions(accountId, trimmedQuery);
   const open =
     !dismissed && trimmedQuery.length >= CONTACT_QUERY_MIN_LENGTH && suggestions.length > 0;
-  useEscapeDismiss(open, () => setDismissed(true));
+  useEscapeDismiss(open, setDismissed);
 
   const resetInput = (nextDismissed: boolean) => {
     setInputValue('');

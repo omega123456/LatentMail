@@ -16,6 +16,7 @@ const PRELOAD_VIEWPORTS_AHEAD = 2;
 
 type PageLayout = { tops: number[]; content: Size };
 type LoadedPdf = { pages: PDFPageProxy[]; sizes: Size[] };
+type DocumentState = { bytes: ArrayBuffer; pdf: LoadedPdf | null; failed: boolean };
 
 type DocumentLoad = {
   bytes: ArrayBuffer;
@@ -244,9 +245,15 @@ function PdfPageStack({
 
 function usePdfDocument(bytes: ArrayBuffer) {
   const loadingRef = useRef<DocumentLoad | null>(null);
-  const [pdf, setPdf] = useState<LoadedPdf | null>(null);
-  const [error, setError] = useState(false);
-  const showError = useCallback(() => setError(true), []);
+  const [loadedDocument, setLoadedDocument] = useState<DocumentState>({
+    bytes: bytes,
+    pdf: null,
+    failed: false,
+  });
+  const showError = useCallback(
+    () => setLoadedDocument((current) => ({ ...current, failed: true })),
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -264,10 +271,10 @@ function usePdfDocument(bytes: ArrayBuffer) {
           });
           return { width, height };
         });
-        setPdf({ pages, sizes });
+        setLoadedDocument({ bytes: bytes, pdf: { pages, sizes }, failed: false });
       })
       .catch(() => {
-        if (!cancelled) setError(true);
+        if (!cancelled) setLoadedDocument({ bytes: bytes, pdf: null, failed: true });
       });
     return () => {
       cancelled = true;
@@ -275,7 +282,12 @@ function usePdfDocument(bytes: ArrayBuffer) {
     };
   }, [bytes]);
 
-  return { pdf: pdf, error: error, showError: showError };
+  const isCurrentDocument = loadedDocument.bytes === bytes;
+  return {
+    pdf: isCurrentDocument ? loadedDocument.pdf : null,
+    error: isCurrentDocument && loadedDocument.failed,
+    showError: showError,
+  };
 }
 
 function useSettledZoom(ready: boolean, zoom: number) {

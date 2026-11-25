@@ -47,14 +47,17 @@ vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({ onDragDropEvent: tauriOnDragDropEvent, setZoom: tauriSetZoom }),
 }));
 
+function withSettingsDefaults(settings: unknown): unknown {
+  const isSettingsObject = typeof settings === 'object' && settings !== null;
+  return isSettingsObject ? { ...ipcFixtures.read_settings, ...settings } : settings;
+}
+
 function invoke(command: string, request: unknown): Promise<unknown> {
   const key = command as keyof IpcCommandMap;
   const override = overrides.get(key);
   if (override !== undefined) {
     const value = typeof override === 'function' ? override(request as never) : override;
-    if (key === 'read_settings' && typeof value === 'object' && value !== null) {
-      return Promise.resolve({ ...ipcFixtures.read_settings, ...value });
-    }
+    if (key === 'read_settings') return Promise.resolve(value).then(withSettingsDefaults);
     return Promise.resolve(value);
   }
   if (!(key in ipcFixtures)) {

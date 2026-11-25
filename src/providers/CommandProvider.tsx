@@ -1,8 +1,10 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type PropsWithChildren,
 } from 'react';
@@ -47,29 +49,56 @@ function withoutOverride(overrides: CommandOverrides, command: CommandName): Com
   return remaining;
 }
 
+function adoptHydratedOverrides(
+  hydrated: CommandOverrides,
+  current: CommandOverrides,
+): CommandOverrides {
+  const merged = { ...hydrated, ...current };
+  const changedBeforeHydration = Object.keys(current).length > 0;
+  if (changedBeforeHydration) persistOverrides(merged);
+  return merged;
+}
+
 export function CommandProvider({ children }: PropsWithChildren) {
   const [overrides, setOverrides] = useState<CommandOverrides>({});
+  const latestOverrides = useRef<CommandOverrides>({});
+
+  const replaceOverrides = useCallback((next: CommandOverrides) => {
+    latestOverrides.current = next;
+    setOverrides(next);
+  }, []);
+
+  const changeOverrides = useCallback(
+    (change: (current: CommandOverrides) => CommandOverrides) => {
+      const next = change(latestOverrides.current);
+      persistOverrides(next);
+      replaceOverrides(next);
+    },
+    [replaceOverrides],
+  );
 
   useEffect(() => {
     hydrateSettings()
-      .then((settings) => setOverrides(settings.commandOverrides ?? {}))
+      .then((settings) =>
+        replaceOverrides(
+          adoptHydratedOverrides(settings.commandOverrides ?? {}, latestOverrides.current),
+        ),
+      )
       .catch(() => undefined);
-  }, []);
+  }, [replaceOverrides]);
 
-  const contextValue = useMemo<CommandContextValue>(() => {
-    const applyOverrides = (next: CommandOverrides) => {
-      persistOverrides(next);
-      setOverrides(next);
-    };
-    return {
+  const contextValue = useMemo<CommandContextValue>(
+    () => ({
       bindings: resolveCommandBindings(overrides),
       overrides: overrides,
-      setOverride: (command, keys) => applyOverrides({ ...overrides, [command]: keys }),
-      clearOverride: (command) => applyOverrides(withoutOverride(overrides, command)),
-      clearAllOverrides: () => applyOverrides({}),
+      setOverride: (command, keys) =>
+        changeOverrides((current) => ({ ...current, [command]: keys })),
+      clearOverride: (command) => changeOverrides((current) => withoutOverride(current, command)),
+      clearAllOverrides: () => changeOverrides(() => ({})),
       hasAnyOverride: Object.keys(overrides).length > 0,
-    };
-  }, [overrides]);
+    }),
+    [overrides, changeOverrides],
+  );
 
   return <CommandContext.Provider value={contextValue}>{children}</CommandContext.Provider>;
 }

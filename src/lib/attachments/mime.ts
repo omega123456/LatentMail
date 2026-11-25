@@ -17,7 +17,6 @@ export type MimeFamily =
 
 type MimeCategoryRule = {
   family: MimeFamily;
-  previewKind?: PreviewKind;
   matches: (mime: string, extension: string) => boolean;
 };
 

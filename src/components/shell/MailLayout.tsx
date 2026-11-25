@@ -89,14 +89,17 @@ function useMailLayoutData(accounts: Account[]) {
   const labels = mapLabelsToUserLabels(rawLabels);
   const labelHandlers = useLabelHandlers(activeAccountId);
 
+  const setActiveAccountId = useSelectionStore((store) => store.setActiveAccountId);
+  const setActiveMailboxId = useSelectionStore((store) => store.setActiveMailboxId);
+  const clearSelection = useSelectionStore((store) => store.clearSelection);
   const selectAccount = useCallback(
     (id: string) => {
       searchClear();
-      selection.setActiveAccountId(id);
-      selection.setActiveMailboxId('INBOX');
-      selection.clearSelection();
+      setActiveAccountId(id);
+      setActiveMailboxId('INBOX');
+      clearSelection();
     },
-    [searchClear, selection],
+    [searchClear, setActiveAccountId, setActiveMailboxId, clearSelection],
   );
   useEnsureActiveAccount(accounts, activeAccountId, selectAccount);
 

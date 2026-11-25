@@ -1,8 +1,9 @@
 import { StrictMode } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
+import { ipcFixtures } from '@/tests/fixtures';
 import { DEFAULT_COMMAND_BINDINGS } from '@/lib/keyboard/registry';
 import {
   CommandProvider,
@@ -45,6 +46,14 @@ function Controls() {
       <button onClick={() => setOverride('toggleStar', ['Mod+K'])}>set</button>
       <button onClick={() => clearOverride('toggleStar')}>reset one</button>
       <button onClick={() => clearAllOverrides()}>reset all</button>
+      <button
+        onClick={() => {
+          clearOverride('toggleStar');
+          setOverride('markRead', ['Mod+E']);
+        }}
+      >
+        reassign
+      </button>
     </div>
   );
 }
@@ -212,4 +221,60 @@ it('writes each override change exactly once, even when StrictMode replays state
   await waitFor(() => expect(screen.getByTestId('has-any-override')).toHaveTextContent('false'));
   expect(writes).toHaveBeenCalledTimes(OVERRIDE_WRITES);
   expect(writes).toHaveBeenLastCalledWith({ key: 'commandOverrides', value: {} });
+});
+
+it('keeps both changes when one handler clears one override and sets another', async () => {
+  const user = userEvent.setup();
+  const writes: Array<{ key: string; value: unknown }> = [];
+  ipc.override('write_setting', (request) => {
+    writes.push(request as { key: string; value: unknown });
+  });
+  render(
+    <CommandProvider>
+      <Controls />
+    </CommandProvider>,
+  );
+  await waitFor(() => expect(screen.getByTestId('has-any-override')).toHaveTextContent('false'));
+  await user.click(screen.getByText('set'));
+
+  await user.click(screen.getByText('reassign'));
+
+  expect(screen.getByTestId('binding')).toHaveTextContent(
+    DEFAULT_COMMAND_BINDINGS.toggleStar.join(','),
+  );
+  expect(writes.at(-1)).toEqual({ key: 'commandOverrides', value: { markRead: ['Mod+E'] } });
+});
+
+it('keeps an override set before the saved overrides finish loading, alongside them', async () => {
+  const user = userEvent.setup();
+  let finishHydration: () => void = () => {};
+  const savedOverrides = { markRead: ['Mod+E'] };
+  ipc.override(
+    'read_settings',
+    () =>
+      new Promise((resolve) => {
+        finishHydration = () =>
+          resolve({ ...ipcFixtures.read_settings, commandOverrides: savedOverrides });
+      }),
+  );
+  const writes: Array<{ key: string; value: unknown }> = [];
+  ipc.override('write_setting', (request) => {
+    writes.push(request as { key: string; value: unknown });
+  });
+  render(
+    <CommandProvider>
+      <Controls />
+    </CommandProvider>,
+  );
+
+  await user.click(screen.getByText('set'));
+  await act(async () => finishHydration());
+
+  await waitFor(() =>
+    expect(writes.at(-1)).toEqual({
+      key: 'commandOverrides',
+      value: { markRead: ['Mod+E'], toggleStar: ['Mod+K'] },
+    }),
+  );
+  expect(screen.getByTestId('binding')).toHaveTextContent('Mod+K');
 });

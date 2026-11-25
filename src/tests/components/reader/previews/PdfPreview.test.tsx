@@ -308,3 +308,37 @@ it('destroys the previous document when the preview switches to new bytes', asyn
   await waitFor(() => expect(destroyDocument).toHaveBeenCalledTimes(1));
   expect(getDocument).toHaveBeenCalledTimes(DOCUMENTS_LOADED_AFTER_SWITCH);
 });
+
+it('removes the previous document’s pages as soon as new bytes arrive', async () => {
+  loads(1);
+  const view = render(<PdfPreview bytes={new ArrayBuffer(PDF_BYTE_LENGTH)} />);
+  await screen.findByText('Page 1 of 1');
+  let finishReplacement: () => void = () => {};
+  getDocument.mockImplementationOnce(() => ({
+    promise: new Promise((resolve) => {
+      finishReplacement = () => resolve(makeDocument(TWO_PAGE_DOCUMENT));
+    }),
+    destroy: destroyDocument,
+  }));
+
+  view.rerender(<PdfPreview bytes={new ArrayBuffer(REPLACEMENT_PDF_BYTE_LENGTH)} />);
+
+  expect(screen.queryAllByTestId('pdf-page')).toHaveLength(0);
+  await act(async () => finishReplacement());
+  expect(await screen.findAllByTestId('pdf-page')).toHaveLength(TWO_PAGE_DOCUMENT);
+});
+
+it('recovers from a failed document when the preview switches to new bytes', async () => {
+  loads(1);
+  getDocument.mockImplementationOnce(() => ({
+    promise: Promise.reject(new Error('corrupt')),
+    destroy: destroyDocument,
+  }));
+  const view = render(<PdfPreview bytes={new ArrayBuffer(PDF_BYTE_LENGTH)} />);
+  await screen.findByText(/Preview not available/);
+
+  view.rerender(<PdfPreview bytes={new ArrayBuffer(REPLACEMENT_PDF_BYTE_LENGTH)} />);
+
+  await waitFor(() => expect(screen.queryByText(/Preview not available/)).not.toBeInTheDocument());
+  expect(await screen.findAllByTestId('pdf-page')).toHaveLength(1);
+});

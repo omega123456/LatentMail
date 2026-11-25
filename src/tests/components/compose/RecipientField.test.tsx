@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { beforeEach, expect, it } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { RecipientField } from '@/components/compose/RecipientField';
 import { useComposeStore } from '@/stores/compose';
 import { ipc } from '@/tests/ipc-mock';
@@ -203,4 +203,24 @@ it('re-shows every chip once the overflow control is activated', async () => {
   await user.click(overflow);
   expect(screen.queryByRole('button', { name: /more recipient/ })).not.toBeInTheDocument();
   expect(screen.getByText('b@x.com')).toBeInTheDocument();
+});
+
+it('registers the Escape listener once while suggestions stay open across renders', async () => {
+  const user = userEvent.setup();
+  ipc.override('lookup_contacts', [
+    { address: 'marta.oliveira@example.com', displayName: 'Marta Oliveira' },
+  ]);
+  const addListener = vi.spyOn(window, 'addEventListener');
+  renderField();
+  const input = screen.getByRole('combobox', { name: 'To' });
+  await user.type(input, 'ma');
+  await screen.findByText('Marta Oliveira');
+
+  await user.keyboard('{ArrowDown}{ArrowUp}{ArrowDown}');
+
+  const escapeListenerRegistrations = addListener.mock.calls.filter(
+    ([type, , options]) => type === 'keydown' && options !== undefined,
+  );
+  expect(escapeListenerRegistrations).toHaveLength(1);
+  addListener.mockRestore();
 });
