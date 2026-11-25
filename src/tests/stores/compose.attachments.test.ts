@@ -49,13 +49,26 @@ it('tracks draft status/id and the exact draft qualification selector', () => {
   const store = useComposeStore.getState();
   expect(selectQualifiesForDraft(useComposeStore.getState())).toBe(false);
   store.setDraftStatus('saving');
-  store.setDraftId('draft-1');
   store.setSubject('Subject');
   expect(selectQualifiesForDraft(useComposeStore.getState())).toBe(true);
-  store.markSaved();
+  store.recordDraftSaved(useComposeStore.getState().session?.id ?? '', 'draft-1');
   expect(useComposeStore.getState().session).toMatchObject({
     draftId: 'draft-1',
     draftStatus: 'saved',
     dirty: false,
+  });
+});
+
+it('ignores a draft result addressed to a session that is no longer open', () => {
+  openSession();
+  const store = useComposeStore.getState();
+  store.setSubject('Subject');
+  store.recordDraftSaved('another-session', 'draft-9');
+  store.recordDraftFailed('another-session', 'Couldn’t save draft.');
+  expect(useComposeStore.getState().session).toMatchObject({
+    draftId: null,
+    dirty: true,
+    draftStatus: 'idle',
+    lifecycleError: null,
   });
 });

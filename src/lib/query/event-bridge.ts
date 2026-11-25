@@ -226,11 +226,7 @@ function createComposeAndOsSubscriptions(queryClient: QueryClient): BridgeSubscr
       useToastStore.getState().showError('Send status unknown — check Sent and Drafts.');
     }),
     on('draft://saved', (event) => {
-      const session = useComposeStore.getState().session;
-      if (session?.id === event.sessionId) {
-        useComposeStore.getState().setDraftId(event.draftId);
-        useComposeStore.getState().markSaved();
-      }
+      useComposeStore.getState().recordDraftSaved(event.sessionId, event.draftId);
       void queryClient.invalidateQueries({
         queryKey: queryKeys.threadsForAccount(event.accountId),
       });

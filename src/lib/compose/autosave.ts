@@ -85,10 +85,9 @@ export class DraftAutosaveScheduler {
     store.setDraftStatus('saving');
     try {
       const accepted = await invoke('save_compose_draft', { draft: toDraftRequest(current) });
-      if (accepted.draftId) store.setDraftId(accepted.draftId);
-      store.markSaved();
+      store.recordDraftSaved(current.id, accepted.draftId ?? null);
     } catch {
-      store.setDraftStatus('failed', 'Couldn’t save draft.');
+      store.recordDraftFailed(current.id, 'Couldn’t save draft.');
     }
   }
 }

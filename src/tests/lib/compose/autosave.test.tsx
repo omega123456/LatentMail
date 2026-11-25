@@ -8,6 +8,7 @@ import {
 } from '@/lib/compose/autosave';
 import { useComposeStore } from '@/stores/compose';
 import { ipc } from '@/tests/ipc-mock';
+import { openSession } from '@/tests/stores/compose-helpers';
 
 const open = () =>
   useComposeStore.getState().open({
@@ -76,7 +77,7 @@ describe('compose autosave', () => {
     vi.useFakeTimers();
     const save = vi.fn(() => ({ operationId: 'op', draftId: 'draft-2' }));
     ipc.override('save_compose_draft', save);
-    act(() => useComposeStore.getState().markSaved());
+    act(() => useComposeStore.getState().recordDraftSaved('session', null));
     renderHook(() => useComposeAutosave());
     act(() => useComposeStore.getState().setHtml('<p>Autosave this</p>'));
     await act(async () => {});
@@ -108,6 +109,60 @@ describe('compose autosave', () => {
     expect(useComposeStore.getState().session).toMatchObject({
       draftStatus: 'failed',
       lifecycleError: 'Couldn’t save draft.',
+    });
+    error.mockRestore();
+  });
+});
+
+describe('compose autosave across sessions', () => {
+  it('leaves a newly opened session alone when the previous session’s save resolves', async () => {
+    let acceptSave: (acceptance: { operationId: string; draftId: string }) => void = () => {};
+    ipc.override('save_compose_draft', () => new Promise((resolve) => (acceptSave = resolve)));
+    const { result } = renderHook(() => useComposeAutosave());
+    let pendingSave: Promise<void> = Promise.resolve();
+    act(() => {
+      pendingSave = result.current.saveNow();
+    });
+    act(() => {
+      useComposeStore.getState().close();
+      openSession({ id: 'reply-session', subject: 'Reply' });
+      useComposeStore.getState().setHtml('<p>Reply body</p>');
+    });
+    await act(async () => {
+      acceptSave({ operationId: 'op', draftId: 'draft-of-the-first-session' });
+      await pendingSave;
+    });
+    expect(useComposeStore.getState().session).toMatchObject({
+      id: 'reply-session',
+      draftId: null,
+      dirty: true,
+    });
+  });
+
+  it('does not report a previous session’s failed save on a newly opened session', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let rejectSave: (reason: Error) => void = () => {};
+    ipc.override(
+      'save_compose_draft',
+      () => new Promise((_resolve, reject) => (rejectSave = reject)),
+    );
+    const { result } = renderHook(() => useComposeAutosave());
+    let pendingSave: Promise<void> = Promise.resolve();
+    act(() => {
+      pendingSave = result.current.saveNow();
+    });
+    act(() => {
+      useComposeStore.getState().close();
+      openSession({ id: 'reply-session', subject: 'Reply' });
+    });
+    await act(async () => {
+      rejectSave(new Error('offline'));
+      await pendingSave;
+    });
+    expect(useComposeStore.getState().session).toMatchObject({
+      id: 'reply-session',
+      draftStatus: 'idle',
+      lifecycleError: null,
     });
     error.mockRestore();
   });

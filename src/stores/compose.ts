@@ -6,7 +6,7 @@ import {
   COMPOSE_MIN_PX,
   createComposeSession,
   failAttachmentInSession,
-  markSessionSaved,
+  recordSessionDraftSaved,
   removeAttachmentFromSession,
   removeLastRecipientFromSession,
   removeRecipientFromSession,
@@ -125,8 +125,8 @@ type ComposeStore = {
   failAttachment: (localId: string, error: string) => void;
   removeAttachment: (localId: string) => void;
   setDraftStatus: (status: DraftStatus, error?: string | null) => void;
-  setDraftId: (draftId: string) => void;
-  markSaved: () => void;
+  recordDraftSaved: (sessionId: string, draftId: string | null) => void;
+  recordDraftFailed: (sessionId: string, error: string) => void;
 };
 
 function applySessionUpdate(
@@ -142,6 +142,10 @@ function applySessionUpdate(
 export const useComposeStore = create<ComposeStore>((set) => {
   const updateSession = (transform: (session: ComposeSession) => ComposeSession) =>
     set((state) => applySessionUpdate(state, transform));
+  const updateSessionWithId = (
+    sessionId: string,
+    transform: (session: ComposeSession) => ComposeSession,
+  ) => updateSession((session) => (session.id === sessionId ? transform(session) : session));
 
   return {
     session: null,
@@ -174,8 +178,12 @@ export const useComposeStore = create<ComposeStore>((set) => {
       updateSession((session) => removeAttachmentFromSession(session, localId)),
     setDraftStatus: (draftStatus, lifecycleError = null) =>
       updateSession((session) => setSessionDraftStatus(session, { draftStatus, lifecycleError })),
-    setDraftId: (draftId) => updateSession((session) => ({ ...session, draftId })),
-    markSaved: () => updateSession(markSessionSaved),
+    recordDraftSaved: (sessionId, draftId) =>
+      updateSessionWithId(sessionId, (session) => recordSessionDraftSaved(session, draftId)),
+    recordDraftFailed: (sessionId, error) =>
+      updateSessionWithId(sessionId, (session) =>
+        setSessionDraftStatus(session, { draftStatus: 'failed', lifecycleError: error }),
+      ),
   };
 });
 

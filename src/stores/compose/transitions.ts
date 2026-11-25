@@ -220,3 +220,10 @@ export function markSessionSaved(session: ComposeSession): ComposeSession {
     lifecycleError: null,
   };
 }
+
+export function recordSessionDraftSaved(
+  session: ComposeSession,
+  draftId: string | null,
+): ComposeSession {
+  return markSessionSaved({ ...session, draftId: draftId ?? session.draftId });
+}
