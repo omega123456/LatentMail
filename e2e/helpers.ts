@@ -121,3 +121,11 @@ export async function openComposeSession(page: Page, session: OpenComposeArgs) {
     { moduleUrl: COMPOSE_STORE_MODULE_URL, session: session },
   );
 }
+
+export async function shrinkComposeToMinimumSize(page: Page) {
+  await page.evaluate(async (moduleUrl) => {
+    const composeStore: ComposeStoreModule = await import(moduleUrl);
+    const minimumSize = { width: composeStore.COMPOSE_MIN_PX, height: composeStore.COMPOSE_MIN_PX };
+    composeStore.useComposeStore.getState().setDimensions(minimumSize);
+  }, COMPOSE_STORE_MODULE_URL);
+}

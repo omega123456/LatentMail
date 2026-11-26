@@ -37,23 +37,15 @@ function ComposeFooterError({ status, onRetry }: { status: string; onRetry: () =
 }
 
 function ComposeFooterActions({
-  status,
-  failed,
   ready,
   blocked,
   sending,
   onAttach,
   onInsertImage,
   onSend,
-}: Omit<ComposeFooterProps, 'editor' | 'onLink' | 'onRetry'>) {
+}: Omit<ComposeFooterProps, 'editor' | 'onLink' | 'onRetry' | 'status' | 'failed'>) {
   return (
-    <div className="flex min-w-0 items-center gap-1">
-      <span
-        className="w-compose-status-w shrink-0 truncate text-label-md text-secondary dark:text-dark-secondary"
-        aria-live="polite"
-      >
-        {failed ? '' : status}
-      </span>
+    <div className="ml-auto flex shrink-0 items-center gap-1">
       <button
         type="button"
         aria-label="Attach files"
@@ -94,13 +86,17 @@ export function ComposeFooter(props: ComposeFooterProps) {
       {props.failed && props.status && (
         <ComposeFooterError status={props.status} onRetry={props.onRetry} />
       )}
-      <div className="flex items-center justify-between gap-stack-gap-sm">
+      <div className="flex flex-wrap items-center justify-between gap-stack-gap-sm">
         <div className="flex shrink-0 items-center rounded-md bg-surface-container-low p-0.5 dark:bg-dark-surface-container-low">
           <EditorToolbar editor={props.editor} onLink={props.onLink} />
         </div>
+        <span
+          className="min-w-0 grow basis-0 truncate text-right text-label-md text-secondary dark:text-dark-secondary"
+          aria-live="polite"
+        >
+          {props.failed ? '' : props.status}
+        </span>
         <ComposeFooterActions
-          status={props.status}
-          failed={props.failed}
           ready={props.ready}
           blocked={props.blocked}
           sending={props.sending}

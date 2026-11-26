@@ -4,6 +4,7 @@ import { parseParticipant } from '@/lib/format/participants';
 import { CONTACT_QUERY_MIN_LENGTH, useContactSuggestionsQuery } from '@/lib/query/hooks';
 import type { ContactSuggestion } from '@/lib/types/ipc';
 import { type RecipientRole, useComposeStore } from '@/stores/compose';
+import { useEscapeCapture } from './useEscapeCapture';
 
 const CHIP_ROWS_3_PX = 96;
 const CONTACT_LOOKUP_DEBOUNCE_MS = 150;
@@ -123,20 +124,6 @@ export function useRecipientOverflow(
   };
 }
 
-function useEscapeDismiss(open: boolean, setDismissed: (dismissed: boolean) => void) {
-  useEffect(() => {
-    if (!open) return;
-    const handler = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        setDismissed(true);
-      }
-    };
-    window.addEventListener('keydown', handler, { capture: true });
-    return () => window.removeEventListener('keydown', handler, { capture: true });
-  }, [open, setDismissed]);
-}
-
 function formatSuggestionAddress(item: ContactSuggestion): string {
   return item.displayName ? `${item.displayName} <${item.address}>` : item.address;
 }
@@ -157,7 +144,7 @@ export function useRecipientFieldController(fieldRole: RecipientRole, accountId:
   const suggestions = useDebouncedSuggestions(accountId, trimmedQuery);
   const open =
     !dismissed && trimmedQuery.length >= CONTACT_QUERY_MIN_LENGTH && suggestions.length > 0;
-  useEscapeDismiss(open, setDismissed);
+  useEscapeCapture(open, () => setDismissed(true));
 
   const resetInput = (nextDismissed: boolean) => {
     setInputValue('');

@@ -167,3 +167,32 @@ export const playwrightReplyComposeSession: OpenComposeArgs = {
     attribution: 'On 14 Mar 2024 at 10:42, Elena Rodriguez wrote:',
   },
 };
+
+const playwrightLongReplyParagraphs = [
+  'Thanks Elena, the <a href="https://example.com/q3-deck">final deck</a> reads well.',
+  'Two small notes before tomorrow:',
+  'Slide 4 still shows the February numbers.',
+  'The regional split on slide 7 adds up to 101%.',
+  'Otherwise I am happy to present the budget section.',
+  'Could we move the Q&A to the end?',
+  'I will bring printed copies for the leadership team.',
+  'Let me know if the room booking changes.',
+  'Marcus asked whether the partner figures are final.',
+  'I told him we would confirm after the review.',
+  'The appendix could use a short glossary.',
+  'Happy to draft it tonight if that helps.',
+  'The speaker notes are in the shared folder.',
+  'I trimmed the intro to two minutes.',
+  'We should rehearse the hand-overs once.',
+  'Is 9:30 too early for a run-through?',
+  'I can book the small meeting room.',
+  'Coffee is on me.',
+  'See you at 10.',
+  'Priya',
+];
+
+export const playwrightLongReplyComposeSession: OpenComposeArgs = {
+  ...playwrightReplyComposeSession,
+  id: 'compose-session-long-reply',
+  html: playwrightLongReplyParagraphs.map((paragraph) => `<p>${paragraph}</p>`).join(''),
+};

@@ -174,17 +174,11 @@ function ComposeScrollBody({
   session,
   toInputRef,
   bodyRef,
-  editor,
-  linkOpen,
-  onCloseLink,
   onSelectEditor,
 }: {
   session: ComposeSession;
   toInputRef: React.RefObject<HTMLInputElement | null>;
   bodyRef: React.RefObject<BodyEditorHandle | null>;
-  editor: Editor | null;
-  linkOpen: boolean;
-  onCloseLink: () => void;
   onSelectEditor: (editor: Editor | null) => void;
 }) {
   const setHtml = useComposeStore((compose) => compose.setHtml);
@@ -214,7 +208,6 @@ function ComposeScrollBody({
         onChange={setHtml}
         onSelectionChange={onSelectEditor}
       />
-      {linkOpen && editor && <LinkDialog editor={editor} onClose={onCloseLink} />}
       {session.quote && (
         <div className="pb-stack-gap-md">
           <QuoteDisclosure
@@ -275,12 +268,10 @@ function ComposeDialogBody(props: ComposeDialogBodyProps) {
         session={session}
         toInputRef={props.toInputRef}
         bodyRef={props.bodyRef}
-        editor={editor}
-        linkOpen={linkOpen}
-        onCloseLink={() => setLinkOpen(false)}
         onSelectEditor={setEditor}
       />
       <AttachmentStrip attachments={session.attachments} onRemove={onRemoveAttachment} />
+      {linkOpen && editor && <LinkDialog editor={editor} onClose={() => setLinkOpen(false)} />}
       <ComposeFooter
         editor={editor}
         onLink={() => toggleLinkInEditor(editor, () => setLinkOpen(true))}

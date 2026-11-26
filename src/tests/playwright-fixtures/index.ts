@@ -36,6 +36,7 @@ export {
   playwrightContactSuggestionMatches,
   playwrightContactSuggestions,
   playwrightHydratedDraft,
+  playwrightLongReplyComposeSession,
   playwrightManyRecipientsComposeSession,
   playwrightNewComposeSession,
   playwrightReplyComposeSession,

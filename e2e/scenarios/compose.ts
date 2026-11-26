@@ -1,8 +1,9 @@
-import { expect } from '@playwright/test';
-import { installPlaywrightIpc, openComposeSession } from '../helpers';
+import { expect, type Page } from '@playwright/test';
+import { installPlaywrightIpc, openComposeSession, shrinkComposeToMinimumSize } from '../helpers';
 import {
   playwrightAttachmentsComposeSession,
   playwrightContactSuggestionMatches,
+  playwrightLongReplyComposeSession,
   playwrightMailAccount,
   playwrightManyRecipientsComposeSession,
   playwrightNewComposeSession,
@@ -13,6 +14,16 @@ import {
 } from '@/tests/playwright-fixtures';
 import { screenshot, toggleTheme } from './shared';
 import type { ScreenshotScenario } from './shared';
+
+async function expectBodyEndsAboveQuoteDisclosure(page: Page) {
+  const bodyBottom = await page
+    .locator('.ProseMirror')
+    .evaluate((body) => body.getBoundingClientRect().bottom);
+  const disclosureTop = await page
+    .getByTestId('quote-disclosure')
+    .evaluate((disclosure) => disclosure.getBoundingClientRect().top);
+  expect(bodyBottom).toBeLessThanOrEqual(disclosureTop);
+}
 
 export const composeScenarios: ScreenshotScenario[] = [
   {
@@ -84,6 +95,25 @@ export const composeScenarios: ScreenshotScenario[] = [
         'quote-disclosure-expanded',
         theme,
       );
+      await page.getByRole('button', { name: 'Hide quoted text' }).click();
+      await shrinkComposeToMinimumSize(page);
+      await expect(page.getByRole('button', { name: 'Show quoted text' })).toBeInViewport({
+        ratio: 1,
+      });
+      await expect(page.getByRole('button', { name: 'Send' })).toBeInViewport({ ratio: 1 });
+    },
+  },
+  {
+    name: 'link bar',
+    run: async (page, theme) => {
+      await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
+      await page.goto('/');
+      await openComposeSession(page, playwrightLongReplyComposeSession);
+      await expect(page.getByRole('link', { name: 'final deck' })).toBeVisible();
+      await expectBodyEndsAboveQuoteDisclosure(page);
+      await page.getByRole('button', { name: 'Link', exact: true }).click();
+      await page.getByLabel('Link URL').fill('example.com/agenda');
+      await screenshot(page, page.getByTestId('compose-overlay'), 'link-bar', theme);
     },
   },
 ];

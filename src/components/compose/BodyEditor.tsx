@@ -31,7 +31,11 @@ const BODY_EDITOR_EXTENSIONS = [
     },
   }),
   Underline,
-  Link.configure({ openOnClick: false, autolink: true }),
+  Link.configure({
+    openOnClick: false,
+    autolink: true,
+    HTMLAttributes: { class: 'text-primary underline dark:text-dark-primary' },
+  }),
   Image,
 ];
 
@@ -65,7 +69,7 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
       [editor],
     );
     return (
-      <div className="relative flex min-h-40 flex-1 flex-col">
+      <div className="relative flex shrink-0 grow flex-col">
         {isEmpty && (
           <span
             aria-hidden="true"
@@ -76,7 +80,7 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
         )}
         <EditorContent
           editor={editor}
-          className="flex min-h-40 flex-1 flex-col text-body-md text-on-surface dark:text-dark-on-surface"
+          className="flex grow flex-col text-body-md text-on-surface dark:text-dark-on-surface"
         />
       </div>
     );
